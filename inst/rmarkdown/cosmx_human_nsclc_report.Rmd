@@ -1,0 +1,118 @@
+---
+title: "R-native CellCharter reproduction: CosMx human NSCLC"
+author: "rCellCharter validation workflow"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+    df_print: paged
+params:
+  result_dir: "results/cosmx_human_nsclc"
+---
+
+```{r setup, include=FALSE}
+# All analysis code is kept visible in the final document.  The runner writes
+# compact, portable results so this report never has to materialise the H5AD.
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 9, fig.height = 5)
+library(ggplot2)
+library(mclust)
+result_dir <- params$result_dir
+stopifnot(file.exists(file.path(result_dir, "domain_metadata.rds")))
+result <- readRDS(file.path(result_dir, "domain_metadata.rds"))
+model <- readRDS(file.path(result_dir, "torch_gmm_k20.rds"))
+```
+
+# Purpose and scope
+
+This reproduces the post-representation spatial-domain stage of the official
+CellCharter CosMx NSCLC analysis (He *et al.* data).  The official analysis
+uses a supplied 10-dimensional scVI embedding; this R workflow deliberately
+uses that representation only as an input, rebuilds a Delaunay graph separately
+for every CosMx section, removes its longest 1% of edges, computes three-hop
+neighbourhood features in R, and fits a full-covariance 20-component GMM using
+R Torch.  This is therefore an honest check of R-native spatial aggregation and
+clustering, not a claim that it reproduces Python labels byte-for-byte.
+
+```{r model-summary}
+data.frame(
+  cells = nrow(result), samples = length(unique(result$sample)),
+  domains = model$n_clusters, features = model$n_features,
+  EM_iterations = model$iterations, converged = model$converged,
+  mean_negative_log_likelihood = model$nll
+)
+```
+
+# Spatial preservation
+
+```{r spatial-map}
+# A deterministic 40k-cell display keeps the HTML usable while retaining the
+# spatial footprints of all sections.  Equal axes avoid geometry distortion.
+set.seed(12345)
+plot_idx <- sample.int(nrow(result), min(40000L, nrow(result)))
+plot_df <- result[plot_idx, ]
+ggplot(plot_df, aes(x, y, colour = r_domain)) +
+  geom_point(size = 0.18, alpha = 0.60) + coord_equal() +
+  facet_wrap(~sample, scales = "free") + scale_y_reverse() +
+  labs(colour = "R domain", title = "Sample-local R Torch spatial domains") +
+  theme_bw(base_size = 9)
+```
+
+# Biological preservation
+
+```{r cell-type-composition}
+# Non-uniform cell-type composition is a necessary, but not sufficient,
+# biological-preservation check.  It does not depend on permutation-sensitive
+# GMM label numbers.
+composition <- prop.table(table(result$r_domain, result$cell_type), margin = 1)
+composition_long <- as.data.frame(composition)
+names(composition_long) <- c("domain", "cell_type", "fraction")
+ggplot(composition_long, aes(cell_type, domain, fill = fraction)) +
+  geom_tile() + scale_fill_viridis_c() +
+  labs(x = NULL, y = "R domain", fill = "Within-domain fraction",
+       title = "Cell-type composition of R spatial domains") +
+  theme_bw(base_size = 9) +
+  theme(axis.text.x = element_text(angle = 55, hjust = 1))
+```
+
+```{r top-enrichments}
+do.call(rbind, lapply(split(composition_long, composition_long$domain), function(x) {
+  head(x[order(x$fraction, decreasing = TRUE), ], 5)
+}))
+```
+
+# Concordance with the official CellCharter domains
+
+```{r official-label-concordance}
+# The official cluster_20 labels are retained in the downloaded H5AD.  ARI is
+# label-permutation invariant, but it is still not a measure of biological
+# truth: different GMM starts or feature scaling can legitimately split/merge
+# an official niche.
+keep <- !is.na(result$official_cluster_20)
+ari <- adjustedRandIndex(as.integer(result$r_domain[keep]),
+                         as.integer(factor(result$official_cluster_20[keep])))
+data.frame(adjusted_rand_index_against_official_cluster_20 = ari,
+           note = "Method concordance only; assess it together with spatial footprints and cell-type enrichment.")
+```
+
+```{r domain-by-official-label}
+tab <- prop.table(table(result$r_domain[keep], result$official_cluster_20[keep]), 1)
+long <- as.data.frame(tab)
+names(long) <- c("r_domain", "official_domain", "fraction")
+ggplot(long, aes(official_domain, r_domain, fill = fraction)) + geom_tile() +
+  scale_fill_viridis_c() + labs(x = "Official CellCharter domain", y = "R Torch domain",
+                                 fill = "Within-R fraction") + theme_bw(base_size = 9)
+```
+
+# Verdict
+
+Spatial preservation is supported when domains are anatomically coherent within
+each physical section rather than forming cross-sample artefacts.  Biological
+preservation is supported when those domains show reproducible, non-uniform
+cell-type composition.  Concordance with `cluster_20` is useful sensitivity
+analysis, not a pass/fail benchmark: a high ARI can still arise from a
+biologically unhelpful partition, while a moderate ARI can reflect a defensible
+change of domain resolution.

@@ -1,0 +1,115 @@
+---
+title: "R-native CellCharter reproduction: CODEX mouse spleen"
+author: "rCellCharter validation workflow"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+    df_print: paged
+params:
+  result_dir: "results/codex_mouse_spleen"
+---
+
+```{r setup, include=FALSE}
+# Every chunk is deliberately shown in the rendered HTML. It can be copied and
+# rerun after `scripts/run_codex_mouse_spleen.R` has created the compact outputs.
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 8, fig.height = 5)
+library(ggplot2)
+library(mclust)
+result_dir <- params$result_dir
+stopifnot(file.exists(file.path(result_dir, "domain_metadata.rds")))
+result <- readRDS(file.path(result_dir, "domain_metadata.rds"))
+model <- readRDS(file.path(result_dir, "torch_gmm_k11.rds"))
+```
+
+# Purpose and fair comparison
+
+This report reproduces the CellCharter *spatial-domain* stages on the official
+CODEX mouse-spleen tutorial data: sample-local Delaunay graph construction,
+99th-percentile long-edge removal, three-hop neighbourhood aggregation, and a
+full-covariance Gaussian mixture model (GMM) with K = 11. The original Python
+tutorial uses a supplied trVAE embedding. This R workflow intentionally uses a
+ten-dimensional, sample-wise-scaled PCA embedding. Thus it tests whether the
+R-native spatial method preserves domain-level structure and biology, not
+whether a different representation produces byte-identical labels.
+
+```{r model-summary}
+# The model contains only K x P parameters; the 707k-cell feature matrix remains HDF5-backed.
+data.frame(
+  cells = nrow(result), domains = model$n_clusters, features = model$n_features,
+  EM_iterations = model$iterations, converged = model$converged,
+  mean_negative_log_likelihood = model$nll
+)
+```
+
+# Spatial distribution
+
+```{r spatial-map}
+# Plotting all cells obscures tissue architecture. A reproducible 30k-cell
+# sample retains the spatial footprint while remaining responsive in HTML.
+set.seed(12345)
+plot_idx <- sample.int(nrow(result), min(30000L, nrow(result)))
+plot_df <- result[plot_idx, ]
+ggplot(plot_df, aes(x, y, colour = r_domain)) +
+  geom_point(size = 0.25, alpha = 0.65) +
+  coord_equal() + facet_wrap(~sample, scales = "free") +
+  scale_y_reverse() + labs(colour = "R domain", title = "Sample-local spatial domains") +
+  theme_bw(base_size = 10)
+```
+
+# Cell-type biology is preserved?
+
+```{r domain-celltype}
+# Each domain should show structured, interpretable enrichment rather than an
+# even mixture of all measured cell types. This is a biological preservation
+# test independent of arbitrary raw GMM label IDs.
+composition <- prop.table(table(result$r_domain, result$cell_type), margin = 1)
+composition_long <- as.data.frame(composition)
+names(composition_long) <- c("domain", "cell_type", "fraction")
+ggplot(composition_long, aes(cell_type, domain, fill = fraction)) +
+  geom_tile() + scale_fill_viridis_c() +
+  labs(x = NULL, y = "R domain", fill = "Within-domain fraction",
+       title = "Cell-type composition of R spatial domains") +
+  theme_bw(base_size = 10) + theme(axis.text.x = element_text(angle = 55, hjust = 1))
+```
+
+```{r celltype-enrichment-table}
+# Top cell types per domain are a compact, copyable biological interpretation.
+do.call(rbind, lapply(split(composition_long, composition_long$domain), function(x) {
+  head(x[order(x$fraction, decreasing = TRUE), ], 5)
+}))
+```
+
+# Concordance with the dataset's independent i-niche annotation
+
+```{r independent-niche-concordance}
+# `i-niche` is provided in the official H5AD. It is not a Python CellCharter
+# prediction, so this is a biological concordance check, not a parity claim.
+keep <- !is.na(result$i_niche)
+ari_i_niche <- adjustedRandIndex(as.integer(result$r_domain[keep]), as.integer(factor(result$i_niche[keep])))
+data.frame(adjusted_rand_index_against_i_niche = ari_i_niche,
+           note = "Independent supplied niche annotation; expected to be imperfect because it uses a different method/resolution.")
+```
+
+```{r niche-enrichment}
+niche_prop <- prop.table(table(result$r_domain[keep], result$i_niche[keep]), margin = 1)
+niche_long <- as.data.frame(niche_prop)
+names(niche_long) <- c("domain", "i_niche", "fraction")
+ggplot(niche_long, aes(i_niche, domain, fill = fraction)) +
+  geom_tile() + scale_fill_viridis_c() +
+  labs(x = "Supplied i-niche", y = "R domain", fill = "Within-domain fraction") + theme_bw(base_size = 10)
+```
+
+# Verdict
+
+The R implementation preserves the spatial-neighbourhood construction if each
+domain occupies coherent regions within individual spleens and shows non-uniform
+cell-type/i-niche composition. It preserves biology if recurrent domain–cell
+type enrichments and spatial localisations are evident across samples. A low
+ARI against `i-niche` alone is **not** evidence of failure: the methods use
+different feature representations and granularities. Conversely, high ARI
+without coherent spatial localisation would not be sufficient evidence of a
+biologically meaningful reproduction.
