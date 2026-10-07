@@ -1,0 +1,26 @@
+test_that("H5AD metadata decoding preserves category order and missing values", {
+  skip_if_not_installed("rhdf5")
+  path <- tempfile(fileext = ".h5ad")
+  rhdf5::h5createFile(path)
+  rhdf5::h5createGroup(path, "obs")
+  rhdf5::h5write(c("c1", "c2", "c3"), path, "obs/_index")
+  rhdf5::h5write(c(1.5, 2.5, 3.5), path, "obs/area")
+  rhdf5::h5createGroup(path, "obs/sample")
+  rhdf5::h5write(c("A", "B"), path, "obs/sample/categories")
+  rhdf5::h5write(c(0L, 1L, -1L), path, "obs/sample/codes")
+
+  value <- .cc_h5ad_dataframe(path, "obs")
+  expect_s4_class(value, "DataFrame")
+  expect_equal(rownames(value), c("c1", "c2", "c3"))
+  expect_equal(levels(value$sample), c("A", "B"))
+  expect_equal(as.character(value$sample), c("A", "B", NA))
+  expect_equal(value$area, c(1.5, 2.5, 3.5))
+})
+
+test_that("file checksum is deterministic", {
+  skip_if_not_installed("digest")
+  path <- tempfile()
+  writeBin(charToRaw("rCellCharter"), path)
+  expect_identical(cellcharter_file_sha256(path), cellcharter_file_sha256(path))
+  expect_match(cellcharter_file_sha256(path), "^[0-9a-f]{64}$")
+})

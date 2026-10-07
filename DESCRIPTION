@@ -2,6 +2,8 @@ Package: rCellCharter
 Title: Disk-Backed R Implementation of CellCharter Spatial Domains
 Version: 0.2.0.9000
 Authors@R: c(person(given = "Christian", family = "Peralta Viteri", role = c("aut", "cre"), email = "TODO@example.org"))
+Author: Christian Peralta Viteri [aut, cre]
+Maintainer: Christian Peralta Viteri <TODO@example.org>
 Description: Reproducible, disk-backed spatial-neighbourhood aggregation and
     Torch-accelerated Gaussian-mixture clustering for SingleCellExperiment data.
 License: MIT + file LICENSE
@@ -9,23 +11,28 @@ Encoding: UTF-8
 LazyData: false
 Imports:
     DelayedArray,
+    digest,
+    geometry,
     HDF5Array,
+    IRanges,
     Matrix,
+    methods,
+    rhdf5,
     S4Arrays,
+    S4Vectors,
     SingleCellExperiment,
-    SummarizedExperiment,
-    torch,
-    BiocParallel,
-    igraph,
     stats,
+    torch,
     utils
 Suggests:
-    testthat (>= 3.0.0),
-    rmarkdown,
-    knitr,
     anndataR,
-    luz,
+    ggplot2,
+    jsonlite,
+    knitr,
+    MASS,
     mclust,
-    MASS
+    rmarkdown,
+    testthat (>= 3.0.0)
 Config/testthat/edition: 3
 Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
