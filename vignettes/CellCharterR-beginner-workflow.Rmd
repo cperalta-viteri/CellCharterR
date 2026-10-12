@@ -198,18 +198,27 @@ cellcharter_plot_autok_stability(autok, k_range = 2:10) +
 
 `ggspavis` plots annotations directly from a `SpatialExperiment`. Its current
 `plotCoords()` function is the renamed successor to `plotSpots()` in older
-releases. We subset the SPE itself, so its native coordinates, annotations, and
-sample identifiers remain aligned automatically.
+releases. The small compatibility branch below supports both APIs. We subset
+the SPE itself, so its native coordinates, annotations, and sample identifiers
+remain aligned automatically.
 
 ```{r spatial-map, fig.alt="Teaching domain labels plotted at spatial cell coordinates"}
 display_spe <- spe[, spe$sample %in% c("BALBc-1", "MRL-4")]
-ggspavis::plotCoords(
-  display_spe,
+plot_function <- if ("plotCoords" %in% getNamespaceExports("ggspavis")) {
+  getExportedValue("ggspavis", "plotCoords")
+} else {
+  getExportedValue("ggspavis", "plotSpots")
+}
+plot_arguments <- list(
+  spe = display_spe,
   annotate = "tiny_domain",
   sample_id = "sample_id",
-  in_tissue = NULL,
   point_size = 1.2
-) +
+)
+if ("in_tissue" %in% names(formals(plot_function))) {
+  plot_arguments <- c(plot_arguments, list(in_tissue = NULL))
+}
+do.call(plot_function, plot_arguments) +
   ggplot2::labs(colour = "Domain", title = "BALBc-1 and early MRL-4 teaching slides") +
   ggplot2::theme_minimal(base_size = 16)
 ```
