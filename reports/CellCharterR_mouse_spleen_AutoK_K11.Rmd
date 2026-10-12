@@ -48,26 +48,26 @@ stopifnot(
   identical(manifest$differential_parameters$significance, 0.05)
 )
 
-plot_spatial_pair <- function(data, k) {
+map_to_spe <- function(data, k) {
   samples <- c("BALBc-1", "MRL-4")
-  domain <- factor(data$domain, levels = seq.int(0L, k - 1L))
-  palette <- grDevices::hcl.colors(k, "Dynamic")
-  symbols <- rep(c(16, 17, 15, 18, 3, 4, 8, 1, 2, 6, 0), length.out = k)
-  old <- graphics::par(no.readonly = TRUE)
-  on.exit(graphics::par(old))
-  graphics::par(mfrow = c(1, 2), mar = c(1, 1, 3, 1))
-  titles <- c("BALBc-1", "MRL-4 (early)")
-  for (i in seq_along(samples)) {
-    keep <- as.character(data$sample) == samples[[i]]
-    graphics::plot(
-      data$x[keep], data$y[keep], asp = 1, axes = FALSE,
-      xlab = "", ylab = "", pch = symbols[as.integer(domain[keep])], cex = 0.17,
-      col = palette[as.integer(domain[keep])],
-      main = paste0(titles[[i]], " (K=", k, ")")
+  keep <- as.character(data$sample) %in% samples
+  data <- data[keep, , drop = FALSE]
+  display_spe <- SpatialExperiment::SpatialExperiment(
+    assays = list(display = matrix(0, nrow = 1L, ncol = nrow(data))),
+    colData = S4Vectors::DataFrame(
+      sample_id = factor(
+        as.character(data$sample), levels = samples,
+        labels = c("BALBc-1", "MRL-4 (early)")
+      ),
+      domain = factor(data$domain, levels = seq.int(0L, k - 1L))
+    ),
+    spatialCoords = as.matrix(data[, c("x", "y")]),
+    sample_id = factor(
+      as.character(data$sample), levels = samples,
+      labels = c("BALBc-1", "MRL-4 (early)")
     )
-    graphics::box(col = "grey70")
-  }
-  invisible(palette)
+  )
+  display_spe
 }
 
 matrix_long <- function(x, value_name, condition = NULL) {
@@ -187,7 +187,7 @@ streams, so this does not claim seed-identical fitted parameters. Published H5AD
 `cluster_cellcharter` labels are retained only as a third reference artifact and
 are not plotted as the R tutorial fit.
 
-```{r roles, echo=TRUE}
+```{r roles, echo=TRUE, eval=FALSE}
 role_table <- do.call(rbind, lapply(manifest$roles, function(x) data.frame(
   role_id = x$role_id,
   k = x$k,
@@ -232,11 +232,24 @@ primary_balbc_mrl <- readRDS(primary_paths[["differential_balbc_mrl"]])
 
 ## BALBc-1 and early MRL-4 domains
 
-```{r primary-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Primary K=4 spatial domains on BALBc-1 and early MRL-4; domain is encoded by both colour and point shape"}
-plot_spatial_pair(primary_map, primary_k)
+```{r primary-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Primary K=4 spatial domains on BALBc-1 and early MRL-4"}
+primary_spe <- map_to_spe(primary_map, primary_k)
+ggspavis::plotCoords(
+  primary_spe,
+  annotate = "domain",
+  sample_id = "sample_id",
+  in_tissue = NULL,
+  point_size = 0.1,
+  pal = grDevices::hcl.colors(primary_k, "Dynamic")
+) +
+  ggplot2::labs(
+    colour = "Domain",
+    title = paste0("Primary R-selected spatial domains: K = ", primary_k)
+  ) +
+  ggplot2::theme_minimal(base_size = 16)
 ```
 
-```{r primary-map-table, echo=TRUE}
+```{r primary-map-table, echo=TRUE, eval=FALSE}
 knitr::kable(
   as.data.frame(table(sample = primary_map$sample, domain = primary_map$domain)),
   caption = "Accessible cell counts underlying the primary domain maps"
@@ -250,7 +263,7 @@ graphics::par(mar = c(18, 6, 3, 1))
 plot_enrichment_dotplot(primary_enrichment, primary_k)
 ```
 
-```{r primary-dotplot-table, echo=TRUE}
+```{r primary-dotplot-table, echo=TRUE, eval=FALSE}
 primary_enrichment_table <- as.data.frame(
   as.table(primary_enrichment$enrichment), stringsAsFactors = FALSE
 )
@@ -273,7 +286,7 @@ plot_heatmap(
 )
 ```
 
-```{r primary-nhood-table, echo=TRUE}
+```{r primary-nhood-table, echo=TRUE, eval=FALSE}
 primary_nhood_table <- rbind(
   matrix_long(primary_nhood$BALBc$enrichment, "enrichment", "BALBc"),
   matrix_long(primary_nhood$MRL$enrichment, "enrichment", "MRL")
@@ -300,7 +313,7 @@ plot_heatmap(
 )
 ```
 
-```{r primary-differential-table, echo=TRUE}
+```{r primary-differential-table, echo=TRUE, eval=FALSE}
 primary_diff_table <- matrix_long(primary_mrl_balbc$effect, "MRL_minus_BALBc")
 primary_diff_table$empirical_pvalue <- as.vector(primary_mrl_balbc$pvalue)
 knitr::kable(primary_diff_table,
@@ -320,11 +333,24 @@ k11_balbc_mrl <- readRDS(k11_paths[["differential_balbc_mrl"]])
 
 ## BALBc-1 and early MRL-4 domains
 
-```{r k11-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="K=11 sensitivity spatial domains on BALBc-1 and early MRL-4; domain is encoded by both colour and point shape"}
-plot_spatial_pair(k11_map, 11L)
+```{r k11-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="K=11 sensitivity spatial domains on BALBc-1 and early MRL-4"}
+k11_spe <- map_to_spe(k11_map, 11L)
+ggspavis::plotCoords(
+  k11_spe,
+  annotate = "domain",
+  sample_id = "sample_id",
+  in_tissue = NULL,
+  point_size = 0.1,
+  pal = grDevices::hcl.colors(11L, "Dynamic")
+) +
+  ggplot2::labs(
+    colour = "Domain",
+    title = "Tutorial-matched sensitivity spatial domains: K = 11"
+  ) +
+  ggplot2::theme_minimal(base_size = 16)
 ```
 
-```{r k11-map-table, echo=TRUE}
+```{r k11-map-table, echo=TRUE, eval=FALSE}
 knitr::kable(
   as.data.frame(table(sample = k11_map$sample, domain = k11_map$domain)),
   caption = "Accessible cell counts underlying the K=11 domain maps"
@@ -338,7 +364,7 @@ graphics::par(mar = c(18, 6, 3, 1))
 plot_enrichment_dotplot(k11_enrichment, 11L)
 ```
 
-```{r k11-dotplot-table, echo=TRUE}
+```{r k11-dotplot-table, echo=TRUE, eval=FALSE}
 k11_enrichment_table <- as.data.frame(
   as.table(k11_enrichment$enrichment), stringsAsFactors = FALSE
 )
@@ -361,7 +387,7 @@ plot_heatmap(
 )
 ```
 
-```{r k11-nhood-table, echo=TRUE}
+```{r k11-nhood-table, echo=TRUE, eval=FALSE}
 k11_nhood_table <- rbind(
   matrix_long(k11_nhood$BALBc$enrichment, "enrichment", "BALBc"),
   matrix_long(k11_nhood$MRL$enrichment, "enrichment", "MRL")
@@ -384,7 +410,7 @@ plot_heatmap(
 )
 ```
 
-```{r k11-differential-table, echo=TRUE}
+```{r k11-differential-table, echo=TRUE, eval=FALSE}
 k11_diff_table <- matrix_long(k11_mrl_balbc$effect, "MRL_minus_BALBc")
 k11_diff_table$empirical_pvalue <- as.vector(k11_mrl_balbc$pvalue)
 knitr::kable(k11_diff_table,
@@ -397,8 +423,9 @@ The R-selected AutoK K remains the only primary result. K=11 is a separately
 fitted tutorial sensitivity analysis. The published H5AD labels remain a
 separate reference artifact. Representation-learning equivalence is not claimed
 because the supplied trVAE representation is treated as immutable input.
-Spatial panels use base-R rendering of the exact coordinates and labels rather
-than Squidpy's plotting stack, so pixel-level visual equivalence is not claimed.
+Spatial panels use `ggspavis::plotCoords()` on `SpatialExperiment` objects with
+the exact saved coordinates and labels. Pixel-level equivalence to Squidpy's
+plotting stack is not claimed.
 
 # Session information
 

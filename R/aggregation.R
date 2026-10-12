@@ -310,7 +310,9 @@ cellcharter_aggregate <- function(x, adjacency, n_layers = 3L) {
     }
   }
   if (delayed_input) {
-    do.call(DelayedArray::acbind, output)
+    # Use the public S4 cbind generic. `acbind()` was an implementation helper
+    # and is no longer exported by recent DelayedArray releases.
+    do.call(DelayedArray::cbind, output)
   } else {
     do.call(cbind, output)
   }

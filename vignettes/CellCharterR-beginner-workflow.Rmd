@@ -196,27 +196,37 @@ cellcharter_plot_autok_stability(autok, k_range = 2:10) +
 
 ## Map the teaching domains
 
-```{r spatial-map, fig.alt="Teaching domain labels plotted at spatial cell coordinates"}
-xy <- as.data.frame(SpatialExperiment::spatialCoords(spe))
-names(xy)[1:2] <- c("x", "y")
-xy$domain <- SummarizedExperiment::colData(spe)$tiny_domain
-xy$sample <- SummarizedExperiment::colData(spe)$sample
-xy <- xy[xy$sample %in% c("BALBc-1", "MRL-4"), , drop = FALSE]
+`ggspavis` plots annotations directly from a `SpatialExperiment`. Its current
+`plotCoords()` function is the renamed successor to `plotSpots()` in older
+releases. We subset the SPE itself, so its native coordinates, annotations, and
+sample identifiers remain aligned automatically.
 
-ggplot2::ggplot(xy, ggplot2::aes(x, y, colour = domain, shape = domain)) +
-  ggplot2::geom_point(size = 1.2) +
-  ggplot2::facet_wrap(~sample) +
-  ggplot2::coord_equal() +
+```{r spatial-map, fig.alt="Teaching domain labels plotted at spatial cell coordinates"}
+display_spe <- spe[, spe$sample %in% c("BALBc-1", "MRL-4")]
+ggspavis::plotCoords(
+  display_spe,
+  annotate = "tiny_domain",
+  sample_id = "sample_id",
+  in_tissue = NULL,
+  point_size = 1.2
+) +
   ggplot2::labs(colour = "Domain", title = "BALBc-1 and early MRL-4 teaching slides") +
   ggplot2::theme_minimal(base_size = 16)
 ```
 
-The redundant shape encoding and the count table below keep domain identity
-available when colours cannot be distinguished.
+The count table below provides the same domain identity without relying on
+colour perception.
 
 ```{r spatial-map-table}
-as.data.frame(table(sample = xy$sample, domain = xy$domain))
+as.data.frame(table(
+  sample = display_spe$sample,
+  domain = display_spe$tiny_domain
+))
 ```
+
+If `ggspavis` is unavailable in a minimal installation, the coordinates and
+labels remain directly accessible for a dependency-light custom plot through
+`SpatialExperiment::spatialCoords(spe)` and `spe$tiny_domain`.
 
 Do not interpret this map as a mouse-spleen reproduction: random subsampling
 changes the spatial graph and therefore its neighborhoods.
@@ -344,6 +354,12 @@ try(cellcharter_sce_aggregate(
 ```
 
 ## Moving to a real analysis
+
+The complete mouse-spleen analysis is the primary CellCharterR reproducibility
+report. It contains the full visible code, pinned versions, checkpoints,
+AutoK-selected K=4 result, separately labelled K=11 sensitivity analysis,
+cell-type enrichment, neighborhood enrichment, and differential neighborhood
+enrichment. [Open the complete mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-mouse-spleen-reproducibility.html).
 
 For a real dataset, keep large representations HDF5-backed, use
 `cellcharter_sce_aggregate(..., filepath = ...)`, place checkpoints under a

@@ -573,7 +573,21 @@ These maps use **K = `r selected$k`**, selected by the R AutoK result above.
 Each panel is a separate physical sample; coordinates are not pooled across
 samples. Domain numbers are arbitrary mixture-component identifiers.
 
-```{r primary-domain-maps, echo=TRUE, fig.width=14, fig.height=12, fig.alt="Primary R-selected spatial domains across mouse spleen samples, encoded by colour and point shape"}
+```{r primary-spe-plot-code, eval=FALSE}
+# `full_spe` is the portable SpatialExperiment created in the conversion vignette.
+display_spe <- full_spe[, full_spe$sample_id %in% c("BALBc-1", "MRL-4")]
+ggspavis::plotCoords(
+  display_spe,
+  annotate = "r_domain_k4",
+  sample_id = "sample_id",
+  in_tissue = NULL,
+  point_size = 0.1
+) +
+  ggplot2::labs(title = "Primary R-selected spatial domains: K = 4") +
+  ggplot2::theme_minimal(base_size = 16)
+```
+
+```{r primary-domain-maps, echo=FALSE, fig.width=14, fig.height=12, fig.alt="Primary R-selected spatial domains across mouse spleen samples, encoded by colour and point shape"}
 primary_palette <- plot_sample_grid(
   report_input,
   selected$labels,
@@ -581,7 +595,7 @@ primary_palette <- plot_sample_grid(
 )
 ```
 
-```{r primary-domain-key, echo=TRUE, fig.width=10, fig.height=2.2}
+```{r primary-domain-key, echo=FALSE, fig.width=10, fig.height=2.2}
 primary_levels <- sort(unique(as.integer(selected$labels)))
 graphics::par(mar = c(1, 1, 3, 1))
 graphics::plot.new()
@@ -746,7 +760,20 @@ This section does **not** replace the independently R-selected K =
 only to facilitate visual comparison with the published tutorial convention.
 No K = 11 enrichment or proximity statistic is presented as a primary result.
 
-```{r k11-sensitivity-maps, echo=TRUE, fig.width=14, fig.height=12, fig.alt="Tutorial-matched K=11 sensitivity domains across mouse spleen samples, encoded by colour and point shape"}
+```{r k11-spe-plot-code, eval=FALSE}
+display_spe <- full_spe[, full_spe$sample_id %in% c("BALBc-1", "MRL-4")]
+ggspavis::plotCoords(
+  display_spe,
+  annotate = "r_domain_k11_sensitivity",
+  sample_id = "sample_id",
+  in_tissue = NULL,
+  point_size = 0.1
+) +
+  ggplot2::labs(title = "Tutorial-matched sensitivity only: K = 11") +
+  ggplot2::theme_minimal(base_size = 16)
+```
+
+```{r k11-sensitivity-maps, echo=FALSE, fig.width=14, fig.height=12, fig.alt="Tutorial-matched K=11 sensitivity domains across mouse spleen samples, encoded by colour and point shape"}
 k11_palette <- plot_sample_grid(
   report_input,
   k11_selected$labels,
@@ -754,7 +781,7 @@ k11_palette <- plot_sample_grid(
 )
 ```
 
-```{r k11-domain-key, echo=TRUE, fig.width=10, fig.height=2.2}
+```{r k11-domain-key, echo=FALSE, fig.width=10, fig.height=2.2}
 k11_levels <- sort(unique(as.integer(k11_selected$labels)))
 graphics::par(mar = c(1, 1, 3, 1))
 graphics::plot.new()

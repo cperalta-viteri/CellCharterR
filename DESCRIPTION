@@ -42,6 +42,7 @@ Suggests:
     anndataR,
     BiocStyle,
     ggplot2,
+    ggspavis,
     jsonlite,
     knitr,
     MASS,
