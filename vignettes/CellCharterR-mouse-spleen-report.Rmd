@@ -1,0 +1,40 @@
+---
+title: "Full CODEX mouse-spleen reproducibility report"
+author: "Christian Peralta Viteri"
+output: BiocStyle::html_document
+vignette: >
+  %\VignetteIndexEntry{Full CODEX mouse-spleen reproducibility report}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+The complete mouse-spleen analysis is the primary CellCharterR reproducibility
+report. It contains the full visible code, pinned versions, checkpoints,
+AutoK-selected K=4 result, separately labelled K=11 sensitivity analysis,
+cell-type enrichment, neighborhood enrichment, and differential neighborhood
+enrichment.
+
+The report is intentionally precomputed. Package build, check, and CI must not
+read or recompute the 707,474-cell analysis. The preserved HTML is shipped with
+the package and can be opened immediately:
+
+[Open the complete mouse-spleen reproducibility report](../reports/CellCharterR-mouse-spleen-reproducibility.html)
+
+The report and corresponding visible source are installed under the package's
+`reports/` directory. Its full-scale inputs and checkpointed outputs are
+distributed separately from the software package.
+
+## Citing CellCharterR
+
+Christian Peralta Viteri is the author and maintainer of CellCharterR. Retrieve
+the package's current, version-aware citation and copyable BibTeX with:
+
+```{r package-citation}
+citation("CellCharterR")
+```
+
+## Session information
+
+```{r session-info}
+sessionInfo()
+```

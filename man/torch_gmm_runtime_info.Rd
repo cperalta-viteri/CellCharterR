@@ -26,3 +26,11 @@ A named list suitable for checkpoint provenance.
 \description{
 Report the Torch execution environment
 }
+\examples{
+\dontshow{if (requireNamespace("torch", quietly = TRUE)) withAutoprint(\{ # examplesIf}
+info <- torch_gmm_runtime_info(
+  device = "cpu", batch_size = 8, seed = 7, num_threads = 1
+)
+info[c("device", "batch_size", "seed")]
+\dontshow{\}) # examplesIf}
+}

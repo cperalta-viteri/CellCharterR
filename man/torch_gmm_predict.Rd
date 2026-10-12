@@ -22,3 +22,16 @@ component convention.
 \description{
 Predict CellCharter domain labels from a Torch GMM
 }
+\examples{
+\dontshow{if (requireNamespace("torch", quietly = TRUE)) withAutoprint(\{ # examplesIf}
+model <- structure(list(
+  means = rbind(c(-1, -1), c(1, 1)),
+  covariances = list(diag(2), diag(2)),
+  weights = c(0.5, 0.5), n_features = 2L, n_clusters = 2L,
+  covariance_regularization = 1e-6
+), class = "torch_gmm")
+torch_gmm_predict(
+  model, rbind(c(-1, -1), c(1, 1)), batch_size = 1, device = "cpu"
+)
+\dontshow{\}) # examplesIf}
+}

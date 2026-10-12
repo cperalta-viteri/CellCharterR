@@ -8,7 +8,9 @@ cellcharter_attach_hdf5_reduced_dim(
   sce,
   filepath,
   name = "X_cellcharter",
-  reduced_dim_name = name
+  reduced_dim_name = name,
+  cell_ids = NULL,
+  allow_reorder = FALSE
 )
 }
 \arguments{
@@ -19,10 +21,30 @@ cellcharter_attach_hdf5_reduced_dim(
 \item{name}{Dataset name in \code{filepath}.}
 
 \item{reduced_dim_name}{Name to use in \code{reducedDims(sce)}.}
+
+\item{cell_ids}{Observation identifiers for the HDF5 rows. When omitted,
+row names on the HDF5 dataset or a \verb{<name>_cell_ids} HDF5 dataset are used.}
+
+\item{allow_reorder}{Whether an explicitly identified HDF5 matrix may be
+reordered into SCE order. The reorder is recorded in SCE metadata.}
 }
 \value{
 The updated SCE.
 }
 \description{
 Attach an HDF5-backed CellCharter representation to an SCE
+}
+\examples{
+ids <- paste0("cell", seq_len(3))
+example_sce <- SingleCellExperiment::SingleCellExperiment(
+  assays = list(counts = matrix(0, 1, 3, dimnames = list("marker", ids)))
+)
+output <- tempfile(fileext = ".h5")
+HDF5Array::writeHDF5Array(matrix(seq_len(6), nrow = 3),
+                          filepath = output, name = "X_cellcharter")
+example_sce <- cellcharter_attach_hdf5_reduced_dim(
+  example_sce, output, cell_ids = ids
+)
+SingleCellExperiment::reducedDimNames(example_sce)
+unlink(output)
 }

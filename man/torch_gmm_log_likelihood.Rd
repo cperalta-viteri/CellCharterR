@@ -15,6 +15,22 @@ torch_gmm_log_likelihood(model, newdata, batch_size = 8192L, device = "auto")
 
 \item{device}{Torch device selection.}
 }
+\value{
+Mean per-observation log likelihood under \code{model}.
+}
 \description{
 Streamed mean log likelihood
+}
+\examples{
+\dontshow{if (requireNamespace("torch", quietly = TRUE)) withAutoprint(\{ # examplesIf}
+model <- structure(list(
+  means = rbind(c(-1, -1), c(1, 1)),
+  covariances = list(diag(2), diag(2)),
+  weights = c(0.5, 0.5), n_features = 2L, n_clusters = 2L,
+  covariance_regularization = 1e-6
+), class = "torch_gmm")
+torch_gmm_log_likelihood(
+  model, rbind(c(-1, -1), c(1, 1)), batch_size = 1, device = "cpu"
+)
+\dontshow{\}) # examplesIf}
 }

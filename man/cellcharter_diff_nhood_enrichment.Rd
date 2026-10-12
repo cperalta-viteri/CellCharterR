@@ -28,7 +28,8 @@ cellcharter_diff_nhood_enrichment(
 Every library must belong to exactly one condition, and graph edges may
 not join different libraries.}
 
-\item{condition_groups}{Two conditions in the desired subtraction order.}
+\item{condition_groups}{Two conditions to compare. Their categorical level
+order, not the order supplied here, determines numerator and denominator.}
 
 \item{n_perms}{Positive number of library-label permutations.}
 
@@ -49,8 +50,11 @@ empirical \code{pvalue}, and complete \code{params}.
 \description{
 Computes condition-specific asymmetric neighborhood enrichments and their
 difference, then estimates directional empirical p-values by permuting the
-condition assignment at the library level. Per-library sufficient statistics
-are computed once, avoiding a full graph scan for every permutation.
+condition assignment at the library level. The inferential contrast follows
+the categorical level order, as in CellCharter v0.2.0; a reverse-direction
+display must negate \code{effect} while reusing the same permutation result.
+Per-library sufficient statistics are computed once, avoiding a full graph
+scan for every permutation.
 }
 \details{
 \code{permutation_mode = "cellcharter_v0.2.0"} intentionally reproduces the
@@ -59,4 +63,17 @@ replacement, uses the first \code{n_condition1} draws as the selected set, and
 calculates unselected minus selected enrichment. \code{"shuffle"} instead makes
 the conventional size-preserving, without-replacement assignment and
 calculates condition 1 minus condition 2.
+}
+\examples{
+odd <- seq(1, 8, by = 2)
+graph <- Matrix::sparseMatrix(
+  i = c(odd, odd + 1L), j = c(odd + 1L, odd),
+  x = 1, dims = c(8, 8)
+)
+cellcharter_diff_nhood_enrichment(
+  graph, cluster = rep(c(1, 2), 4),
+  condition = rep(c("healthy", "lupus"), each = 4),
+  library = rep(paste0("sample", 1:4), each = 2),
+  n_perms = 5, seed = 1
+)
 }

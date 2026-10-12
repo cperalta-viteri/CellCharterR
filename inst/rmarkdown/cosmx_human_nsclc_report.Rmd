@@ -1,6 +1,6 @@
 ---
 title: "R-native CellCharter reproduction: CosMx human NSCLC"
-author: "rCellCharter validation workflow"
+author: "CellCharterR validation workflow"
 date: "`r Sys.Date()`"
 output:
   html_document:

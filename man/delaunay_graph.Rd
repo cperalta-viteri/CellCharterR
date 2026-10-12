@@ -19,3 +19,7 @@ so would create biologically meaningless edges across tissue sections. The
 Qhull options mirror SciPy's two-dimensional defaults. For coincident points,
 Qhull retains one representative and the omitted duplicates remain isolated.
 }
+\examples{
+xy <- rbind(c(0, 0), c(1, 0), c(0, 1), c(1, 1), c(0.5, 0.5))
+delaunay_graph(xy)
+}

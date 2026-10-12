@@ -1,0 +1,62 @@
+name: Linux CPU package check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container: bioconductor/bioconductor_docker:devel
+    env:
+      CELLCHARTERR_CPU_ONLY: "true"
+      CELLCHARTERR_REQUIRE_TORCH: "true"
+      CUDA_VISIBLE_DEVICES: ""
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install validation tools, R dependencies, and CPU LibTorch
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends strace
+          Rscript -e 'BiocManager::install(c("remotes", "rcmdcheck", "BiocCheck"), ask = FALSE, update = FALSE)'
+          Rscript -e 'remotes::install_deps(dependencies = TRUE, upgrade = "never")'
+          Rscript -e 'torch::install_torch(type = "cpu")'
+
+      - name: Build, check, and run the tiny CPU smoke test without network access
+        shell: bash
+        run: |
+          printf '%s\n' 'options(repos = structure(character(), names = character()))' > /tmp/CellCharterR-offline.Rprofile
+          export R_PROFILE_USER=/tmp/CellCharterR-offline.Rprofile
+          export http_proxy=http://127.0.0.1:9
+          export https_proxy=http://127.0.0.1:9
+          export HTTP_PROXY=http://127.0.0.1:9
+          export HTTPS_PROXY=http://127.0.0.1:9
+          strace -f -e trace=network -o network-build.trace R CMD build .
+          strace -f -e trace=network -o network-check.trace R CMD check --no-manual CellCharterR_*.tar.gz
+          mkdir /tmp/CellCharterR-ci-library
+          strace -f -e trace=network -o network-install.trace R CMD INSTALL --library=/tmp/CellCharterR-ci-library CellCharterR_*.tar.gz
+          R_LIBS_USER=/tmp/CellCharterR-ci-library strace -f -e trace=network -o network-smoke.trace Rscript inst/scripts/ci-cpu-smoke.R cpu-smoke.rds
+          if grep -E 'socket\(AF_INET6?|connect\([^,]+,.*(AF_INET6?|sin_port)' network-*.trace; then
+            echo 'Unexpected IPv4/IPv6 network activity occurred after dependency installation.' >&2
+            exit 1
+          fi
+
+      - name: Run Bioconductor policy checks
+        shell: bash
+        run: |
+          Rscript -e 'BiocCheck::BiocCheck(Sys.glob("CellCharterR_*.tar.gz")[[1]], new.package = TRUE)'
+
+      - name: Retain CPU and network-silence evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CellCharterR-linux-cpu-validation
+          path: |
+            CellCharterR.Rcheck/00check.log
+            CellCharterR.BiocCheck/00BiocCheck.log
+            cpu-smoke.rds
+            network-*.trace

@@ -1,0 +1,10 @@
+component,version,commit_or_source,role
+CellCharter,0.2.0,2a8fdde8213e32e5a00f1f9571bffd3dbb825a79,authoritative algorithm reference
+Squidpy,1.3.0,e2ffc4d03d02e1b02c9bf15ae87fb7091a64df4b,spatial Delaunay graph reference
+Python,3.10,cellcharter_analyses environment,reference runtime
+PyTorch,1.12.1,cellcharter_analyses environment,PyCave backend
+PyCave,3.2.1,6df56fa15797940a2063f3e70b3a7641f592a9f6,full-covariance GMM
+scikit-learn,1.3.0,cellcharter_analyses environment,KMeans and Fowlkes-Mallows
+NumPy,1.23.4,cellcharter_analyses environment,array and percentile semantics
+SciPy,not declared,cellcharter_analyses environment,Delaunay backend; exact artifact build version unavailable
+scArches,0.5.9,cellcharter_analyses environment,trVAE representation generation only

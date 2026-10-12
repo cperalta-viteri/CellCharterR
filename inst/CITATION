@@ -1,0 +1,18 @@
+citHeader("To cite CellCharterR in publications, use:")
+
+bibentry(
+  bibtype = "Manual",
+  title = "CellCharterR: Disk-Backed R Implementation of CellCharter Spatial Domains",
+  author = person("Christian", "Peralta Viteri"),
+  year = "2026",
+  note = sprintf("R package version %s", meta$Version),
+  url = "https://github.com/cperalta-viteri/CellCharterR"
+)
+
+citFooter(paste(
+  "Depending on the analysis, also cite the underlying CellCharter method",
+  "(doi:10.1038/s41588-023-01588-4). For the bundled CODEX teaching data,",
+  "also cite Goltsev et al. (2018),",
+  "doi:10.1016/j.cell.2018.07.010, dataset doi:10.17632/zjnpwh8m5b.1,",
+  "and the CC BY 4.0 clustered-data record doi:10.6084/m9.figshare.25040192.v2."
+))

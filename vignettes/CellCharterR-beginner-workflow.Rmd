@@ -1,0 +1,370 @@
+---
+title: "Finding spatial domains with CellCharterR"
+author: "Christian Peralta Viteri"
+output:
+  BiocStyle::html_document:
+    toc: true
+vignette: >
+  %\VignetteIndexEntry{Finding spatial domains with CellCharterR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE, comment = "#>", fig.width = 8, fig.height = 6,
+  dev.args = list(pointsize = 16)
+)
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  ggplot2::theme_set(ggplot2::theme_minimal(base_size = 16))
+}
+```
+
+## What this workflow does
+
+Spatial assays measure many cells while retaining each cell's position in a
+tissue. CellCharterR groups cells into **spatial domains**: regions whose cells
+have similar molecular measurements and similar neighborhoods.
+
+This vignette uses a portable 1,000-cell teaching subset. It is an exact seeded
+random subset of the canonical mouse-spleen SCE, but it is deliberately too
+small to reproduce or interpret the full biological result. Its purpose is to
+show the complete interface safely, offline, and on a CPU.
+
+The workflow has five ideas:
+
+1. keep measurements, coordinates, annotations, and results together in one
+   `SingleCellExperiment` (SCE);
+2. connect nearby cells separately within each physical tissue section;
+3. summarize each cell and its graph neighborhoods;
+4. repeat Gaussian-mixture clustering for candidate K values and choose a
+   stable number of domains; and
+5. describe which cell types and domain-domain contacts are enriched.
+
+### Short glossary
+
+- **Cell:** one measured observation and one column of the SCE.
+- **Marker:** a measured protein feature, stored as a row of the `protein`
+  assay.
+- **Representation or embedding:** a compact numeric description of each cell;
+  this example uses the fixed published trVAE representation.
+- **Spatial graph:** links between nearby cells on the same physical slide.
+- **Graph hop:** one step along that graph; two hops reach neighbors of direct
+  neighbors while excluding cells already reached sooner.
+- **Domain:** a cluster defined from a cell and its spatial neighborhood.
+- **Enrichment:** observed abundance or contact divided by its analytical
+  expectation, displayed here as log2 fold change where stated.
+- **Biological replicate/library:** one independently sampled slide. It—not an
+  individual cell—is the permutation unit for condition comparisons.
+
+## Load and inspect the teaching object
+
+```{r load-data}
+library(CellCharterR)
+data("codex_mouse_spleen_tiny", package = "CellCharterR")
+sce <- codex_mouse_spleen_tiny
+sce
+```
+
+Each column is a cell. The `protein` assay contains marker intensities,
+`reducedDims(sce)$spatial` contains x/y positions, and `X_trVAE` is the fixed
+representation used by the published CellCharter tutorial.
+
+```{r inspect-fields}
+SummarizedExperiment::assayNames(sce)
+SingleCellExperiment::reducedDimNames(sce)
+head(SummarizedExperiment::colData(sce)[, c("sample", "condition", "cell_type")])
+table(SummarizedExperiment::colData(sce)$sample)
+```
+
+## Run the SCE-first workflow
+
+The candidate range is declared before fitting: K=2 through K=10. CellCharter's
+neighboring-K calculation also fits the two boundary models needed to score
+that range. The tutorial uses three repeated runs to keep package builds short;
+a scientific analysis should retain the package default `max_runs = 10` and
+`convergence_tol = 0.01`.
+
+All Torch computation is forced to the CPU here. AutoK checkpoints are written
+to a temporary directory so interrupted fits can be resumed during an ordinary
+analysis.
+
+```{r run-workflow, message=TRUE}
+checkpoint_dir <- tempfile("CellCharterR-tiny-AutoK-")
+
+# Some sandboxed build systems cannot expose their own process ID to the
+# processx dependency used by torch. Normal installations execute this branch;
+# the packaged checkpoint keeps documentation rebuilds available when that
+# external runtime facility is unavailable.
+torch_ready <- tryCatch({
+  loadNamespace("torch")
+  TRUE
+}, error = function(error) FALSE)
+
+if (!torch_ready && identical(Sys.getenv("CELLCHARTERR_REQUIRE_TORCH"), "true")) {
+  stop("The required CPU Torch workflow could not start in this validation run.")
+}
+
+if (torch_ready) {
+  sce <- cellcharter_sce_workflow(
+    sce,
+    group_col = "cell_type_reduced",
+    candidate_k = c(2L, 10L),
+    checkpoint_dir = checkpoint_dir,
+    spatial = "spatial",
+    representation = "X_trVAE",
+    sample_col = "sample",
+    condition_col = "condition",
+    graph_name = "cellcharter_graph",
+    aggregated = "X_cellcharter_tiny",
+    domain_col = "tiny_domain",
+    n_layers = 3L,
+    condition_groups = c("BALBc", "MRL"),
+    n_perms = 10L,
+    seed = 1L,
+    autok_args = list(
+      max_runs = 3L,
+      convergence_tol = 0.01,
+      fit_args = list(
+        batch_size = 256L,
+        max_iter = 20L,
+        device = "cpu",
+        num_threads = 1L
+      ),
+      predict_args = list(batch_size = 256L, device = "cpu")
+    )
+  )
+} else {
+  message("Torch runtime unavailable in this build process; using the validated tiny checkpoint.")
+  sce <- readRDS(system.file(
+    "extdata", "codex_mouse_spleen_tiny_workflow.rds",
+    package = "CellCharterR", mustWork = TRUE
+  ))
+}
+```
+
+The graph is stored in `colPairs()`, the aggregate representation in
+`reducedDims()`, domain labels in `colData()`, and fitted-stage provenance and
+statistical results in `metadata()`.
+
+```{r inspect-results}
+SingleCellExperiment::colPairNames(sce)
+SingleCellExperiment::reducedDimNames(sce)
+table(SummarizedExperiment::colData(sce)$tiny_domain)
+names(S4Vectors::metadata(sce)$CellCharterR$results)
+```
+
+The graph was built independently for every slide before applying one global
+distance cutoff. This is essential: geometrically close coordinates from two
+different tissue sections are not biological neighbors. The following check
+must be `TRUE`.
+
+```{r graph-isolation}
+pairs <- SingleCellExperiment::colPair(sce, "cellcharter_graph")
+sample_id <- as.character(SummarizedExperiment::colData(sce)$sample)
+all(sample_id[S4Vectors::from(pairs)] == sample_id[S4Vectors::to(pairs)])
+```
+
+`X_cellcharter_tiny` concatenates the original representation with exclusive
+one-, two-, and three-hop means. “Exclusive” means that a cell reached in one
+hop is not counted again in the two-hop block. These features let the GMM
+distinguish cells with similar marker states but different tissue contexts.
+
+## Diagnose the choice of K
+
+AutoK compares solutions at neighboring K values with the Fowlkes--Mallows
+score. Peaks suggest comparatively stable resolutions; they are diagnostics,
+not biological proof. The selected K is the highest mean stability, with the
+first K used to break ties.
+
+```{r stability, fig.alt="AutoK stability from K 2 through K 10 on the tiny teaching data"}
+autok <- S4Vectors::metadata(sce)$CellCharterR$autok$tiny_domain
+cellcharter_autok_best_k(autok)
+cellcharter_plot_autok_stability(autok, k_range = 2:10) +
+  ggplot2::theme_minimal(base_size = 16)
+```
+
+## Map the teaching domains
+
+```{r spatial-map, fig.alt="Teaching domain labels plotted at spatial cell coordinates"}
+xy <- as.data.frame(SingleCellExperiment::reducedDim(sce, "spatial"))
+names(xy)[1:2] <- c("x", "y")
+xy$domain <- SummarizedExperiment::colData(sce)$tiny_domain
+xy$sample <- SummarizedExperiment::colData(sce)$sample
+xy <- xy[xy$sample %in% c("BALBc-1", "MRL-4"), , drop = FALSE]
+
+ggplot2::ggplot(xy, ggplot2::aes(x, y, colour = domain, shape = domain)) +
+  ggplot2::geom_point(size = 1.2) +
+  ggplot2::facet_wrap(~sample) +
+  ggplot2::coord_equal() +
+  ggplot2::labs(colour = "Domain", title = "BALBc-1 and early MRL-4 teaching slides") +
+  ggplot2::theme_minimal(base_size = 16)
+```
+
+The redundant shape encoding and the count table below keep domain identity
+available when colours cannot be distinguished.
+
+```{r spatial-map-table}
+as.data.frame(table(sample = xy$sample, domain = xy$domain))
+```
+
+Do not interpret this map as a mouse-spleen reproduction: random subsampling
+changes the spatial graph and therefore its neighborhoods.
+
+## Inspect enrichment results
+
+The cell-type result compares the observed cell-type proportion inside each
+domain with the cohort-wide expectation. Neighborhood enrichment is directed:
+row-domain contact with column-domain need not have the same normalized value
+as the reverse direction. Differential neighborhood enrichment permutes the
+condition assignment at the **sample/library level**, never cell by cell.
+
+```{r result-tables}
+results <- S4Vectors::metadata(sce)$CellCharterR$results
+round(results$enrichment$value$enrichment, 2)
+round(results$nhood_enrichment$value$enrichment, 2)
+round(results$diff_nhood_enrichment$value$effect, 2)
+```
+
+```{r enrichment-plot, fig.alt="Cell-type by teaching-domain log2 fold-change enrichment heatmap"}
+enrichment <- results$enrichment$value$enrichment
+enrichment_long <- as.data.frame(as.table(enrichment), stringsAsFactors = FALSE)
+names(enrichment_long) <- c("cell_type", "domain", "log2_fc")
+ggplot2::ggplot(enrichment_long,
+                ggplot2::aes(domain, cell_type, fill = log2_fc)) +
+  ggplot2::geom_tile(colour = "grey85") +
+  ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B") +
+  ggplot2::labs(x = "Teaching domain", y = "Cell type", fill = "log2 FC") +
+  ggplot2::theme_minimal(base_size = 16)
+```
+
+Positive cells in this heatmap are more common in a domain than expected from
+their overall abundance; negative cells are depleted. For example, the code
+below reports the strongest finite enrichment and depletion in this teaching
+subset. These are demonstrations, not full-data biological conclusions.
+
+```{r interpret-enrichment}
+finite_index <- which(is.finite(enrichment), arr.ind = TRUE)
+finite_values <- enrichment[finite_index]
+extreme_index <- finite_index[c(which.max(finite_values), which.min(finite_values)), , drop = FALSE]
+data.frame(
+  direction = c("strongest enrichment", "strongest depletion"),
+  cell_type = rownames(enrichment)[extreme_index[, "row"]],
+  domain = colnames(enrichment)[extreme_index[, "col"]],
+  log2_fc = enrichment[extreme_index]
+)
+```
+
+An enrichment value of `-Inf` is not a numerical failure: it means the observed
+proportion is zero while the expected proportion is positive, so its log2 fold
+change is negative infinity. The table deliberately reports finite extremes.
+
+```{r neighborhood-heatmaps, fig.width=12, fig.height=5, fig.alt="Directed neighborhood enrichment heatmaps for healthy BALBc and lupus MRL teaching samples"}
+condition_matrices <- results$diff_nhood_enrichment$value$enrichment
+condition_long <- do.call(rbind, lapply(names(condition_matrices), function(condition) {
+  value <- as.data.frame(as.table(condition_matrices[[condition]]))
+  names(value) <- c("source", "target", "enrichment")
+  value$condition <- condition
+  value
+}))
+ggplot2::ggplot(condition_long,
+                ggplot2::aes(target, source, fill = enrichment)) +
+  ggplot2::geom_tile(colour = "grey85") +
+  ggplot2::facet_wrap(~condition) +
+  ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B") +
+  ggplot2::labs(x = "Target domain", y = "Source domain",
+                fill = "Observed - expected") +
+  ggplot2::theme_minimal(base_size = 16)
+```
+
+Here each condition panel shows CellCharter's directed neighborhood statistic,
+`observed - expected`; it is not a fold change. Rows are source domains and
+columns are target domains.
+
+```{r differential-heatmap, fig.alt="Differential directed neighborhood enrichment heatmap contrasting BALBc with MRL teaching samples"}
+effect <- results$diff_nhood_enrichment$value$effect
+effect_long <- as.data.frame(as.table(effect))
+names(effect_long) <- c("source", "target", "effect")
+ggplot2::ggplot(effect_long, ggplot2::aes(target, source, fill = effect)) +
+  ggplot2::geom_tile(colour = "grey85") +
+  ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B") +
+  ggplot2::labs(x = "Target domain", y = "Source domain",
+                fill = "BALBc - MRL") +
+  ggplot2::theme_minimal(base_size = 16)
+```
+
+The differential panel is the first categorical condition level minus the
+second (`BALBc - MRL` here), calculated from the condition-specific
+`observed - expected` matrices. Its empirical, unadjusted p-values are:
+
+```{r differential-pvalues}
+round(results$diff_nhood_enrichment$value$pvalue, 2)
+```
+
+The ten permutations above are only a quick teaching demonstration. The CODEX
+reproduction uses 100, as required by the tutorial protocol.
+
+The parity permutation deliberately reproduces CellCharter 0.2.0: libraries
+are drawn with replacement and empirical p-values use the historical
+directional count without a plus-one correction. P-values are unadjusted across
+domain pairs. Interpret the effect size before its p-value, and treat results as
+associations rather than causal interactions. For a new study, consider the
+documented `permutation_mode = "shuffle"` alternative and a suitable
+multiple-testing correction. Domain stability depends on the representation,
+spatial graph, candidate K range, and mixture initialization; K is a diagnostic
+resolution, not a biological truth.
+
+## Identity and subsetting safeguards
+
+`colPairs()` endpoints, reduced dimensions, and `colData()` subset together
+with the SCE. Dataset-level fitted results in `metadata()`, however, no longer
+describe the subset. CellCharterR records ordered-cell digests and refuses to
+reuse such stages until they are recomputed.
+
+```{r subsetting-safety}
+smaller <- sce[, seq_len(100)]
+dim(SingleCellExperiment::colPair(smaller, "cellcharter_graph"))
+try(cellcharter_sce_aggregate(
+  smaller,
+  representation = "X_trVAE",
+  graph_name = "cellcharter_graph",
+  output = "recomputed"
+))
+```
+
+## Moving to a real analysis
+
+For a real dataset, keep large representations HDF5-backed, use
+`cellcharter_sce_aggregate(..., filepath = ...)`, place checkpoints under a
+durable results directory, use `max_runs = 10`, and decide the K range before
+looking at stability. Biological conclusions require the complete dataset and
+appropriate replication; they must not be inferred from this teaching subset.
+
+The companion H5AD vignette provides checksum-safe, unevaluated download code.
+The two official H5AD files total 600.4 MiB; reserve additional working space
+for HDF5 aggregation and checkpoints. The portable full SCE is 286.0 MiB on
+disk and about 693.7 MiB after loading. Full AutoK repeats many GMM fits, so
+runtime is hardware- and K-range-dependent; use a durable checkpoint directory
+and resume completed fits rather than restarting. The preserved full report
+records the publication-scale parameters and limitations. If a stage fails,
+first inspect its recorded seed, cell-order digest, sample field, CPU thread
+count, and checkpoint contract.
+
+## References
+
+The full reproducibility report cites CellCharter (Varrone et al., 2024), the
+CODEX mouse-spleen dataset (Goltsev et al., 2018), and the pinned CellCharter
+0.2.0 source commit used for parity.
+
+## Citing CellCharterR
+
+Christian Peralta Viteri is the author and maintainer of CellCharterR. Retrieve
+the package's current, version-aware citation and copyable BibTeX with:
+
+```{r package-citation}
+citation("CellCharterR")
+```
+
+```{r session-info}
+sessionInfo()
+```

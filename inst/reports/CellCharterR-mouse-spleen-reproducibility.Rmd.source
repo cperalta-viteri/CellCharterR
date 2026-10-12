@@ -1,0 +1,813 @@
+---
+title: "CellCharterR reproduction of the CellCharter CODEX mouse-spleen tutorial"
+author: "CellCharterR checkpointed workflow"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M UTC', tz = 'UTC')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: show
+    df_print: paged
+params:
+  result_dir: null
+---
+
+```{r setup, echo=TRUE, message=TRUE, warning=TRUE}
+# Every chunk is deliberately visible: this report is an auditable view of
+# checkpointed results, not a hidden re-analysis of the tutorial data.
+knitr::opts_chunk$set(
+  echo = TRUE, message = TRUE, warning = TRUE,
+  fig.align = "center", fig.retina = 2
+)
+
+project_root <- if (file.exists(file.path(getwd(), "DESCRIPTION"))) {
+  getwd()
+} else if (file.exists(file.path(dirname(getwd()), "DESCRIPTION"))) {
+  dirname(getwd())
+} else {
+  stop(
+    "Render from the CellCharterR repository root (or its reports/ directory). ",
+    "The project DESCRIPTION file could not be located.", call. = FALSE
+  )
+}
+
+result_dir <- params$result_dir
+if (is.null(result_dir) || length(result_dir) != 1L || !nzchar(result_dir)) {
+  result_dir <- file.path(project_root, "results", "codex_mouse_spleen")
+}
+result_dir <- normalizePath(result_dir, winslash = "/", mustWork = FALSE)
+
+# These are the durable artifacts needed to substantiate every primary result
+# shown below. Report rendering never silently regenerates or substitutes them.
+artifact_paths <- c(
+  representation = file.path(result_dir, "representation", "codex_sce.rds"),
+  graph_manifest = file.path(result_dir, "graph", "graph_manifest.rds"),
+  aggregation_manifest = file.path(result_dir, "aggregation_pinned_global", "aggregation_manifest.rds"),
+  aggregation_parity = file.path(result_dir, "aggregation_pinned_global", "python_r_parity.rds"),
+  published_aggregation_parity = file.path(
+    result_dir, "aggregation_pinned_global", "published_graph_python_r_parity.rds"
+  ),
+  python_gmm_fixture = file.path(project_root, "inst", "extdata", "python_gmm_k11_fixture.rds"),
+  autok = file.path(result_dir, "autok_pinned_global", "autok_result.rds"),
+  selected_labels = file.path(result_dir, "selected", "selected_labels.rds"),
+  selected_model = file.path(result_dir, "selected", "selected_model.rds"),
+  k11_labels = file.path(result_dir, "selected", "tutorial_sensitivity_k11_labels.rds"),
+  downstream_manifest = file.path(result_dir, "downstream", "downstream_manifest.rds"),
+  report_input = file.path(result_dir, "downstream", "report_input.rds"),
+  cell_type_enrichment = file.path(result_dir, "downstream", "cell_type_enrichment.rds"),
+  neighborhood_enrichment = file.path(
+    result_dir, "downstream", "condition_neighborhood_enrichment.rds"
+  ),
+  differential = file.path(
+    result_dir, "downstream", "BALBc_vs_MRL_differential_neighborhood.rds"
+  ),
+  k11_agreement = file.path(
+    result_dir, "downstream", "tutorial_sensitivity_k11_reference_agreement.rds"
+  )
+)
+missing_artifacts <- artifact_paths[!file.exists(artifact_paths)]
+if (length(missing_artifacts)) {
+  stop(
+    "The CODEX report cannot be rendered because required checkpoint(s) are absent:\n  - ",
+    paste(missing_artifacts, collapse = "\n  - "),
+    "\nRegenerate/resume them from the repository root with:\n",
+    "  Rscript scripts/run_codex_mouse_spleen.R\n",
+    "or set CODEX_RESULTS_DIR to the completed checkpoint directory.",
+    call. = FALSE
+  )
+}
+
+sce <- readRDS(artifact_paths[["representation"]])
+graph_manifest <- readRDS(artifact_paths[["graph_manifest"]])
+aggregation_manifest <- readRDS(artifact_paths[["aggregation_manifest"]])
+aggregation_parity <- readRDS(artifact_paths[["aggregation_parity"]])
+published_aggregation_parity <- readRDS(
+  artifact_paths[["published_aggregation_parity"]]
+)
+python_gmm_fixture <- readRDS(artifact_paths[["python_gmm_fixture"]])
+autok <- readRDS(artifact_paths[["autok"]])
+selected <- readRDS(artifact_paths[["selected_labels"]])
+k11_selected <- readRDS(artifact_paths[["k11_labels"]])
+downstream_manifest <- readRDS(artifact_paths[["downstream_manifest"]])
+report_input <- readRDS(artifact_paths[["report_input"]])
+cell_type_enrichment <- readRDS(artifact_paths[["cell_type_enrichment"]])
+condition_nhood <- readRDS(artifact_paths[["neighborhood_enrichment"]])
+differential <- readRDS(artifact_paths[["differential"]])
+k11_agreement <- readRDS(artifact_paths[["k11_agreement"]])
+
+if (!inherits(autok, "cellcharter_autok")) {
+  stop("The AutoK checkpoint is not a `cellcharter_autok` result; rerun the AutoK stage.")
+}
+if (is.na(autok$best_k) || !identical(as.integer(selected$k), as.integer(autok$best_k))) {
+  stop("The selected-label checkpoint does not match the R-selected AutoK result.")
+}
+if (!identical(as.integer(k11_selected$k), 11L)) {
+  stop("The tutorial sensitivity checkpoint is not labelled K = 11.")
+}
+if (nrow(report_input) != length(selected$labels) ||
+    nrow(report_input) != length(k11_selected$labels)) {
+  stop("Map rows and selected label vectors differ in length; regenerate downstream checkpoints.")
+}
+if (!identical(as.integer(downstream_manifest$selected_k), as.integer(selected$k))) {
+  stop("The downstream manifest was produced for a different selected K.")
+}
+if (!identical(as.integer(differential$params$n_perms), 100L)) {
+  stop(
+    "Tutorial parity requires n_perms = 100, but the differential checkpoint records ",
+    differential$params$n_perms, ". Rerun with CODEX_N_PERMS=100."
+  )
+}
+if (!identical(as.character(differential$params$condition_groups), c("BALBc", "MRL"))) {
+  stop("The differential checkpoint must compare BALBc versus MRL in that order.")
+}
+
+workflow_metadata <- S4Vectors::metadata(sce)$CellCharterR
+if (is.null(workflow_metadata)) {
+  workflow_metadata <- S4Vectors::metadata(sce)$rCellCharter
+}
+if (is.null(workflow_metadata$reference) || is.null(workflow_metadata$inputs) ||
+    is.null(workflow_metadata$parameters)) {
+  stop("The representation checkpoint lacks required CellCharterR provenance metadata.")
+}
+
+format_value <- function(x) {
+  if (is.null(x) || !length(x)) return(NA_character_)
+  if (inherits(x, "package_version")) return(as.character(x))
+  paste(as.character(x), collapse = ", ")
+}
+
+list_table <- function(x, field_name = "field", value_name = "value") {
+  data.frame(
+    field = names(x),
+    value = vapply(x, format_value, character(1)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  ) |>
+    stats::setNames(c(field_name, value_name))
+}
+
+checkpoint_table <- data.frame(
+  artifact = names(artifact_paths),
+  path = unname(artifact_paths),
+  size_mb = round(file.info(artifact_paths)$size / 1024^2, 3),
+  modified_utc = format(file.info(artifact_paths)$mtime, tz = "UTC", usetz = TRUE),
+  row.names = NULL,
+  check.names = FALSE
+)
+
+plot_matrix <- function(x, main, diverging = FALSE, digits = 3L) {
+  x <- as.matrix(x)
+  if (!length(x) || !is.numeric(x)) stop("A plotted result matrix must be non-empty and numeric.")
+  finite_values <- x[is.finite(x)]
+  if (!length(finite_values)) stop("Matrix `", main, "` has no finite values to plot.")
+  finite_range <- range(finite_values)
+  plotted <- x
+  plotted[is.infinite(plotted) & plotted < 0] <- finite_range[[1L]]
+  plotted[is.infinite(plotted) & plotted > 0] <- finite_range[[2L]]
+  if (diverging) {
+    limit <- max(abs(finite_values))
+    if (limit == 0) limit <- 1
+    zlim <- c(-limit, limit)
+    palette <- grDevices::hcl.colors(101L, "Blue-Red 3", rev = TRUE)
+  } else {
+    zlim <- finite_range
+    if (zlim[[1L]] == zlim[[2L]]) zlim <- zlim + c(-0.5, 0.5)
+    palette <- grDevices::hcl.colors(101L, "YlOrRd", rev = TRUE)
+  }
+  old_par <- graphics::par(no.readonly = TRUE)
+  on.exit({
+    graphics::layout(1)
+    graphics::par(old_par)
+  })
+  graphics::layout(matrix(c(1L, 2L), nrow = 1L), widths = c(10, 1.2))
+  graphics::par(
+    mar = c(max(6, 0.42 * max(nchar(colnames(x))) + 2),
+            max(6, 0.22 * max(nchar(rownames(x))) + 2), 4, 2)
+  )
+  graphics::image(
+    x = seq_len(ncol(plotted)), y = seq_len(nrow(plotted)), z = t(plotted),
+    col = palette, zlim = zlim, axes = FALSE, xlab = "target domain",
+    ylab = "source / cell type", main = main, useRaster = TRUE
+  )
+  graphics::axis(1, at = seq_len(ncol(x)), labels = colnames(x), las = 2,
+                 cex.axis = min(1, 12 / ncol(x)))
+  graphics::axis(2, at = seq_len(nrow(x)), labels = rownames(x), las = 2,
+                 cex.axis = min(1, 18 / nrow(x)))
+  graphics::box()
+
+  # Draw a compact value scale using base graphics, avoiding an extra report
+  # dependency solely for heat-map legends.
+  key_values <- seq(zlim[[1L]], zlim[[2L]], length.out = 101L)
+  graphics::par(mar = c(6, 0.5, 4, 4))
+  graphics::image(
+    x = 1, y = key_values, z = matrix(key_values, nrow = 1L),
+    col = palette, zlim = zlim, axes = FALSE, xlab = "", ylab = "",
+    useRaster = TRUE
+  )
+  graphics::axis(4, at = pretty(zlim, n = 5L), las = 2, cex.axis = 0.8)
+  graphics::box()
+  invisible(round(zlim, digits))
+}
+
+plot_sample_grid <- function(data, domain, title) {
+  samples <- unique(as.character(data$sample))
+  n_columns <- min(4L, length(samples))
+  n_rows <- ceiling(length(samples) / n_columns)
+  domain <- factor(domain, levels = sort(unique(as.integer(as.character(domain)))))
+  palette <- grDevices::hcl.colors(nlevels(domain), "Dynamic")
+  old_par <- graphics::par(no.readonly = TRUE)
+  on.exit(graphics::par(old_par))
+  graphics::par(
+    mfrow = c(n_rows, n_columns), mar = c(1.2, 1.2, 2.1, 0.5),
+    oma = c(0, 0, 3, 0)
+  )
+  for (sample_id in samples) {
+    keep <- as.character(data$sample) == sample_id
+    point_size <- max(0.08, min(0.55, 2500 / sum(keep)))
+    graphics::plot(
+      data$x[keep], data$y[keep], asp = 1, axes = FALSE,
+      xlab = "", ylab = "", pch = 16, cex = point_size,
+      col = palette[as.integer(domain[keep])], main = sample_id, cex.main = 0.8
+    )
+    graphics::box(col = "grey70")
+  }
+  for (unused in seq_len(n_rows * n_columns - length(samples))) graphics::plot.new()
+  graphics::mtext(title, outer = TRUE, side = 3, line = 1, font = 2)
+  invisible(palette)
+}
+```
+
+# Scope and interpretation
+
+This report reproduces the **downstream** CellCharter CODEX mouse-spleen
+workflow in R from the immutable official trVAE representation. The primary
+path follows the pinned CellCharter 0.2.0 source, including its single global
+99th-percentile link cutoff, and uses the number of spatial domains independently
+selected by the R AutoK run. It does not claim end-to-end equivalence for
+representation learning, and it does not substitute a PCA embedding for the
+official trVAE input.
+
+The primary R-selected result in this checkpoint is **K =
+`r selected$k`**. The later K = 11 section is a tutorial-matched sensitivity
+analysis only.
+
+# Checkpoint inventory
+
+```{r checkpoint-inventory, echo=TRUE}
+knitr::kable(
+  checkpoint_table,
+  caption = paste("Durable report inputs under", result_dir)
+)
+```
+
+# Provenance and parameters
+
+## Pinned Python reference
+
+```{r pinned-reference, echo=TRUE}
+reference_table <- list_table(
+  workflow_metadata$reference,
+  field_name = "reference component",
+  value_name = "pinned version or commit"
+)
+knitr::kable(reference_table, caption = "Authoritative parity reference")
+```
+
+The implementation target is CellCharter 0.2.0 at commit
+`r workflow_metadata$reference$cellcharter_commit`, with PyCave rather than the
+TorchGMM backend used by newer CellCharter releases.
+
+The released Python artifacts do not declare the RNG seeds used for their
+individual PyCave fits, so exact seed-for-seed replay of those artifacts is not
+claimed. This R analysis predeclares base seed `r autok$seed`; repeat `i` uses
+`base seed + i - 1` for every fitted K, and every fit artifact records its run
+and seed. The best-fit table below exposes the retained seed for each K.
+
+## Immutable input and cell-order provenance
+
+```{r input-provenance, echo=TRUE}
+input_table <- list_table(
+  workflow_metadata$inputs,
+  field_name = "input field",
+  value_name = "recorded value"
+)
+knitr::kable(input_table, caption = "Official input files, checksums, and ordering")
+```
+
+## Workflow parameters
+
+```{r workflow-parameters, echo=TRUE}
+parameter_table <- list_table(
+  workflow_metadata$parameters,
+  field_name = "parameter",
+  value_name = "value"
+)
+knitr::kable(parameter_table, caption = "Predeclared workflow parameters")
+```
+
+```{r dataset-overview, echo=TRUE}
+dataset_overview <- data.frame(
+  quantity = c(
+    "cells", "physical samples", "conditions", "annotated cell types",
+    "tutorial-reduced cell types"
+  ),
+  value = c(
+    nrow(report_input),
+    length(unique(report_input$sample)),
+    length(unique(report_input$condition)),
+    length(unique(report_input$cell_type)),
+    length(unique(report_input$cell_type_reduced))
+  )
+)
+knitr::kable(dataset_overview, caption = "Checkpointed analysis cohort")
+
+sample_overview <- stats::aggregate(
+  list(cells = report_input$cell_id),
+  by = list(sample = report_input$sample, condition = report_input$condition),
+  FUN = length
+)
+knitr::kable(sample_overview, caption = "Cells per sample and condition")
+```
+
+```{r stage-provenance, echo=TRUE}
+stage_names <- c("representation", "graph", "aggregation", "autok", "downstream")
+stage_paths <- stats::setNames(
+  file.path(result_dir, "provenance", paste0(stage_names, ".rds")), stage_names
+)
+available_stage_paths <- stage_paths[file.exists(stage_paths)]
+missing_stage_names <- names(stage_paths)[!file.exists(stage_paths)]
+
+if (length(available_stage_paths)) {
+  stage_records <- lapply(available_stage_paths, readRDS)
+  stage_table <- do.call(rbind, lapply(stage_records, function(record) {
+    data.frame(
+      stage = format_value(record$stage),
+      started_utc = format_value(record$started_utc),
+      finished_utc = format_value(record$finished_utc),
+      elapsed_seconds = as.numeric(record$elapsed_seconds),
+      peak_r_memory_mb = round(as.numeric(record$peak_r_memory_mb), 1),
+      checkpoint = format_value(record$checkpoint),
+      stringsAsFactors = FALSE
+    )
+  }))
+  knitr::kable(stage_table, caption = "Recorded stage timings and peak R memory")
+} else {
+  cat("No stage-level provenance records were found.\n")
+}
+if (length(missing_stage_names)) {
+  cat(
+    "\nStage records absent for: ", paste(missing_stage_names, collapse = ", "),
+    ". Artifact provenance above remains available from the SCE metadata.\n",
+    sep = ""
+  )
+}
+```
+
+```{r runtime-provenance, echo=TRUE}
+autok_provenance_path <- stage_paths[["autok"]]
+if (file.exists(autok_provenance_path)) {
+  autok_provenance <- readRDS(autok_provenance_path)
+  if (!is.null(autok_provenance$runtime)) {
+    knitr::kable(
+      list_table(
+        autok_provenance$runtime,
+        field_name = "runtime field",
+        value_name = "recorded value"
+      ),
+      caption = "Torch runtime selected for AutoK"
+    )
+  }
+}
+```
+
+## Graph and aggregation checks
+
+The R-native Qhull graphs were constructed independently within physical
+samples, with no cross-sample edges. The pinned CellCharter 0.2.0 function
+computes one global 99th-percentile cutoff across the combined sample-local
+graph, and that is the primary analysis below. The released H5AD instead
+contains a graph trimmed independently at the 99th percentile within each
+sample. Repeating those per-sample cutoffs in R reproduces the published
+adjacency edge-for-edge. Both results are checkpointed below: the global graph
+for source-faithful primary inference, and the per-sample graph as a published-
+artifact parity result.
+
+```{r graph-aggregation-provenance, echo=TRUE}
+graph_summary <- data.frame(
+  field = c(
+    "reference", "R Qhull implementation", "analysis graph source",
+    "pinned cutoff scope", "published artifact cutoff scope",
+    "percentile", "global distance cutoff"
+  ),
+  value = c(
+    graph_manifest$reference,
+    graph_manifest$r_qhull,
+    graph_manifest$analysis_graph_source,
+    graph_manifest$pinned_cutoff_scope,
+    graph_manifest$published_cutoff_scope,
+    graph_manifest$percentile,
+    signif(graph_manifest$cutoff, 8)
+  )
+)
+knitr::kable(graph_summary, caption = "Graph construction checkpoint")
+
+knitr::kable(
+  graph_manifest$graph_parity,
+  caption = paste(
+    "R reconstructions: per-sample published-artifact parity and",
+    "pinned global-cutoff sensitivity"
+  )
+)
+
+aggregation_summary <- data.frame(
+  field = c(
+    "dimensions", "exclusive hop layers", "parity rows",
+    "comparison target", "expected to match", "maximum absolute error",
+    "mean absolute error", "tolerance", "passed", "interpretation"
+  ),
+  value = c(
+    paste(aggregation_manifest$dimensions, collapse = " x "),
+    aggregation_manifest$n_layers,
+    length(aggregation_parity$rows),
+    aggregation_parity$comparison_target,
+    aggregation_parity$expected_to_match,
+    signif(aggregation_parity$max_absolute_error, 6),
+    signif(aggregation_parity$mean_absolute_error, 6),
+    aggregation_parity$tolerance,
+    aggregation_parity$passed,
+    aggregation_parity$interpretation
+  )
+)
+knitr::kable(
+  aggregation_summary,
+  caption = "HDF5-backed aggregation compared with the published artifact"
+)
+
+published_aggregation_summary <- data.frame(
+  field = c(
+    "sampled rows", "maximum absolute error", "mean absolute error",
+    "tolerance", "passed"
+  ),
+  value = c(
+    length(published_aggregation_parity$rows),
+    signif(published_aggregation_parity$max_absolute_error, 6),
+    signif(published_aggregation_parity$mean_absolute_error, 6),
+    published_aggregation_parity$tolerance,
+    published_aggregation_parity$passed
+  )
+)
+knitr::kable(
+  published_aggregation_summary,
+  caption = paste(
+    "R per-sample-cutoff aggregation versus the released",
+    "40-dimensional X_cellcharter artifact"
+  )
+)
+```
+
+## Pinned PyCave GMM prediction parity
+
+The permanent fixture applies the official PyCave 3.2.1 K = 11 parameters to
+512 deterministic rows of the exact released `X_cellcharter` matrix. Expected
+labels are computed with PyCave's pinned row-vector precision-Cholesky formula;
+the package test requires R's bounded-memory predictor to match every label.
+This validates model deserialization and prediction mathematics, but it does
+not claim that independently initialized EM fits must converge to the same
+local optimum.
+
+```{r python-gmm-prediction-parity, echo=TRUE}
+python_gmm_parity_summary <- data.frame(
+  field = c(
+    "fixture rows", "features", "components", "reference backend",
+    "CellCharter commit", "PyCave commit", "required prediction agreement",
+    "official model versus released H5AD labels (FMI)"
+  ),
+  value = c(
+    nrow(python_gmm_fixture$x), ncol(python_gmm_fixture$x),
+    python_gmm_fixture$model$n_clusters,
+    python_gmm_fixture$provenance$backend,
+    python_gmm_fixture$provenance$cellcharter_commit,
+    python_gmm_fixture$provenance$pycave_commit,
+    python_gmm_fixture$provenance$expected_agreement,
+    signif(python_gmm_fixture$published_label_fmi, 6)
+  )
+)
+knitr::kable(
+  python_gmm_parity_summary,
+  caption = "Pinned Python-model prediction fixture (verified by package tests)"
+)
+```
+
+# AutoK stability and primary K selection
+
+AutoK fitted the expanded neighboring-K grid repeatedly, compared neighboring
+solutions with the Fowlkes--Mallows score, and retained the lowest-negative-
+log-likelihood fit for each K. The declared candidate range, run cap, and
+convergence tolerance were fixed before the analysis.
+
+```{r autok-summary, echo=TRUE}
+autok_summary <- data.frame(
+  field = c(
+    "reference version", "reference commit", "declared candidate K",
+    "expanded fitted K", "max runs", "runs completed", "convergence tolerance",
+    "converged", "base seed", "R-selected K"
+  ),
+  value = c(
+    autok$reference_version,
+    autok$reference_commit,
+    paste(range(autok$requested_k), collapse = " through "),
+    paste(range(autok$fit_k), collapse = " through "),
+    autok$max_runs,
+    autok$runs_completed,
+    autok$convergence_tol,
+    autok$converged,
+    autok$seed,
+    autok$best_k
+  )
+)
+knitr::kable(autok_summary, caption = "AutoK configuration and outcome")
+
+stability_diagnostic <- cellcharter_autok_stability_data(
+  autok, k_range = 1:20, highlight_k = c(4L, 11L)
+)
+stability_table <- stability_diagnostic$summary
+knitr::kable(
+  stability_table,
+  digits = 5,
+  caption = "Mean mirrored neighboring-K stability; maximum selects primary K"
+)
+```
+
+```{r autok-stability-plot, echo=TRUE, fig.width=8, fig.height=5}
+cellcharter_plot_autok_stability(
+  autok, k_range = 1:20, highlight_k = c(4L, 11L),
+  title = "Mouse spleen CellCharterR AutoK stability"
+)
+```
+
+```{r autok-convergence-and-nll, echo=TRUE}
+if (nrow(autok$convergence_history)) {
+  knitr::kable(
+    autok$convergence_history,
+    digits = 6,
+    caption = "AutoK convergence history (MAPE between stability curves)"
+  )
+}
+
+best_fit_table <- autok$best_index[, c("k", "run", "seed", "nll", "path")]
+knitr::kable(
+  best_fit_table,
+  digits = 6,
+  caption = "Lowest-negative-log-likelihood fit retained for every fitted K"
+)
+```
+
+# Primary R-selected spatial domains
+
+These maps use **K = `r selected$k`**, selected by the R AutoK result above.
+Each panel is a separate physical sample; coordinates are not pooled across
+samples. Domain numbers are arbitrary mixture-component identifiers.
+
+```{r primary-domain-maps, echo=TRUE, fig.width=14, fig.height=12}
+primary_palette <- plot_sample_grid(
+  report_input,
+  selected$labels,
+  paste("Primary R-selected spatial domains: K =", selected$k)
+)
+```
+
+```{r primary-domain-key, echo=TRUE, fig.width=10, fig.height=2.2}
+primary_levels <- sort(unique(as.integer(selected$labels)))
+graphics::par(mar = c(1, 1, 3, 1))
+graphics::plot.new()
+graphics::legend(
+  "center", legend = primary_levels, fill = primary_palette,
+  title = "Primary domain", ncol = min(10L, length(primary_levels)), bty = "n"
+)
+```
+
+# Cell-type enrichment for the primary result
+
+Before this analysis, the detailed annotations are collapsed to the tutorial's
+`cell_type_reduced` categories (including combined DC, stroma, and other
+groups). Observed values are within-domain reduced-cell-type proportions. Expected values are
+the cohort-wide cell-type proportions repeated for each domain. The reported
+enrichment is `log2(observed / expected)`, matching the pinned CellCharter
+observed-versus-expected analysis; it is not a simple composition table.
+For visualization only, infinite enrichment values are clipped to the nearest
+finite endpoint of the color scale; the checkpoint itself remains unchanged.
+
+```{r cell-type-observed, echo=TRUE, fig.width=12, fig.height=10}
+plot_matrix(
+  cell_type_enrichment$observed,
+  "Observed reduced-cell-type proportion within each primary domain"
+)
+```
+
+```{r cell-type-expected, echo=TRUE, fig.width=12, fig.height=10}
+plot_matrix(
+  cell_type_enrichment$expected,
+  "Expected cohort-wide reduced-cell-type proportion"
+)
+```
+
+```{r cell-type-enrichment, echo=TRUE, fig.width=12, fig.height=10}
+plot_matrix(
+  cell_type_enrichment$enrichment,
+  "Reduced-cell-type enrichment: log2(observed / expected)",
+  diverging = TRUE
+)
+```
+
+```{r cell-type-enrichment-parameters, echo=TRUE}
+knitr::kable(
+  list_table(
+    cell_type_enrichment$params,
+    field_name = "cell-type enrichment parameter",
+    value_name = "value"
+  ),
+  caption = "Cell-type enrichment parameters"
+)
+```
+
+# Asymmetric neighborhood enrichment by condition
+
+Rows are source domains and columns are target domains. The statistic is
+directional: source-to-target enrichment need not equal target-to-source
+enrichment. Same-domain links are excluded, leaving the diagonal undefined.
+BALBc and MRL are calculated separately with the pinned analytical expectation.
+
+```{r condition-neighborhood-enrichment, echo=TRUE, fig.width=9, fig.height=8}
+required_conditions <- c("BALBc", "MRL")
+if (!all(required_conditions %in% names(condition_nhood))) {
+  stop("The neighborhood checkpoint must contain separate BALBc and MRL results.")
+}
+for (condition_name in required_conditions) {
+  result <- condition_nhood[[condition_name]]
+  plot_matrix(
+    result$observed,
+    paste(condition_name, "observed directed inter-domain proportions")
+  )
+  plot_matrix(
+    result$expected,
+    paste(condition_name, "analytical expected directed proportions")
+  )
+  plot_matrix(
+    result$enrichment,
+    paste(condition_name, "asymmetric neighborhood enrichment"),
+    diverging = TRUE
+  )
+}
+```
+
+```{r condition-neighborhood-parameters, echo=TRUE}
+condition_parameter_table <- do.call(rbind, lapply(required_conditions, function(condition_name) {
+  data.frame(
+    condition = condition_name,
+    list_table(condition_nhood[[condition_name]]$params),
+    row.names = NULL,
+    check.names = FALSE
+  )
+}))
+knitr::kable(
+  condition_parameter_table,
+  caption = "Condition-specific neighborhood-enrichment parameters"
+)
+```
+
+# BALBc versus MRL differential neighborhood enrichment
+
+The differential effect is BALBc enrichment minus MRL enrichment. Condition
+labels are permuted at the sample/library level, never at the cell level. The
+checkpoint uses exactly **100 permutations**, the sample as library unit, and
+the CellCharter 0.2.0 directional empirical-tail convention.
+
+```{r differential-parameters, echo=TRUE}
+knitr::kable(
+  list_table(
+    differential$params,
+    field_name = "differential parameter",
+    value_name = "recorded value"
+  ),
+  caption = "BALBc-versus-MRL differential test parameters"
+)
+```
+
+```{r differential-effect, echo=TRUE, fig.width=9, fig.height=8}
+plot_matrix(
+  differential$effect,
+  "Differential asymmetric enrichment: BALBc minus MRL",
+  diverging = TRUE
+)
+```
+
+```{r differential-permutation-counts, echo=TRUE, fig.width=9, fig.height=8}
+plot_matrix(
+  differential$permutation_counts,
+  "Directional extreme-null permutation counts (n = 100)"
+)
+```
+
+```{r differential-pvalues, echo=TRUE, fig.width=9, fig.height=8}
+plot_matrix(
+  differential$pvalue,
+  "Unadjusted directional empirical p-values"
+)
+```
+
+```{r differential-leading-results, echo=TRUE}
+off_diagonal <- row(differential$effect) != col(differential$effect)
+finite_test <- off_diagonal & is.finite(differential$effect) & is.finite(differential$pvalue)
+leading <- data.frame(
+  source_domain = rownames(differential$effect)[row(differential$effect)[finite_test]],
+  target_domain = colnames(differential$effect)[col(differential$effect)[finite_test]],
+  effect_BALBc_minus_MRL = differential$effect[finite_test],
+  permutation_count = differential$permutation_counts[finite_test],
+  empirical_pvalue = differential$pvalue[finite_test]
+)
+leading <- leading[order(leading$empirical_pvalue, -abs(leading$effect_BALBc_minus_MRL)), ]
+knitr::kable(
+  utils::head(leading, 25L),
+  digits = 4,
+  caption = "Top 25 directed domain pairs ordered by empirical p-value and effect magnitude"
+)
+```
+
+# Tutorial-matched K = 11 sensitivity analysis (not primary)
+
+This section does **not** replace the independently R-selected K =
+`r selected$k` result. It shows the lowest-negative-log-likelihood K = 11 fit
+only to facilitate visual comparison with the published tutorial convention.
+No K = 11 enrichment or proximity statistic is presented as a primary result.
+
+```{r k11-sensitivity-maps, echo=TRUE, fig.width=14, fig.height=12}
+k11_palette <- plot_sample_grid(
+  report_input,
+  k11_selected$labels,
+  "Tutorial-matched sensitivity only: K = 11"
+)
+```
+
+```{r k11-domain-key, echo=TRUE, fig.width=10, fig.height=2.2}
+k11_levels <- sort(unique(as.integer(k11_selected$labels)))
+graphics::par(mar = c(1, 1, 3, 1))
+graphics::plot.new()
+graphics::legend(
+  "center", legend = k11_levels, fill = k11_palette,
+  title = "K = 11 sensitivity domain", ncol = min(11L, length(k11_levels)), bty = "n"
+)
+```
+
+```{r k11-checkpoint, echo=TRUE}
+k11_summary <- data.frame(
+  field = c(
+    "K", "role", "model checkpoint", "same K as primary",
+    "published-label agreement metric", "published-label agreement"
+  ),
+  value = c(
+    k11_selected$k,
+    k11_selected$role,
+    k11_selected$model_path,
+    identical(as.integer(k11_selected$k), as.integer(selected$k)),
+    k11_agreement$metric,
+    signif(k11_agreement$value, 6)
+  )
+)
+knitr::kable(k11_summary, caption = "K = 11 sensitivity provenance")
+```
+
+# Limitations
+
+- The official fixed trVAE embedding is treated as immutable input. This report
+  therefore tests downstream graph, aggregation, AutoK, GMM, enrichment, and
+  proximity parity; it does not claim that R reproduced trVAE training.
+- The published H5AD used per-sample link cutoffs, while the pinned CellCharter
+  0.2.0 source called by its tutorial applies one global cutoff. The primary
+  analysis follows the pinned source and therefore is not expected to equal the
+  released 40-dimensional aggregate. The report shows that discrepancy
+  explicitly. A separate R per-sample reconstruction matches the published
+  adjacency edge-for-edge and its aggregation matches the released artifact.
+- The primary maps and statistics use the R-selected K. K = 11 is isolated as a
+  tutorial-matched sensitivity fit and is not evidence for independent K
+  selection.
+- Domain identifiers are label-permutation dependent and have no ordinal
+  meaning. Biological interpretation requires inspecting their cell-type and
+  spatial context.
+- Neighborhood enrichment is asymmetric and excludes within-domain edges. Its
+  expected values follow the pinned CellCharter 0.2.0 analytical definition.
+- Differential inference uses samples as libraries and exactly 100
+  permutations. Thus empirical p-values have coarse resolution; they use the
+  pinned directional convention, have no +1 correction, and are unadjusted for
+  multiple testing.
+- Separate tissue sections are displayed as separate panels. Their raw spatial
+  coordinates are not a registered common coordinate system.
+- This document reads durable checkpoints and does not refit models. A stale or
+  mixed checkpoint bundle is rejected by the consistency checks in the visible
+  setup chunk.
+
+# Report-rendering session
+
+```{r report-session, echo=TRUE}
+utils::sessionInfo()
+```

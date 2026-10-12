@@ -17,3 +17,16 @@ The checkpointed fitted model.
 \description{
 Load the lowest-NLL model fitted for K
 }
+\examples{
+checkpoint <- tempfile(fileext = ".rds")
+saveRDS(list(model = list(n_clusters = 2L, device = "cpu")), checkpoint)
+autok <- structure(
+  list(
+    candidate_k = 2L, stability_mean = 1, best_k = 2L,
+    best_index = data.frame(k = 2L, path = checkpoint)
+  ),
+  class = "cellcharter_autok"
+)
+cellcharter_autok_model(autok)
+unlink(checkpoint)
+}

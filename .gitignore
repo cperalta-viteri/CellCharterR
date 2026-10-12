@@ -2,6 +2,7 @@
 /..Rcheck/
 /*.Rcheck/
 /*.tar.gz
+/*.tar.gz.sha256
 
 # Local workflow orchestration
 /scripts/codex-quota-watchdog.mjs
@@ -10,3 +11,11 @@
 # Generated
   vignette R extracts
 /docs/*.R
+
+# Internal agent/review records retained locally, not distributed in Git
+/AGENTS.md
+/BIOCONDUCTOR.md
+/SECOND_REVIEW_FINAL_ACCEPTANCE.md
+/SECOND_REVIEW_STATUS.md
+/INSTALLATION_MANIFEST.md
+/INSTALLME.md

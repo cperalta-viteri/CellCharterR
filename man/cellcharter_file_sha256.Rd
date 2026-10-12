@@ -15,3 +15,9 @@ Lower-case hexadecimal SHA-256 digest.
 \description{
 Compute a SHA-256 checksum without loading a file into R memory
 }
+\examples{
+example_file <- tempfile(fileext = ".txt")
+writeLines("CellCharterR", example_file)
+cellcharter_file_sha256(example_file)
+unlink(example_file)
+}

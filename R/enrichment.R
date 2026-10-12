@@ -10,6 +10,11 @@
 #' @param log2_fold_change Return log2 fold changes when `TRUE`; otherwise
 #'   return fold changes.
 #' @return A list containing `observed`, `expected`, `enrichment`, and `params`.
+#' @examples
+#' cellcharter_enrichment(
+#'   group = c("B", "B", "T", "T", "B", "T"),
+#'   label = c(1, 1, 1, 2, 2, 2)
+#' )
 #' @export
 cellcharter_enrichment <- function(group, label, log2_fold_change = TRUE) {
   group <- .cc_complete_factor(group, "group")
@@ -78,6 +83,12 @@ cellcharter_enrichment <- function(group, label, log2_fold_change = TRUE) {
 #'   v0.2.0 default `observed - expected`.
 #' @param only_inter Remove same-domain links and return an `NA` diagonal.
 #' @return A list containing `observed`, `expected`, `enrichment`, and `params`.
+#' @examples
+#' graph <- Matrix::sparseMatrix(
+#'   i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3),
+#'   x = 1, dims = c(4, 4)
+#' )
+#' cellcharter_nhood_enrichment(graph, cluster = c(1, 1, 2, 2))
 #' @export
 cellcharter_nhood_enrichment <- function(adjacency, cluster,
                                          log2_fold_change = FALSE,
@@ -95,8 +106,11 @@ cellcharter_nhood_enrichment <- function(adjacency, cluster,
 #'
 #' Computes condition-specific asymmetric neighborhood enrichments and their
 #' difference, then estimates directional empirical p-values by permuting the
-#' condition assignment at the library level. Per-library sufficient statistics
-#' are computed once, avoiding a full graph scan for every permutation.
+#' condition assignment at the library level. The inferential contrast follows
+#' the categorical level order, as in CellCharter v0.2.0; a reverse-direction
+#' display must negate `effect` while reusing the same permutation result.
+#' Per-library sufficient statistics are computed once, avoiding a full graph
+#' scan for every permutation.
 #'
 #' `permutation_mode = "cellcharter_v0.2.0"` intentionally reproduces the
 #' pinned Python implementation: it draws a vector of library names with
@@ -111,7 +125,8 @@ cellcharter_nhood_enrichment <- function(adjacency, cluster,
 #' @param library Physical sample/library annotation in adjacency row order.
 #'   Every library must belong to exactly one condition, and graph edges may
 #'   not join different libraries.
-#' @param condition_groups Two conditions in the desired subtraction order.
+#' @param condition_groups Two conditions to compare. Their categorical level
+#'   order, not the order supplied here, determines numerator and denominator.
 #' @param n_perms Positive number of library-label permutations.
 #' @param seed Deterministic R random seed.
 #' @param log2_fold_change Forwarded to neighborhood enrichment.
@@ -121,6 +136,18 @@ cellcharter_nhood_enrichment <- function(adjacency, cluster,
 #' @return A list with condition-specific `observed`, `expected`, and
 #'   `enrichment` matrices, the differential `effect`, `permutation_counts`,
 #'   empirical `pvalue`, and complete `params`.
+#' @examples
+#' odd <- seq(1, 8, by = 2)
+#' graph <- Matrix::sparseMatrix(
+#'   i = c(odd, odd + 1L), j = c(odd + 1L, odd),
+#'   x = 1, dims = c(8, 8)
+#' )
+#' cellcharter_diff_nhood_enrichment(
+#'   graph, cluster = rep(c(1, 2), 4),
+#'   condition = rep(c("healthy", "lupus"), each = 4),
+#'   library = rep(paste0("sample", 1:4), each = 2),
+#'   n_perms = 5, seed = 1
+#' )
 #' @export
 cellcharter_diff_nhood_enrichment <- function(
     adjacency, cluster, condition, library, condition_groups = NULL,
@@ -160,11 +187,15 @@ cellcharter_diff_nhood_enrichment <- function(
       !all(condition_groups %in% levels(condition))) {
     stop("`condition_groups` must identify two distinct observed conditions.", call. = FALSE)
   }
-  condition_groups <- as.character(condition_groups)
-  keep <- as.character(condition) %in% condition_groups
-  if (!all(condition_groups %in% as.character(condition[keep]))) {
+  requested_condition_groups <- as.character(condition_groups)
+  keep <- as.character(condition) %in% requested_condition_groups
+  if (!all(requested_condition_groups %in% as.character(condition[keep]))) {
     stop("Both `condition_groups` must contain observations.", call. = FALSE)
   }
+  # v0.2.0 computes combinations of pandas categorical levels. Plotting can
+  # request the reverse direction, but that never changes the stored contrast
+  # or its unequal-library permutation null.
+  condition_groups <- levels(condition)[levels(condition) %in% requested_condition_groups]
 
   # A library is the permutation unit and therefore cannot be split across
   # conditions. This also catches accidental reuse of sample identifiers.
@@ -178,19 +209,24 @@ cellcharter_diff_nhood_enrichment <- function(
   retained_rows <- which(keep)
   adjacency_subset <- adjacency[retained_rows, retained_rows, drop = FALSE]
   subset_checked <- .cc_nhood_inputs(adjacency_subset, cluster[retained_rows])
+  retained_library <- as.character(library[retained_rows])
+  library_order <- unique(retained_library)
+  retained_library <- factor(retained_library, levels = library_order)
   stats <- .cc_nhood_library_stats(
     entries = subset_checked$entries,
     cluster = subset_checked$cluster,
-    library = droplevels(library[retained_rows]),
+    library = retained_library,
     only_inter = only_inter
   )
 
-  library_to_condition <- vapply(
-    split(
-      as.character(condition[retained_rows]),
-      droplevels(library[retained_rows])
+  retained_condition <- as.character(condition[retained_rows])
+  library_to_condition <- stats::setNames(
+    vapply(
+      library_order,
+      function(id) unique(retained_condition[retained_library == id])[[1L]],
+      character(1)
     ),
-    function(x) unique(x)[[1L]], character(1)
+    library_order
   )
   libraries1 <- names(library_to_condition)[library_to_condition == condition_groups[[1L]]]
   libraries2 <- names(library_to_condition)[library_to_condition == condition_groups[[2L]]]
@@ -212,18 +248,7 @@ cellcharter_diff_nhood_enrichment <- function(
     0L, nrow = nrow(effect), ncol = ncol(effect), dimnames = dimnames(effect)
   )
 
-  had_random_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
-  if (had_random_seed) old_random_seed <- get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
-  on.exit({
-    if (had_random_seed) {
-      assign(".Random.seed", old_random_seed, envir = .GlobalEnv)
-    } else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
-      rm(".Random.seed", envir = .GlobalEnv)
-    }
-  }, add = TRUE)
-  base::set.seed(seed)
-
-  for (permutation in seq_len(n_perms)) {
+  withr::with_seed(seed, for (permutation in seq_len(n_perms)) {
     if (identical(permutation_mode, "cellcharter_v0.2.0")) {
       # Exact v0.2.0 semantics, including replacement and 0-minus-1 direction.
       draws <- sample(all_libraries, length(all_libraries), replace = TRUE)
@@ -255,7 +280,7 @@ cellcharter_diff_nhood_enrichment <- function(
         is.na(permuted_effect[negative]) |
           permuted_effect[negative] <= effect[negative]
       )
-  }
+  })
 
   # This is the directional empirical tail definition in v0.2.0: no +1
   # correction, p=0 for an observed zero, and p=0 on the masked diagonal.
@@ -272,17 +297,66 @@ cellcharter_diff_nhood_enrichment <- function(
     pvalue = pvalue,
     params = list(
       condition_groups = condition_groups,
+      requested_condition_groups = requested_condition_groups,
+      condition_level_order = condition_groups,
+      contrast_numerator = condition_groups[[1L]],
+      contrast_denominator = condition_groups[[2L]],
+      contrast_definition = paste0(
+        condition_groups[[1L]], " - ", condition_groups[[2L]]
+      ),
+      display_groups = condition_groups,
+      display_effect_multiplier = 1,
+      inference_reused = FALSE,
       library_unit = "sample",
       library_counts = stats::setNames(c(length(libraries1), length(libraries2)), condition_groups),
+      library_order = all_libraries,
       n_perms = n_perms,
       seed = seed,
       log2_fold_change = log2_fold_change,
       only_inter = only_inter,
       permutation_mode = permutation_mode,
+      permutation_sampling = if (identical(permutation_mode, "cellcharter_v0.2.0")) {
+        "with replacement; first numerator-library-count draws define selected membership"
+      } else {
+        "without replacement; numerator-library-count draws define selected membership"
+      },
+      permutation_selected_draws = n_condition1,
+      permutation_effect_definition = if (identical(permutation_mode, "cellcharter_v0.2.0")) {
+        "unselected - selected"
+      } else {
+        "selected - unselected"
+      },
+      empirical_tail = "directional one-sided inclusive",
+      positive_tail = "null >= observed",
+      negative_tail = "null <= observed",
+      empirical_pvalue_denominator = n_perms,
       pvalue_correction = "none",
-      reference = "CellCharter 0.2.0"
+      reference = "CellCharter 0.2.0",
+      reference_commit = "2a8fdde8213e32e5a00f1f9571bffd3dbb825a79"
     )
   )
+}
+
+.cc_diff_nhood_display <- function(result, display_groups) {
+  if (!is.list(result) || is.null(result$effect) || is.null(result$params) ||
+      is.null(result$params$condition_level_order)) {
+    stop("`result` must be a differential neighborhood-enrichment result.", call. = FALSE)
+  }
+  inferential_groups <- result$params$condition_level_order
+  if (length(display_groups) != 2L || anyNA(display_groups) ||
+      !setequal(as.character(display_groups), inferential_groups)) {
+    stop(
+      "`display_groups` must contain the two inferential contrast conditions.",
+      call. = FALSE
+    )
+  }
+  display_groups <- as.character(display_groups)
+  multiplier <- if (identical(display_groups, inferential_groups)) 1 else -1
+  result$effect <- multiplier * result$effect
+  result$params$display_groups <- display_groups
+  result$params$display_effect_multiplier <- multiplier
+  result$params$inference_reused <- multiplier == -1
+  result
 }
 
 .cc_complete_factor <- function(x, name) {

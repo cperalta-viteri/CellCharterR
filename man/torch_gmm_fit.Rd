@@ -46,3 +46,35 @@ the dense linear algebra and optional GPU execution directly; Luz is not put
 in the critical path, where its optimiser/training-loop abstraction would add
 overhead without contributing to closed-form E/M updates.
 }
+\details{
+The parity target is the versioned CellCharter 0.2.0 CODEX notebook. Its
+\code{Cluster} call omits Python's \code{batch_size}, so CellCharter selects sklearn
+\code{KMeans(n_init = 1)}. This implementation uses bounded-memory, R-native
+greedy k-means++ and streamed Lloyd passes. The algorithm is equivalent in
+role, but sklearn and base R consume random numbers and perform reductions
+differently, so exact initial centroids and component identities are not
+promised. No Python runtime is required.
+
+PyCave 3.2.1 tests \code{number_of_loader_batches == 1} when selecting its
+so-called batch-training path. The notebook therefore takes the two-pass
+initialization/EM path with early-stopping patience two. \code{batch_size} here
+only bounds storage and device transfers; streamed passes reproduce that
+full-loader behavior. PyCave's opposite routing for an explicitly supplied
+batch size that creates multiple loader batches is not the parity target.
+}
+\examples{
+\dontshow{if (requireNamespace("torch", quietly = TRUE)) withAutoprint(\{ # examplesIf}
+# A tiny, deterministic, CPU-only fit.
+x <- rbind(
+  c(-2.0, -2.0), c(-2.2, -1.8), c(-1.8, -2.2),
+  c(-2.1, -2.3), c(-1.9, -1.7), c(-2.3, -2.1),
+  c( 2.0,  2.0), c( 2.2,  1.8), c( 1.8,  2.2),
+  c( 2.1,  2.3), c( 1.9,  1.7), c( 2.3,  2.1)
+)
+fit <- torch_gmm_fit(
+  x, n_clusters = 2, batch_size = 6, max_iter = 3,
+  device = "cpu", seed = 7, num_threads = 1
+)
+fit$n_clusters
+\dontshow{\}) # examplesIf}
+}

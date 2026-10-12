@@ -22,3 +22,11 @@ Aggregates the original representation at 0 hop and mean neighbour features
 at each requested \emph{exclusive} graph hop. A graph must be supplied separately
 for each slide/sample so no artificial cross-section edges can appear.
 }
+\examples{
+x <- matrix(seq_len(8), nrow = 4)
+graph <- Matrix::sparseMatrix(
+  i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3),
+  x = 1, dims = c(4, 4)
+)
+cellcharter_aggregate(x, graph, n_layers = 1)
+}

@@ -50,8 +50,9 @@ Fowlkes--Mallows score.}
 \item{fit_args, predict_args}{Additional named arguments for the hooks.}
 
 \item{data_id}{Optional immutable representation checksum or provenance ID.
-Supplying it prevents accidentally resuming checkpoints for another matrix
-with the same dimensions.}
+It is combined with the fit/predict implementation digests and every
+material fit/predict argument to form the effective per-fit \code{data_id}.
+This prevents reuse after either data or fitting semantics change.}
 
 \item{resume}{Reuse matching completed fit checkpoints.}
 }
@@ -66,4 +67,25 @@ every run, labels at K are compared with all earlier-run labels at K+1. The
 two edges incident to each interior K are then mirrored and combined. Fits
 are checkpointed individually before stability is updated, so an interrupted
 analysis resumes without repeating completed fits.
+}
+\examples{
+# Small deterministic hooks keep this example fast and independent of a GPU.
+toy <- rbind(c(-2, -2), c(-2, -1), c(-1, -2),
+             c(2, 2), c(2, 1), c(1, 2))
+toy_fit <- function(x, n_clusters, seed, device) {
+  fit <- withr::with_seed(
+    seed, stats::kmeans(x, centers = n_clusters, nstart = 1)
+  )
+  list(labels = fit$cluster, nll = fit$tot.withinss, device = device)
+}
+toy_predict <- function(model, newdata) model$labels
+checkpoint_dir <- tempfile("cellcharter-autok-")
+autok <- cellcharter_autok_fit(
+  toy, n_clusters = c(2L, 2L), checkpoint_dir = checkpoint_dir,
+  max_runs = 2L, seed = 7L, fit_fun = toy_fit,
+  predict_fun = toy_predict, nll_fun = function(model) model$nll,
+  fit_args = list(device = "cpu")
+)
+autok$best_k
+unlink(checkpoint_dir, recursive = TRUE)
 }

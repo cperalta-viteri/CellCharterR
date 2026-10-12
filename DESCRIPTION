@@ -1,14 +1,22 @@
-Package: rCellCharter
+Package: CellCharterR
 Title: Disk-Backed R Implementation of CellCharter Spatial Domains
-Version: 0.2.0.9000
-Authors@R: c(person(given = "Christian", family = "Peralta Viteri", role = c("aut", "cre"), email = "TODO@example.org"))
-Author: Christian Peralta Viteri [aut, cre]
-Maintainer: Christian Peralta Viteri <TODO@example.org>
-Description: Reproducible, disk-backed spatial-neighbourhood aggregation and
-    Torch-accelerated Gaussian-mixture clustering for SingleCellExperiment data.
+Version: 0.99.0
+Authors@R: c(person(given = "Christian", family = "Peralta Viteri", role = c("aut", "cre"), email = "christian_94_97@hotmail.com"))
+Description: Implements a reproducible, disk-backed workflow for identifying
+    spatial domains in SingleCellExperiment data. It constructs sample-local
+    spatial graphs, aggregates exclusive graph-hop representations, fits
+    batched full-covariance Gaussian mixture models with R Torch, and selects
+    domain counts using CellCharter-style stability. It also provides
+    cell-type enrichment, directed neighborhood enrichment, differential
+    neighborhood enrichment, durable checkpoints, and a version-pinned CODEX
+    mouse-spleen reproduction.
 License: MIT + file LICENSE
+URL: https://github.com/cperalta-viteri/CellCharterR
+BugReports: https://github.com/cperalta-viteri/CellCharterR/issues
 Encoding: UTF-8
 LazyData: false
+Depends:
+    R (>= 4.5.0)
 Imports:
     DelayedArray,
     digest,
@@ -22,10 +30,13 @@ Imports:
     S4Vectors,
     SingleCellExperiment,
     stats,
+    SummarizedExperiment,
     torch,
-    utils
+    utils,
+    withr
 Suggests:
     anndataR,
+    BiocStyle,
     ggplot2,
     jsonlite,
     knitr,
@@ -33,6 +44,9 @@ Suggests:
     mclust,
     rmarkdown,
     testthat (>= 3.0.0)
+VignetteBuilder: knitr
+biocViews: Software, Spatial, SingleCell, Clustering, Proteomics
+SystemRequirements: LibTorch CPU runtime provided through the R torch package
 Config/testthat/edition: 3
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3

@@ -2,15 +2,24 @@
 % Please edit documentation in R/torch_gmm.R
 \name{torch_gmm_device}
 \alias{torch_gmm_device}
-\title{Select the Torch device used by rCellCharter}
+\title{Select the Torch device used by CellCharterR}
 \usage{
 torch_gmm_device(device = c("auto", "cuda", "cpu"))
 }
 \arguments{
 \item{device}{\code{"auto"}, \code{"cpu"}, or \code{"cuda"}.}
 }
+\value{
+A \code{torch_device} selecting the resolved CPU or CUDA device.
+}
 \description{
 CUDA is used when it is visible to R Torch; otherwise the exact same batched
 implementation runs on CPU.  This is deliberately separate from HDF5 I/O:
 each chunk is read from disk on CPU, copied once to the device, and released.
+}
+\examples{
+\dontshow{if (requireNamespace("torch", quietly = TRUE)) withAutoprint(\{ # examplesIf}
+cpu_device <- torch_gmm_device("cpu")
+cpu_device$type
+\dontshow{\}) # examplesIf}
 }

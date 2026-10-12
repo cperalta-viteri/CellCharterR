@@ -17,3 +17,8 @@ This is the pair-counting definition used by
 \code{sklearn.metrics.fowlkes_mallows_score}, the default similarity function in
 CellCharter 0.2.0. Cluster names do not need to agree between the inputs.
 }
+\examples{
+labels_a <- c(1L, 1L, 2L, 2L)
+labels_b <- c("a", "a", "b", "b")
+cellcharter_fowlkes_mallows(labels_a, labels_b)
+}

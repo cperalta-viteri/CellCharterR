@@ -6,6 +6,10 @@
 #'
 #' @param labels_a,labels_b Cluster labels of equal length.
 #' @return A scalar in `[0, 1]`.
+#' @examples
+#' labels_a <- c(1L, 1L, 2L, 2L)
+#' labels_b <- c("a", "a", "b", "b")
+#' cellcharter_fowlkes_mallows(labels_a, labels_b)
 #' @export
 cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   if (length(labels_a) != length(labels_b)) {
@@ -179,12 +183,33 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #'   Fowlkes--Mallows score.
 #' @param fit_args,predict_args Additional named arguments for the hooks.
 #' @param data_id Optional immutable representation checksum or provenance ID.
-#'   Supplying it prevents accidentally resuming checkpoints for another matrix
-#'   with the same dimensions.
+#'   It is combined with the fit/predict implementation digests and every
+#'   material fit/predict argument to form the effective per-fit `data_id`.
+#'   This prevents reuse after either data or fitting semantics change.
 #' @param resume Reuse matching completed fit checkpoints.
 #' @return A `cellcharter_autok` object containing stability, convergence
 #'   history, and paths to the lowest-NLL model checkpoint for every K. Label
 #'   vectors remain in the per-fit RDS files rather than being duplicated in RAM.
+#' @examples
+#' # Small deterministic hooks keep this example fast and independent of a GPU.
+#' toy <- rbind(c(-2, -2), c(-2, -1), c(-1, -2),
+#'              c(2, 2), c(2, 1), c(1, 2))
+#' toy_fit <- function(x, n_clusters, seed, device) {
+#'   fit <- withr::with_seed(
+#'     seed, stats::kmeans(x, centers = n_clusters, nstart = 1)
+#'   )
+#'   list(labels = fit$cluster, nll = fit$tot.withinss, device = device)
+#' }
+#' toy_predict <- function(model, newdata) model$labels
+#' checkpoint_dir <- tempfile("cellcharter-autok-")
+#' autok <- cellcharter_autok_fit(
+#'   toy, n_clusters = c(2L, 2L), checkpoint_dir = checkpoint_dir,
+#'   max_runs = 2L, seed = 7L, fit_fun = toy_fit,
+#'   predict_fun = toy_predict, nll_fun = function(model) model$nll,
+#'   fit_args = list(device = "cpu")
+#' )
+#' autok$best_k
+#' unlink(checkpoint_dir, recursive = TRUE)
 #' @export
 cellcharter_autok_fit <- function(
     x, n_clusters, checkpoint_dir, max_runs = 10L, convergence_tol = 0.01,
@@ -205,7 +230,7 @@ cellcharter_autok_fit <- function(
   if (!is.null(data_id) && (length(data_id) != 1L || is.na(data_id))) {
     stop("`data_id` must be NULL or one non-missing value.")
   }
-  data_id <- if (is.null(data_id)) NA_character_ else as.character(data_id)
+  input_data_id <- if (is.null(data_id)) NA_character_ else as.character(data_id)
   if (!is.function(similarity_fun)) stop("`similarity_fun` must be a function.")
   if (!is.logical(resume) || length(resume) != 1L || is.na(resume)) {
     stop("`resume` must be TRUE or FALSE.")
@@ -218,6 +243,48 @@ cellcharter_autok_fit <- function(
   if (!is.function(fit_fun) || !is.function(predict_fun) || !is.function(nll_fun)) {
     stop("`fit_fun`, `predict_fun`, and `nll_fun` must be functions.")
   }
+  implementation_functions <- list(
+    fit = fit_fun, predict = predict_fun, nll = nll_fun
+  )
+  # The public defaults are deliberately small wrappers.  Hash their
+  # transitive Torch implementation as well, otherwise a numerical change in
+  # an internal EM helper could incorrectly reuse old per-fit checkpoints even
+  # though the wrapper body itself had not changed.
+  if (identical(fit_fun, .autok_default_fit) ||
+      identical(predict_fun, .autok_default_predict)) {
+    implementation_functions <- c(
+      implementation_functions,
+      list(
+        torch_gmm_fit = torch_gmm_fit,
+        torch_gmm_predict = torch_gmm_predict,
+        torch_gmm_predict_proba = torch_gmm_predict_proba,
+        reader = .rc_reader,
+        tensor = .rc_tensor,
+        kmeans_distances = .rc_kmeans_distances,
+        kmeans_tolerance = .rc_kmeans_tolerance,
+        kmeans_plus_plus = .rc_kmeans_plus_plus,
+        stream_kmeans = .rc_stream_kmeans,
+        log_probability = .rc_logprob,
+        cholesky = .rc_cholesky,
+        estep = .rc_estep_stats,
+        mstep_means_weights = .rc_mstep_means_weights,
+        hard_initialization = .rc_hard_initialize,
+        centered_covariances = .rc_centered_covariances,
+        model_device = .rc_model_device
+      )
+    )
+  }
+  implementation_digest <- cellcharter_implementation_digest(
+    functions = implementation_functions
+  )
+  data_id <- digest::digest(.cc_contract_canonical(list(
+    schema = "CellCharterR_autok_fit_identity",
+    schema_version = 1L,
+    input_data_id = input_data_id,
+    implementation_digest = implementation_digest,
+    fit_args = fit_args,
+    predict_args = predict_args
+  )), algo = "sha256", serialize = TRUE)
 
   n_obs <- nrow(x)
   n_features <- ncol(x)
@@ -255,10 +322,12 @@ cellcharter_autok_fit <- function(
       if (reused) {
         artifact <- .autok_read_checkpoint(path, expected, n_obs)
       } else {
-        base::set.seed(run_seed)
-        model <- do.call(
-          fit_fun,
-          c(list(x = x, n_clusters = as.integer(k), seed = run_seed), fit_args)
+        model <- withr::with_seed(
+          run_seed,
+          do.call(
+            fit_fun,
+            c(list(x = x, n_clusters = as.integer(k), seed = run_seed), fit_args)
+          )
         )
         labels <- do.call(
           predict_fun,
@@ -330,6 +399,7 @@ cellcharter_autok_fit <- function(
       format_version = 1L, fit_k = fit_k, candidate_k = candidate_k,
       max_runs = max_runs, convergence_tol = convergence_tol, seed = seed,
       fit_args = fit_args, predict_args = predict_args,
+      input_data_id = input_data_id, implementation_digest = implementation_digest,
       data_id = data_id, n_obs = n_obs, n_features = n_features,
       runs_completed = runs_completed, converged = converged,
       edge_stability = edge_stability, convergence_history = convergence_history
@@ -361,6 +431,7 @@ cellcharter_autok_fit <- function(
       requested_k = grid$requested_k,
       max_runs = max_runs, convergence_tol = convergence_tol, seed = seed,
       fit_args = fit_args, predict_args = predict_args,
+      input_data_id = input_data_id, implementation_digest = implementation_digest,
       data_id = data_id, n_obs = n_obs, n_features = n_features,
       runs_completed = runs_completed, converged = converged,
       stability = stability, stability_mean = stability_mean,
@@ -383,6 +454,12 @@ cellcharter_autok_fit <- function(
 #'
 #' @param object A fitted `cellcharter_autok` object.
 #' @return The first K attaining the maximum mean mirrored stability.
+#' @examples
+#' autok <- structure(
+#'   list(candidate_k = 2:4, stability_mean = c(0.7, 0.9, 0.8)),
+#'   class = "cellcharter_autok"
+#' )
+#' cellcharter_autok_best_k(autok)
 #' @export
 cellcharter_autok_best_k <- function(object) {
   if (!inherits(object, "cellcharter_autok")) stop("`object` must be a `cellcharter_autok` fit.")
@@ -397,6 +474,18 @@ cellcharter_autok_best_k <- function(object) {
 #' @param object A fitted `cellcharter_autok` object.
 #' @param k Cluster count. Defaults to the most stable K.
 #' @return The checkpointed fitted model.
+#' @examples
+#' checkpoint <- tempfile(fileext = ".rds")
+#' saveRDS(list(model = list(n_clusters = 2L, device = "cpu")), checkpoint)
+#' autok <- structure(
+#'   list(
+#'     candidate_k = 2L, stability_mean = 1, best_k = 2L,
+#'     best_index = data.frame(k = 2L, path = checkpoint)
+#'   ),
+#'   class = "cellcharter_autok"
+#' )
+#' cellcharter_autok_model(autok)
+#' unlink(checkpoint)
 #' @export
 cellcharter_autok_model <- function(object, k = NULL) {
   if (!inherits(object, "cellcharter_autok")) stop("`object` must be a `cellcharter_autok` fit.")
@@ -406,3 +495,181 @@ cellcharter_autok_model <- function(object, k = NULL) {
   if (nrow(row) != 1L) stop("No fitted model is available for K = ", k, ".")
   readRDS(row$path[[1L]])$model
 }
+
+#' Prepare AutoK stability diagnostics
+#'
+#' Converts the repeated neighboring-K Fowlkes--Mallows scores in an AutoK fit
+#' into tidy point and summary tables. A requested K outside the selectable
+#' AutoK range (notably K = 1) is retained with an `NA` mean, because stability
+#' cannot be estimated without fitted solutions on both neighboring K values.
+#'
+#' @param object A fitted `cellcharter_autok` object.
+#' @param k_range Integer K values to display. Defaults to the inclusive range
+#'   from one through the largest selectable K.
+#' @param highlight_k K values to mark for interpretation, such as a published
+#'   sensitivity analysis. Highlighting does not alter selection.
+#' @return A list with `summary` (one row per displayed K) and `scores`
+#'   (the saved repeated stability values in long form).
+#' @examples
+#' autok <- structure(
+#'   list(
+#'     candidate_k = 2:4,
+#'     stability = rbind(c(0.7, 0.8), c(0.9, 0.95), c(0.6, 0.7)),
+#'     stability_mean = c(0.75, 0.925, 0.65), best_k = 3L
+#'   ),
+#'   class = "cellcharter_autok"
+#' )
+#' cellcharter_autok_stability_data(autok, k_range = 1:4)$summary
+#' @export
+cellcharter_autok_stability_data <- function(
+    object, k_range = NULL, highlight_k = integer()) {
+  if (!inherits(object, "cellcharter_autok")) {
+    stop("`object` must be a `cellcharter_autok` fit.")
+  }
+  if (is.null(object$stability) || is.null(object$stability_mean)) {
+    stop("Stability diagnostics require at least two completed AutoK runs.")
+  }
+  if (is.null(k_range)) k_range <- seq.int(1L, max(object$candidate_k))
+  k_range <- as.integer(k_range)
+  if (!length(k_range) || anyNA(k_range) || any(k_range < 1L) ||
+      anyDuplicated(k_range) || !identical(k_range, sort(k_range))) {
+    stop("`k_range` must contain unique, increasing positive integers.")
+  }
+  highlight_k <- as.integer(highlight_k)
+  if (anyNA(highlight_k) || any(highlight_k < 1L)) {
+    stop("`highlight_k` must contain positive integers.")
+  }
+
+  candidate_k <- as.integer(object$candidate_k)
+  stability <- object$stability
+  if (nrow(stability) != length(candidate_k) ||
+      length(object$stability_mean) != length(candidate_k)) {
+    stop("The AutoK stability arrays do not match `candidate_k`.")
+  }
+  scores <- data.frame(
+    k = rep(candidate_k, each = ncol(stability)),
+    comparison = rep(seq_len(ncol(stability)), times = nrow(stability)),
+    fowlkes_mallows = as.numeric(t(stability))
+  )
+  scores <- scores[scores$k %in% k_range, , drop = FALSE]
+
+  mean_lookup <- stats::setNames(as.numeric(object$stability_mean), candidate_k)
+  means <- unname(mean_lookup[as.character(k_range)])
+  estimable <- !is.na(means)
+  local_peak <- rep(FALSE, length(k_range))
+  estimable_index <- which(estimable)
+  if (length(estimable_index) >= 3L) {
+    # Only interior points with two estimable neighbours are local peaks.
+    for (i in estimable_index[-c(1L, length(estimable_index))]) {
+      local_peak[[i]] <- means[[i]] > means[[i - 1L]] &&
+        means[[i]] > means[[i + 1L]]
+    }
+  }
+  summary <- data.frame(
+    k = k_range,
+    mean_fowlkes_mallows = means,
+    estimable = estimable,
+    local_peak = local_peak,
+    selected = k_range == as.integer(object$best_k),
+    highlighted = k_range %in% highlight_k
+  )
+  list(summary = summary, scores = scores)
+}
+
+#' Plot repeated AutoK stability across cluster counts
+#'
+#' Displays every saved neighboring-K Fowlkes--Mallows comparison, their mean
+#' curve, local maxima, the independently selected K, and optional highlighted
+#' K values. It never recomputes or substitutes a proxy for AutoK stability.
+#'
+#' @inheritParams cellcharter_autok_stability_data
+#' @param title Plot title.
+#' @return A `ggplot` object. The exact diagnostic tables are attached as the
+#'   `cellcharter_stability_data` attribute for durable checkpointing.
+#' @examplesIf requireNamespace("ggplot2", quietly = TRUE)
+#' autok <- structure(
+#'   list(
+#'     candidate_k = 2:4,
+#'     stability = rbind(c(0.7, 0.8), c(0.9, 0.95), c(0.6, 0.7)),
+#'     stability_mean = c(0.75, 0.925, 0.65), best_k = 3L
+#'   ),
+#'   class = "cellcharter_autok"
+#' )
+#' cellcharter_plot_autok_stability(autok, k_range = 1:4, highlight_k = 4L)
+#' @export
+cellcharter_plot_autok_stability <- function(
+    object, k_range = NULL, highlight_k = integer(),
+    title = "CellCharter AutoK stability") {
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    stop("Package `ggplot2` is required to plot AutoK stability.")
+  }
+  diagnostic <- cellcharter_autok_stability_data(object, k_range, highlight_k)
+  summary <- diagnostic$summary
+  estimable <- summary[summary$estimable, , drop = FALSE]
+  peaks <- summary[summary$local_peak, , drop = FALSE]
+
+  plot <- ggplot2::ggplot() +
+    ggplot2::geom_point(
+      data = diagnostic$scores,
+      ggplot2::aes(x = k, y = fowlkes_mallows),
+      colour = "grey65", alpha = 0.25, size = 1,
+      position = ggplot2::position_jitter(width = 0.10, height = 0)
+    ) +
+    ggplot2::geom_line(
+      data = estimable,
+      ggplot2::aes(x = k, y = mean_fowlkes_mallows),
+      colour = "#24557A", linewidth = 0.7
+    ) +
+    ggplot2::geom_point(
+      data = estimable,
+      ggplot2::aes(x = k, y = mean_fowlkes_mallows),
+      colour = "#24557A", size = 2
+    ) +
+    ggplot2::geom_point(
+      data = peaks,
+      ggplot2::aes(x = k, y = mean_fowlkes_mallows),
+      shape = 21, fill = "#E69F00", colour = "black", size = 3
+    ) +
+    ggplot2::scale_x_continuous(breaks = summary$k) +
+    ggplot2::labs(
+      x = "Number of clusters (K)",
+      y = "Fowlkes--Mallows stability",
+      title = title,
+      subtitle = "Points: repeated neighboring-K comparisons; line: mean stability"
+    ) +
+    ggplot2::theme_bw(base_size = 16)
+
+  marked <- summary[summary$estimable & (summary$selected | summary$highlighted), , drop = FALSE]
+  if (nrow(marked)) {
+    marked$label <- ifelse(
+      marked$selected,
+      paste0("selected K=", marked$k),
+      paste0("K=", marked$k)
+    )
+    plot <- plot +
+      ggplot2::geom_vline(
+        data = marked, ggplot2::aes(xintercept = k, colour = selected),
+        linetype = "dashed", linewidth = 0.55, show.legend = FALSE
+      ) +
+      ggplot2::geom_label(
+        data = marked,
+        ggplot2::aes(x = k, y = mean_fowlkes_mallows, label = label),
+        nudge_y = 0.025, size = 5.6, show.legend = FALSE
+      )
+  }
+  non_estimable <- summary[!summary$estimable, , drop = FALSE]
+  if (nrow(non_estimable)) {
+    plot <- plot + ggplot2::annotate(
+      "text", x = non_estimable$k,
+      y = min(diagnostic$scores$fowlkes_mallows, na.rm = TRUE),
+      label = "not estimable", hjust = 0, angle = 90,
+      size = 5.3, colour = "grey40"
+    )
+  }
+  attr(plot, "cellcharter_stability_data") <- diagnostic
+  plot
+}
+
+utils::globalVariables(c(
+  "k", "fowlkes_mallows", "mean_fowlkes_mallows", "selected", "label"
+))

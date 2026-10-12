@@ -10,7 +10,8 @@ cellcharter_aggregate_hdf5(
   rows_by_sample,
   filepath,
   name = "X_cellcharter",
-  n_layers = 3L
+  n_layers = 3L,
+  block_rows = 8192L
 )
 }
 \arguments{
@@ -25,13 +26,33 @@ cellcharter_aggregate_hdf5(
 \item{name}{HDF5 dataset name.}
 
 \item{n_layers}{number of neighbourhood layers.}
+
+\item{block_rows}{maximum representation rows realised at once and maximum
+focal rows whose aggregate features are held for one write. Sparse graph
+frontier memory additionally depends on graph degree and requested hops.}
 }
 \value{
-An HDF5-backed \code{DelayedMatrix}.
+An HDF5-backed \code{DelayedMatrix} with an \code{aggregation_provenance}
+attribute recording the row budget and estimated dense workspace.
 }
 \description{
-Each input sample is aggregated alone and assigned into an HDF5-backed
-matrix. The delayed target is never realised in RAM. Keep writing serial;
-independent sample computation can be prepared in parallel, but concurrent
-writers to one HDF5 file are unsafe.
+Each input sample is aggregated into an HDF5-backed matrix using fixed-size
+focal and source row blocks. Neither the delayed target nor a complete
+sample representation is realised in RAM. Keep writing serial; independent
+sample computation can be prepared in parallel, but concurrent writers to
+one HDF5 file are unsafe.
+}
+\examples{
+x <- matrix(seq_len(8), nrow = 4)
+graph <- Matrix::sparseMatrix(
+  i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3),
+  x = 1, dims = c(4, 4)
+)
+output <- tempfile(fileext = ".h5")
+aggregated <- cellcharter_aggregate_hdf5(
+  x, list(slide1 = graph), list(slide1 = seq_len(4)), output,
+  n_layers = 1, block_rows = 2
+)
+dim(aggregated)
+unlink(output)
 }

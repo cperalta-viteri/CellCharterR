@@ -122,6 +122,76 @@ test_that("HDF5 aggregation supports explicit layers and interleaved sample rows
   expect_equal(as.matrix(observed), expected)
 })
 
+test_that("HDF5 aggregation preserves semantics across fixed odd row blocks", {
+  skip_if_not_installed("HDF5Array")
+  skip_if_not_installed("DelayedArray")
+  skip_if_not_installed("S4Arrays")
+  skip_if_not_installed("IRanges")
+
+  source_path <- tempfile(fileext = ".h5")
+  output_path <- tempfile(fileext = ".h5")
+  on.exit(unlink(c(source_path, output_path)), add = TRUE)
+  native <- cbind(
+    feature_1 = c(1, 101, 2, 102, 3, 103, 4, 104, 999),
+    feature_2 = c(11, 201, 12, 202, 13, 203, 14, 204, -999)
+  )
+  x <- HDF5Array::writeHDF5Array(
+    native, filepath = source_path, name = "embedding"
+  )
+  rows <- list(A = c(1, 3, 5, 7, 9), B = c(2, 4, 6, 8))
+  graph_a <- Matrix::sparseMatrix(
+    i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3), x = 1,
+    dims = c(5, 5),
+    dimnames = list(paste0("A", 1:5), paste0("A", 1:5))
+  )
+  graph_b <- Matrix::sparseMatrix(
+    i = c(1, 2, 1, 3, 1, 4), j = c(2, 1, 3, 1, 4, 1), x = 1,
+    dims = c(4, 4),
+    dimnames = list(paste0("B", 1:4), paste0("B", 1:4))
+  )
+  graphs <- list(A = graph_a, B = graph_b)
+
+  observed <- cellcharter_aggregate_hdf5(
+    x, graphs, rows, output_path, n_layers = 3L, block_rows = 2L
+  )
+  expected <- matrix(NA_real_, nrow(native), ncol(native) * 4L)
+  for (sample_id in names(rows)) {
+    sample_rows <- rows[[sample_id]]
+    expected[sample_rows, ] <- as.matrix(cellcharter_aggregate(
+      native[sample_rows, , drop = FALSE], graphs[[sample_id]], n_layers = 3L
+    ))
+  }
+
+  # Sample A's fifth cell is an odd final block and an isolated node.
+  expect_equal(as.matrix(observed), expected, tolerance = 1e-6)
+  expect_equal(
+    unname(as.matrix(observed)[9L, ]), unname(c(native[9L, ], rep(0, 6)))
+  )
+  expect_equal(unname(as.matrix(observed)[1L, 3:4]), unname(native[3L, ]))
+  expect_false(any(as.matrix(observed)[1L, ] %in% native[rows$B, ]))
+  provenance <- attr(observed, "aggregation_provenance")
+  expect_identical(provenance$block_rows, 2L)
+  expect_gt(provenance$estimated_dense_workspace_bytes, 0)
+})
+
+test_that("HDF5 aggregation validates its row budget before creating output", {
+  skip_if_not_installed("HDF5Array")
+  graph <- Matrix::sparseMatrix(
+    i = c(1, 2), j = c(2, 1), x = 1, dims = c(2, 2)
+  )
+  output_path <- tempfile(fileext = ".h5")
+  on.exit(unlink(output_path), add = TRUE)
+
+  expect_error(
+    cellcharter_aggregate_hdf5(
+      matrix(1:4, nrow = 2L), list(A = graph), list(A = 1:2),
+      output_path, block_rows = 0L
+    ),
+    "`block_rows` must be one positive whole number", fixed = TRUE
+  )
+  expect_false(file.exists(output_path))
+})
+
 test_that("direct aggregation accepts an HDF5-backed native representation", {
   skip_if_not_installed("HDF5Array")
   filepath <- tempfile(fileext = ".h5")

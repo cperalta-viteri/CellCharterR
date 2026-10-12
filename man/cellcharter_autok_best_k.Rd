@@ -15,3 +15,10 @@ The first K attaining the maximum mean mirrored stability.
 \description{
 Return the most stable K from an AutoK fit
 }
+\examples{
+autok <- structure(
+  list(candidate_k = 2:4, stability_mean = c(0.7, 0.9, 0.8)),
+  class = "cellcharter_autok"
+)
+cellcharter_autok_best_k(autok)
+}

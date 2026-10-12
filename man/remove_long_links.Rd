@@ -26,3 +26,10 @@ stored in the \code{distance_cutoff} attribute.
 \description{
 Remove the longest spatial graph edges
 }
+\examples{
+graph <- Matrix::sparseMatrix(
+  i = c(1, 2, 2, 3), j = c(2, 1, 3, 2), x = 1, dims = c(3, 3)
+)
+xy <- rbind(c(0, 0), c(1, 0), c(4, 0))
+remove_long_links(graph, xy, percentile = 50)
+}

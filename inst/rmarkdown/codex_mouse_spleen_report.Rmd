@@ -1,6 +1,6 @@
 ---
-title: "rCellCharter reproduction of the CellCharter CODEX mouse-spleen tutorial"
-author: "rCellCharter checkpointed workflow"
+title: "CellCharterR reproduction of the CellCharter CODEX mouse-spleen tutorial"
+author: "CellCharterR checkpointed workflow"
 date: "`r format(Sys.time(), '%Y-%m-%d %H:%M UTC', tz = 'UTC')`"
 output:
   html_document:
@@ -18,7 +18,8 @@ params:
 # checkpointed results, not a hidden re-analysis of the tutorial data.
 knitr::opts_chunk$set(
   echo = TRUE, message = TRUE, warning = TRUE,
-  fig.align = "center", fig.retina = 2
+  fig.align = "center", fig.retina = 2,
+  dev.args = list(pointsize = 16)
 )
 
 project_root <- if (file.exists(file.path(getwd(), "DESCRIPTION"))) {
@@ -27,7 +28,7 @@ project_root <- if (file.exists(file.path(getwd(), "DESCRIPTION"))) {
   dirname(getwd())
 } else {
   stop(
-    "Render from the rCellCharter repository root (or its reports/ directory). ",
+    "Render from the CellCharterR repository root (or its reports/ directory). ",
     "The project DESCRIPTION file could not be located.", call. = FALSE
   )
 }
@@ -122,10 +123,13 @@ if (!identical(as.character(differential$params$condition_groups), c("BALBc", "M
   stop("The differential checkpoint must compare BALBc versus MRL in that order.")
 }
 
-workflow_metadata <- S4Vectors::metadata(sce)$rCellCharter
+workflow_metadata <- S4Vectors::metadata(sce)$CellCharterR
+if (is.null(workflow_metadata)) {
+  workflow_metadata <- S4Vectors::metadata(sce)$rCellCharter
+}
 if (is.null(workflow_metadata$reference) || is.null(workflow_metadata$inputs) ||
     is.null(workflow_metadata$parameters)) {
-  stop("The representation checkpoint lacks required rCellCharter provenance metadata.")
+  stop("The representation checkpoint lacks required CellCharterR provenance metadata.")
 }
 
 format_value <- function(x) {
@@ -188,9 +192,9 @@ plot_matrix <- function(x, main, diverging = FALSE, digits = 3L) {
     ylab = "source / cell type", main = main, useRaster = TRUE
   )
   graphics::axis(1, at = seq_len(ncol(x)), labels = colnames(x), las = 2,
-                 cex.axis = min(1, 12 / ncol(x)))
+                 cex.axis = 1)
   graphics::axis(2, at = seq_len(nrow(x)), labels = rownames(x), las = 2,
-                 cex.axis = min(1, 18 / nrow(x)))
+                 cex.axis = 1)
   graphics::box()
 
   # Draw a compact value scale using base graphics, avoiding an extra report
@@ -202,7 +206,7 @@ plot_matrix <- function(x, main, diverging = FALSE, digits = 3L) {
     col = palette, zlim = zlim, axes = FALSE, xlab = "", ylab = "",
     useRaster = TRUE
   )
-  graphics::axis(4, at = pretty(zlim, n = 5L), las = 2, cex.axis = 0.8)
+  graphics::axis(4, at = pretty(zlim, n = 5L), las = 2, cex.axis = 1)
   graphics::box()
   invisible(round(zlim, digits))
 }
@@ -213,6 +217,8 @@ plot_sample_grid <- function(data, domain, title) {
   n_rows <- ceiling(length(samples) / n_columns)
   domain <- factor(domain, levels = sort(unique(as.integer(as.character(domain)))))
   palette <- grDevices::hcl.colors(nlevels(domain), "Dynamic")
+  symbols <- rep(c(16, 17, 15, 18, 3, 4, 8, 1, 2, 6, 0),
+                 length.out = nlevels(domain))
   old_par <- graphics::par(no.readonly = TRUE)
   on.exit(graphics::par(old_par))
   graphics::par(
@@ -224,13 +230,14 @@ plot_sample_grid <- function(data, domain, title) {
     point_size <- max(0.08, min(0.55, 2500 / sum(keep)))
     graphics::plot(
       data$x[keep], data$y[keep], asp = 1, axes = FALSE,
-      xlab = "", ylab = "", pch = 16, cex = point_size,
-      col = palette[as.integer(domain[keep])], main = sample_id, cex.main = 0.8
+      xlab = "", ylab = "", pch = symbols[as.integer(domain[keep])], cex = point_size,
+      col = palette[as.integer(domain[keep])], main = sample_id, cex.main = 1
     )
     graphics::box(col = "grey70")
   }
   for (unused in seq_len(n_rows * n_columns - length(samples))) graphics::plot.new()
   graphics::mtext(title, outer = TRUE, side = 3, line = 1, font = 2)
+  attr(palette, "pch") <- symbols
   invisible(palette)
 }
 ```
@@ -525,11 +532,10 @@ autok_summary <- data.frame(
 )
 knitr::kable(autok_summary, caption = "AutoK configuration and outcome")
 
-stability_table <- data.frame(
-  k = as.integer(names(autok$stability_mean)),
-  mean_fowlkes_mallows = as.numeric(autok$stability_mean),
-  selected = as.integer(names(autok$stability_mean)) == autok$best_k
+stability_diagnostic <- cellcharter_autok_stability_data(
+  autok, k_range = 1:20, highlight_k = c(4L, 11L)
 )
+stability_table <- stability_diagnostic$summary
 knitr::kable(
   stability_table,
   digits = 5,
@@ -537,23 +543,10 @@ knitr::kable(
 )
 ```
 
-```{r autok-stability-plot, echo=TRUE, fig.width=8, fig.height=5}
-graphics::plot(
-  stability_table$k, stability_table$mean_fowlkes_mallows,
-  type = "b", pch = 16, xlab = "Candidate number of domains (K)",
-  ylab = "Mean Fowlkes-Mallows stability", xaxt = "n",
-  main = "CellCharter AutoK stability"
-)
-graphics::axis(1, at = stability_table$k)
-graphics::abline(v = selected$k, col = "#D55E00", lty = 2, lwd = 2)
-graphics::points(
-  selected$k,
-  stability_table$mean_fowlkes_mallows[stability_table$k == selected$k],
-  pch = 21, cex = 1.5, bg = "#D55E00"
-)
-graphics::legend(
-  "bottomright", legend = paste("R-selected K =", selected$k),
-  lty = 2, lwd = 2, col = "#D55E00", bty = "n"
+```{r autok-stability-plot, echo=TRUE, fig.width=8, fig.height=5, fig.alt="Mean neighboring-K Fowlkes-Mallows stability from K=1 through K=20 with K=4 and K=11 highlighted"}
+cellcharter_plot_autok_stability(
+  autok, k_range = 1:20, highlight_k = c(4L, 11L),
+  title = "Mouse spleen CellCharterR AutoK stability"
 )
 ```
 
@@ -580,7 +573,7 @@ These maps use **K = `r selected$k`**, selected by the R AutoK result above.
 Each panel is a separate physical sample; coordinates are not pooled across
 samples. Domain numbers are arbitrary mixture-component identifiers.
 
-```{r primary-domain-maps, echo=TRUE, fig.width=14, fig.height=12}
+```{r primary-domain-maps, echo=TRUE, fig.width=14, fig.height=12, fig.alt="Primary R-selected spatial domains across mouse spleen samples, encoded by colour and point shape"}
 primary_palette <- plot_sample_grid(
   report_input,
   selected$labels,
@@ -593,7 +586,8 @@ primary_levels <- sort(unique(as.integer(selected$labels)))
 graphics::par(mar = c(1, 1, 3, 1))
 graphics::plot.new()
 graphics::legend(
-  "center", legend = primary_levels, fill = primary_palette,
+  "center", legend = primary_levels, col = primary_palette,
+  pch = attr(primary_palette, "pch"),
   title = "Primary domain", ncol = min(10L, length(primary_levels)), bty = "n"
 )
 ```
@@ -609,21 +603,21 @@ observed-versus-expected analysis; it is not a simple composition table.
 For visualization only, infinite enrichment values are clipped to the nearest
 finite endpoint of the color scale; the checkpoint itself remains unchanged.
 
-```{r cell-type-observed, echo=TRUE, fig.width=12, fig.height=10}
+```{r cell-type-observed, echo=TRUE, fig.width=12, fig.height=10, fig.alt="Heatmap of observed reduced-cell-type proportions within primary domains"}
 plot_matrix(
   cell_type_enrichment$observed,
   "Observed reduced-cell-type proportion within each primary domain"
 )
 ```
 
-```{r cell-type-expected, echo=TRUE, fig.width=12, fig.height=10}
+```{r cell-type-expected, echo=TRUE, fig.width=12, fig.height=10, fig.alt="Heatmap of expected cohort-wide reduced-cell-type proportions"}
 plot_matrix(
   cell_type_enrichment$expected,
   "Expected cohort-wide reduced-cell-type proportion"
 )
 ```
 
-```{r cell-type-enrichment, echo=TRUE, fig.width=12, fig.height=10}
+```{r cell-type-enrichment, echo=TRUE, fig.width=12, fig.height=10, fig.alt="Heatmap of reduced-cell-type log2 observed-to-expected enrichment in primary domains"}
 plot_matrix(
   cell_type_enrichment$enrichment,
   "Reduced-cell-type enrichment: log2(observed / expected)",
@@ -649,7 +643,7 @@ directional: source-to-target enrichment need not equal target-to-source
 enrichment. Same-domain links are excluded, leaving the diagonal undefined.
 BALBc and MRL are calculated separately with the pinned analytical expectation.
 
-```{r condition-neighborhood-enrichment, echo=TRUE, fig.width=9, fig.height=8}
+```{r condition-neighborhood-enrichment, echo=TRUE, fig.width=9, fig.height=8, fig.alt="Condition-specific observed, expected, and directed neighborhood-enrichment heatmaps for BALBc and MRL"}
 required_conditions <- c("BALBc", "MRL")
 if (!all(required_conditions %in% names(condition_nhood))) {
   stop("The neighborhood checkpoint must contain separate BALBc and MRL results.")
@@ -705,7 +699,7 @@ knitr::kable(
 )
 ```
 
-```{r differential-effect, echo=TRUE, fig.width=9, fig.height=8}
+```{r differential-effect, echo=TRUE, fig.width=9, fig.height=8, fig.alt="Differential directed neighborhood enrichment, BALBc minus MRL"}
 plot_matrix(
   differential$effect,
   "Differential asymmetric enrichment: BALBc minus MRL",
@@ -713,14 +707,14 @@ plot_matrix(
 )
 ```
 
-```{r differential-permutation-counts, echo=TRUE, fig.width=9, fig.height=8}
+```{r differential-permutation-counts, echo=TRUE, fig.width=9, fig.height=8, fig.alt="Directional extreme-null permutation counts for domain pairs"}
 plot_matrix(
   differential$permutation_counts,
   "Directional extreme-null permutation counts (n = 100)"
 )
 ```
 
-```{r differential-pvalues, echo=TRUE, fig.width=9, fig.height=8}
+```{r differential-pvalues, echo=TRUE, fig.width=9, fig.height=8, fig.alt="Unadjusted directional empirical p-values for domain pairs"}
 plot_matrix(
   differential$pvalue,
   "Unadjusted directional empirical p-values"
@@ -752,7 +746,7 @@ This section does **not** replace the independently R-selected K =
 only to facilitate visual comparison with the published tutorial convention.
 No K = 11 enrichment or proximity statistic is presented as a primary result.
 
-```{r k11-sensitivity-maps, echo=TRUE, fig.width=14, fig.height=12}
+```{r k11-sensitivity-maps, echo=TRUE, fig.width=14, fig.height=12, fig.alt="Tutorial-matched K=11 sensitivity domains across mouse spleen samples, encoded by colour and point shape"}
 k11_palette <- plot_sample_grid(
   report_input,
   k11_selected$labels,
@@ -765,7 +759,8 @@ k11_levels <- sort(unique(as.integer(k11_selected$labels)))
 graphics::par(mar = c(1, 1, 3, 1))
 graphics::plot.new()
 graphics::legend(
-  "center", legend = k11_levels, fill = k11_palette,
+  "center", legend = k11_levels, col = k11_palette,
+  pch = attr(k11_palette, "pch"),
   title = "K = 11 sensitivity domain", ncol = min(11L, length(k11_levels)), bty = "n"
 )
 ```

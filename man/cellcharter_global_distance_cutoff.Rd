@@ -26,3 +26,13 @@ assembles a block-diagonal distance matrix, and then takes one percentile of
 all its positive entries. This helper reproduces the same cutoff without
 materialising the cohort-wide block-diagonal graph.
 }
+\examples{
+g1 <- Matrix::sparseMatrix(i = c(1, 2), j = c(2, 1), x = 1,
+                           dims = c(2, 2))
+g2 <- g1
+cellcharter_global_distance_cutoff(
+  list(a = g1, b = g2),
+  list(a = rbind(c(0, 0), c(1, 0)), b = rbind(c(0, 0), c(2, 0))),
+  percentile = 50
+)
+}

@@ -1,0 +1,4 @@
+artifact,source_url,bytes,md5,sha256,role
+codex_mouse_spleen.h5ad,https://api.figshare.com/v2/file/download/38538101,159233890,7d5ad7727ac214bcd61a55b2572ceb36,b386cb72b20d483d3c84675bffcdd22cae1e4db6e4333271bc2c3bdf4ecef946,raw CODEX marker data and metadata
+codex_mouse_spleen_clustered.h5ad,https://api.figshare.com/v2/file/download/46832722,470311644,b3d50ea1181b59b7b8fc0522633badb2,a23434e23cbfb421b2f51593eb71fe5d642c545aca705e4607a4b2a081047bd6,official fixed X_trVAE representation and reference results
+BALBc-MRL_trVAE_CellCharter_autok.zip,https://api.figshare.com/v2/file/download/46833700,80784145,3833ec2ca271e2a57de2fbe2322b64b1,c7ea0c53d8c103c9752e343142e4ee632090faf661fb1c482760bef1aefb6e01,official Python AutoK sensitivity artifact

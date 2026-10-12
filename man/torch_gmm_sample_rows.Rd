@@ -13,7 +13,19 @@ torch_gmm_sample_rows(x, n = 10000L, seed = 1L)
 
 \item{seed}{random seed.}
 }
+\value{
+A numeric matrix containing at most \code{n} sampled rows.
+}
 \description{
 The sampled matrix is intentionally the only sizeable object retained on the
 R heap during initialisation. It is used for k-means-like mean initialisation.
+}
+\examples{
+\dontshow{if (requireNamespace("torch", quietly = TRUE)) withAutoprint(\{ # examplesIf}
+x <- matrix(seq_len(20), nrow = 10)
+identical(
+  torch_gmm_sample_rows(x, n = 3, seed = 7),
+  torch_gmm_sample_rows(x, n = 3, seed = 7)
+)
+\dontshow{\}) # examplesIf}
 }

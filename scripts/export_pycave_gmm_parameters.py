@@ -4,7 +4,7 @@
 The official CellCharter AutoK archive stores a small PyTorch ZIP/pickle state
 dict. This exporter decodes only the tensor/storage opcodes used by that state
 dict and writes portable JSON for one requested K. It is a fixture-generation
-utility, not an rCellCharter runtime dependency.
+utility, not a CellCharterR runtime dependency.
 """
 
 import argparse

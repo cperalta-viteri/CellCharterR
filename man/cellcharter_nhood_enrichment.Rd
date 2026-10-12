@@ -31,3 +31,10 @@ links are removed before calculating source-domain proportions. The pinned
 analytical expectation is the target domain's cell fraction and is not
 renormalized after same-domain links are removed.
 }
+\examples{
+graph <- Matrix::sparseMatrix(
+  i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3),
+  x = 1, dims = c(4, 4)
+)
+cellcharter_nhood_enrichment(graph, cluster = c(1, 1, 2, 2))
+}

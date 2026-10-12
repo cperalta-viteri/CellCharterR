@@ -1,4 +1,4 @@
 library(testthat)
-library(rCellCharter)
+library(CellCharterR)
 
-test_check("rCellCharter")
+test_check("CellCharterR")

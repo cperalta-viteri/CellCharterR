@@ -1,0 +1,187 @@
+---
+title: "Downloading H5AD data and creating a SingleCellExperiment"
+author: "Christian Peralta Viteri"
+output:
+  BiocStyle::html_document:
+    toc: true
+vignette: >
+  %\VignetteIndexEntry{Downloading H5AD data and creating a SingleCellExperiment}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Scope
+
+This vignette documents the exact conversion used for the CellCharterR CODEX
+reproduction. Its download and full conversion chunks deliberately have
+`eval=FALSE`: package builds and checks must stay offline and must not download
+the 600.4 MiB of H5AD data (151.9 MiB raw plus 448.5 MiB clustered).
+
+The project used a custom `read_codex_sce()` reader built from `rhdf5`,
+`HDF5Array`, `DelayedArray`, and `SingleCellExperiment`. It did **not** use
+`zellkonverter` or `anndataR`. For general H5AD files, users should consider
+those packages first because they support broader AnnData conventions. The
+custom reader exists to enforce the exact identity and disk-backed layout of
+these two versioned CODEX artifacts.
+
+## Download the official files
+
+Choose the destination yourself. The code writes partial files, verifies
+SHA-256 checksums, and only then publishes the final names.
+
+```{r download, eval=FALSE}
+destination <- file.path("data-raw", "codex-mouse-spleen")
+dir.create(destination, recursive = TRUE, showWarnings = FALSE)
+
+files <- data.frame(
+  filename = c(
+    "codex_mouse_spleen.h5ad",
+    "codex_mouse_spleen_clustered.h5ad"
+  ),
+  url = c(
+    "https://api.figshare.com/v2/file/download/38538101",
+    "https://api.figshare.com/v2/file/download/46832722"
+  ),
+  sha256 = c(
+    "b386cb72b20d483d3c84675bffcdd22cae1e4db6e4333271bc2c3bdf4ecef946",
+    "a23434e23cbfb421b2f51593eb71fe5d642c545aca705e4607a4b2a081047bd6"
+  ),
+  md5 = c(
+    "7d5ad7727ac214bcd61a55b2572ceb36",
+    "b3d50ea1181b59b7b8fc0522633badb2"
+  )
+)
+
+for (i in seq_len(nrow(files))) {
+  final <- file.path(destination, files$filename[[i]])
+  partial <- paste0(final, ".partial")
+
+  # Reuse an already complete download, but never trust its name alone.
+  if (file.exists(final)) {
+    valid_sha256 <- identical(
+      digest::digest(file = final, algo = "sha256", serialize = FALSE),
+      files$sha256[[i]]
+    )
+    valid_md5 <- identical(unname(tools::md5sum(final)), files$md5[[i]])
+    if (valid_sha256 && valid_md5) next
+    stop("Existing final file has the wrong checksum: ", final)
+  }
+
+  utils::download.file(files$url[[i]], partial, mode = "wb", method = "libcurl")
+  observed_sha256 <- digest::digest(file = partial, algo = "sha256", serialize = FALSE)
+  observed_md5 <- unname(tools::md5sum(partial))
+  if (!identical(observed_sha256, files$sha256[[i]]) ||
+      !identical(observed_md5, files$md5[[i]])) {
+    stop("Checksum mismatch for ", files$filename[[i]])
+  }
+  if (!file.rename(partial, final)) stop("Could not publish ", final)
+}
+```
+
+Equivalent shell downloads may use `curl -L` or `wget`, followed by `sha256sum`.
+The R version above avoids assuming either shell program is installed.
+
+## Convert to a disk-backed SCE
+
+```{r convert, eval=FALSE}
+library(CellCharterR)
+
+sce <- read_codex_sce(
+  raw_h5ad = file.path(destination, "codex_mouse_spleen.h5ad"),
+  clustered_h5ad = file.path(destination, "codex_mouse_spleen_clustered.h5ad"),
+  representation_dataset = "obsm/X_trVAE",
+  spatial_dataset = "obsm/spatial"
+)
+
+sce
+SummarizedExperiment::assayNames(sce)
+SingleCellExperiment::reducedDimNames(sce)
+```
+
+The protein assay, trVAE representation, and spatial coordinates remain
+HDF5-backed. The reader validates global or sample-scoped cell identities and
+will not accept positional coincidence as proof of alignment.
+
+The package includes a miniature two-file fixture with the same storage
+contract, so the actual custom conversion can be demonstrated offline:
+
+```{r tiny-conversion}
+library(CellCharterR)
+
+tiny_raw <- system.file(
+  "extdata", "codex_mouse_spleen_tiny_raw.h5ad",
+  package = "CellCharterR", mustWork = TRUE
+)
+tiny_clustered <- system.file(
+  "extdata", "codex_mouse_spleen_tiny_clustered.h5ad",
+  package = "CellCharterR", mustWork = TRUE
+)
+tiny_from_h5ad <- read_codex_sce(tiny_raw, tiny_clustered)
+tiny_from_h5ad
+SingleCellExperiment::reducedDimNames(tiny_from_h5ad)
+```
+
+This disk-backed object depends on the H5AD files staying at their recorded
+locations. It is appropriate for scalable computation, but it is not the
+portable distribution artifact.
+
+## Create a movable SCE
+
+To move one SCE elsewhere and forget the H5AD files, explicitly realize the
+arrays as ordinary matrices and build a new object. This needs enough RAM for
+all selected fields.
+
+```{r portable, eval=FALSE}
+portable <- SingleCellExperiment::SingleCellExperiment(
+  assays = list(
+    protein = as.matrix(SummarizedExperiment::assay(sce, "protein"))
+  ),
+  rowData = SummarizedExperiment::rowData(sce),
+  colData = SummarizedExperiment::colData(sce),
+  reducedDims = S4Vectors::SimpleList(
+    X_trVAE = as.matrix(SingleCellExperiment::reducedDim(sce, "X_trVAE")),
+    spatial = as.matrix(SingleCellExperiment::reducedDim(sce, "spatial"))
+  ),
+  metadata = S4Vectors::metadata(sce)
+)
+
+saveRDS(portable, "CellCharterR_mouse_spleen_sce.rds")
+```
+
+The validated canonical portable artifact is 286.0 MiB on disk and occupies
+approximately 693.7 MiB after loading in R. Its SHA-256 is
+`d9adda271ad26aca5887a2d4f38feea8bb3a1503b561e34ee9f13df129371219`.
+It is deliberately not bundled inside the software package; the project must
+publish it as a separate data product before assigning a durable download URL.
+The packaged 0.30 MiB teaching SCE is an exact seeded subset of that artifact.
+
+The repository's
+`inst/scripts/make-codex-portable-and-tiny.R` additionally attaches the already
+checkpointed aggregate representation, K=4 primary labels, K=11 sensitivity
+labels, checksums, and a deterministic 1,000-cell subset. It does not recompute
+the full analysis.
+
+## Provenance and licenses
+
+The original CODEX dataset is CC BY 4.0 and is described by
+doi:10.17632/zjnpwh8m5b.1. The clustered H5AD and AutoK resources are CC BY 4.0
+under doi:10.6084/m9.figshare.25040192.v2. Cite the original CODEX publication
+(doi:10.1016/j.cell.2018.07.010) and CellCharter publication
+(doi:10.1038/s41588-023-01588-4) when using these materials.
+
+## Citing CellCharterR
+
+Christian Peralta Viteri is the author and maintainer of CellCharterR. Retrieve
+the package's current, version-aware citation and copyable BibTeX with:
+
+```{r package-citation}
+citation("CellCharterR")
+```
+
+```{r session-info}
+sessionInfo()
+```

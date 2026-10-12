@@ -23,3 +23,9 @@ cell-type enrichment, \code{group} contains cell types and \code{label} contains
 spatial-domain labels. The observed value is the within-domain cell-type
 proportion and the expected value is the cohort-wide cell-type proportion.
 }
+\examples{
+cellcharter_enrichment(
+  group = c("B", "B", "T", "T", "B", "T"),
+  label = c(1, 1, 1, 2, 2, 2)
+)
+}

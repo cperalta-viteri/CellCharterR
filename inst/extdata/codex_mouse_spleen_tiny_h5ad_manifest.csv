@@ -1,0 +1,3 @@
+"artifact","size_bytes","sha256","source_tiny_sha256"
+"codex_mouse_spleen_tiny_raw.h5ad",170042,"8ecfb2efd21bafb5979b92ccc0e6af560cf16ff5faf82a67676d12f4d7ff371c","a39b3f66d503a0ef86cdbe21fe0969dc01d3260f49daae2cf0bf0421e77ad450"
+"codex_mouse_spleen_tiny_clustered.h5ad",53499,"510fd65782b58b924b71e8e57630545d75c6e89c6b897135e4e0a02ce31ae4b3","a39b3f66d503a0ef86cdbe21fe0969dc01d3260f49daae2cf0bf0421e77ad450"

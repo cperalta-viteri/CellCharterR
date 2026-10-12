@@ -1,18 +1,64 @@
-# rCellCharter
+# CellCharterR
 
-`rCellCharter` is a disk-backed R implementation of the **post-representation**
+## Vignettes and reports
+
+- [Beginner SCE-first workflow](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-beginner-workflow.html)
+  runs K=2 through K=10 on the packaged 1,000-cell teaching object, on CPU.
+- [H5AD download and SCE conversion](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-h5ad-to-sce.html)
+  shows checksum-verified download and conversion code without executing the
+  full download during package builds.
+- [Full CODEX mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-mouse-spleen-reproducibility.html)
+  is the preserved, precomputed full-data report. It is not rerun during build,
+  check, examples, or CI.
+
+`CellCharterR` is a disk-backed R implementation of the **post-representation**
 CellCharter workflow. It accepts a supplied embedding, constructs sample-local
 spatial graphs, aggregates exclusive graph-hop features, selects the number of
 domains with CellCharter-style AutoK, and fits a full-covariance GMM. It
 intentionally does not reimplement scVI or trVAE.
+
+CellCharterR is an independent R implementation and is not authored, endorsed,
+or maintained by the upstream CellCharter project. The package pins and cites
+the upstream version used for methodological comparisons.
+
+## Installation
+
+```r
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+# Make both Bioconductor and CRAN dependencies visible to the installer.
+options(repos = BiocManager::repositories())
+
+# R torch is distributed through CRAN, not Bioconductor.
+install.packages("torch")
+
+# Install the Linux CPU LibTorch runtime. Restart R if prompted.
+torch::install_torch(type = "cpu")
+
+if (!requireNamespace("remotes", quietly = TRUE)) {
+  install.packages("remotes")
+}
+remotes::install_github(
+  "cperalta-viteri/CellCharterR",
+  build_vignettes = TRUE,
+  dependencies = TRUE
+)
+
+library(CellCharterR)
+torch_gmm_device("cpu")
+```
+
+See [INSTALL](INSTALL) for the supported Linux CPU target and smoke test.
 
 ## Why the GMM uses Torch directly
 
 The GMM is an expectation-maximisation (EM) algorithm. Its E-step evaluates
 Gaussian probabilities and its M-step has closed-form weighted means and
 covariances. These are large matrix operations, so this implementation uses
-R Torch tensors and CUDA when available. A neural-network training framework is
-not used in the inner loop because EM has closed-form parameter updates.
+R Torch tensors. The supported package examples and checks run on Linux CPU. A
+neural-network training framework is not used in the inner loop because EM has
+closed-form parameter updates.
 
 The GMM never materialises the whole feature matrix. Each iteration:
 
@@ -25,25 +71,14 @@ The GMM never materialises the whole feature matrix. Each iteration:
 ## Minimal example
 
 ```r
-library(HDF5Array)
-library(rCellCharter)
+library(CellCharterR)
+data("codex_mouse_spleen_tiny", package = "CellCharterR")
 
-# `X_cellcharter` has observations in rows and lives on disk.
-gmm <- torch_gmm_fit(
-  X_cellcharter,
-  n_clusters = 8,
-  batch_size = 8192,
-  max_iter = 100,
-  device = "auto", # CUDA if available, CPU otherwise
-  seed = 42
-)
-
-# Prediction is also chunked; labels are the only full-length in-memory result.
-domains <- torch_gmm_predict(gmm, X_cellcharter, batch_size = 8192)
+# Build the spatial graph and exclusive one-hop neighborhood representation.
+sce <- cellcharter_sce_graph(codex_mouse_spleen_tiny)
+sce <- cellcharter_sce_aggregate(sce, n_layers = 1L)
+SingleCellExperiment::reducedDimNames(sce)
 ```
-
-The canonical CODEX report source is in `reports/`; a synchronized packaged
-copy is under `inst/rmarkdown/`.
 
 ## Reproducing the official tutorial analyses
 
@@ -76,6 +111,17 @@ K drives all primary maps and statistics. K = 11 is kept only as a separately
 labelled tutorial sensitivity analysis. Generated data and checkpoints are
 ignored by Git and excluded from the source package.
 
+The second-review Phase-0 K=4/K=11 deliverables are generated with:
+
+```bash
+Rscript scripts/build_second_review_deliverables.R
+Rscript -e 'rmarkdown::render("reports/CellCharterR_mouse_spleen_AutoK_K11.Rmd", output_dir="results/CellCharterR_mouse_spleen_v2/report")'
+```
+
+They are stored under `results/CellCharterR_mouse_spleen/`. The original
+`results/codex_mouse_spleen/` tree is retained as the immutable first-round
+checkpoint bundle on which these recomputed downstream analyses depend.
+
 The permanent K=11 prediction fixture in `inst/extdata/` was generated from
 the pinned PyCave model and exact published aggregate with:
 
@@ -84,7 +130,7 @@ Rscript scripts/build_python_gmm_fixture.R
 ```
 
 That one-time fixture builder uses the Python standard library only to decode
-the official PyTorch archive; Python is not an rCellCharter runtime dependency.
+the official PyTorch archive; Python is not a CellCharterR runtime dependency.
 
 The CosMx workflow follows the official tutorial's supplied scVI representation
 but deliberately rebuilds sample-local graphs and three-hop niche features in R:

@@ -10,6 +10,12 @@
 #'   all samples. When supplied, `percentile` is recorded but not recomputed.
 #' @return A sparse adjacency matrix with only retained edges. The cutoff is
 #'   stored in the `distance_cutoff` attribute.
+#' @examples
+#' graph <- Matrix::sparseMatrix(
+#'   i = c(1, 2, 2, 3), j = c(2, 1, 3, 2), x = 1, dims = c(3, 3)
+#' )
+#' xy <- rbind(c(0, 0), c(1, 0), c(4, 0))
+#' remove_long_links(graph, xy, percentile = 50)
 #' @export
 remove_long_links <- function(adjacency, coordinates, percentile = 99, cutoff = NULL) {
   topology <- .cc_adjacency_topology(adjacency)
@@ -68,6 +74,15 @@ remove_long_links <- function(adjacency, coordinates, percentile = 99, cutoff = 
 #' @param coordinates_by_sample Named list of aligned coordinate matrices.
 #' @param percentile Distance percentile, normally 99.
 #' @return The scalar global distance cutoff.
+#' @examples
+#' g1 <- Matrix::sparseMatrix(i = c(1, 2), j = c(2, 1), x = 1,
+#'                            dims = c(2, 2))
+#' g2 <- g1
+#' cellcharter_global_distance_cutoff(
+#'   list(a = g1, b = g2),
+#'   list(a = rbind(c(0, 0), c(1, 0)), b = rbind(c(0, 0), c(2, 0))),
+#'   percentile = 50
+#' )
 #' @export
 cellcharter_global_distance_cutoff <- function(
     adjacency_by_sample, coordinates_by_sample, percentile = 99) {
@@ -102,7 +117,7 @@ cellcharter_global_distance_cutoff <- function(
   if (!is.numeric(coordinates) || ncol(coordinates) < 2L) {
     stop("`coordinates` must contain numeric x/y values in its first two columns.", call. = FALSE)
   }
-  coordinates <- coordinates[, 1:2, drop = FALSE]
+  coordinates <- coordinates[, seq_len(2L), drop = FALSE]
   if (!is.null(expected_rows) && nrow(coordinates) != expected_rows) {
     stop("`coordinates` and `adjacency` must contain the same number of cells.", call. = FALSE)
   }
@@ -190,6 +205,64 @@ cellcharter_global_distance_cutoff <- function(
   split(rows, cumsum(c(TRUE, diff(rows) != 1L)))
 }
 
+.cc_aggregation_block_rows <- function(block_rows) {
+  if (!is.numeric(block_rows) || length(block_rows) != 1L ||
+      is.na(block_rows) || !is.finite(block_rows) ||
+      block_rows < 1 || block_rows != floor(block_rows) ||
+      block_rows > .Machine$integer.max) {
+    stop("`block_rows` must be one positive whole number.", call. = FALSE)
+  }
+  as.integer(block_rows)
+}
+
+.cc_block_indices <- function(n, block_rows) {
+  starts <- seq.int(1L, n, by = block_rows)
+  lapply(starts, function(start) seq.int(start, min(n, start + block_rows - 1L)))
+}
+
+.cc_aggregate_rows_block <- function(x, adjacency, focal_rows, layers,
+                                     block_rows, sample_rows = seq_len(nrow(adjacency))) {
+  n <- nrow(adjacency)
+  p <- ncol(x)
+  focal_rows <- as.integer(focal_rows)
+  answer <- matrix(0, nrow = length(focal_rows), ncol = p * length(layers))
+  answer[, seq_len(p)] <- as.matrix(x[sample_rows[focal_rows], , drop = FALSE])
+  if (length(layers) == 1L) return(answer)
+
+  current <- adjacency[focal_rows, , drop = FALSE]
+  focal_identity <- Matrix::sparseMatrix(
+    i = seq_along(focal_rows), j = focal_rows, x = 1,
+    dims = c(length(focal_rows), n)
+  )
+  visited <- Matrix::drop0((current + focal_identity) > 0)
+  source_blocks <- .cc_block_indices(n, block_rows)
+
+  for (hop in seq_len(max(layers))) {
+    if (hop > 1L) {
+      state <- .cc_hop(current, adjacency, visited)
+      current <- state$current
+      visited <- state$visited
+    }
+    layer_position <- match(hop, layers)
+    if (is.na(layer_position)) next
+
+    weights <- .cc_row_normalise(current)
+    aggregated <- matrix(0, nrow = length(focal_rows), ncol = p)
+    # Multiplication is accumulated over source-row chunks as well as focal
+    # chunks. Thus even a high-degree ring cannot force the complete sample
+    # representation into RAM merely because it touches many source cells.
+    for (source_rows in source_blocks) {
+      weight_block <- weights[, source_rows, drop = FALSE]
+      if (Matrix::nnzero(weight_block) == 0L) next
+      source_x <- as.matrix(x[sample_rows[source_rows], , drop = FALSE])
+      aggregated <- aggregated + as.matrix(weight_block %*% source_x)
+    }
+    columns <- seq.int((layer_position - 1L) * p + 1L, layer_position * p)
+    answer[, columns] <- aggregated
+  }
+  answer
+}
+
 #' CellCharter-style graph-neighbourhood aggregation
 #'
 #' Aggregates the original representation at 0 hop and mean neighbour features
@@ -201,6 +274,13 @@ cellcharter_global_distance_cutoff <- function(
 #' @param n_layers largest neighbourhood distance, or explicit layer vector.
 #' @return A (possibly delayed) observation-by-feature matrix with concatenated
 #'   0, 1, ..., `n_layers` features.
+#' @examples
+#' x <- matrix(seq_len(8), nrow = 4)
+#' graph <- Matrix::sparseMatrix(
+#'   i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3),
+#'   x = 1, dims = c(4, 4)
+#' )
+#' cellcharter_aggregate(x, graph, n_layers = 1)
 #' @export
 cellcharter_aggregate <- function(x, adjacency, n_layers = 3L) {
   if (is.null(dim(x)) || length(dim(x)) != 2L || nrow(x) == 0L || ncol(x) == 0L) {
@@ -238,10 +318,11 @@ cellcharter_aggregate <- function(x, adjacency, n_layers = 3L) {
 
 #' Write CellCharter aggregate features to HDF5 without cohort materialisation
 #'
-#' Each input sample is aggregated alone and assigned into an HDF5-backed
-#' matrix. The delayed target is never realised in RAM. Keep writing serial;
-#' independent sample computation can be prepared in parallel, but concurrent
-#' writers to one HDF5 file are unsafe.
+#' Each input sample is aggregated into an HDF5-backed matrix using fixed-size
+#' focal and source row blocks. Neither the delayed target nor a complete
+#' sample representation is realised in RAM. Keep writing serial; independent
+#' sample computation can be prepared in parallel, but concurrent writers to
+#' one HDF5 file are unsafe.
 #'
 #' @param x observation-by-feature delayed matrix.
 #' @param adjacency_by_sample named list of sparse sample-local graphs.
@@ -249,11 +330,45 @@ cellcharter_aggregate <- function(x, adjacency, n_layers = 3L) {
 #' @param filepath output HDF5 file.
 #' @param name HDF5 dataset name.
 #' @param n_layers number of neighbourhood layers.
-#' @return An HDF5-backed `DelayedMatrix`.
+#' @param block_rows maximum representation rows realised at once and maximum
+#'   focal rows whose aggregate features are held for one write. Sparse graph
+#'   frontier memory additionally depends on graph degree and requested hops.
+#' @return An HDF5-backed `DelayedMatrix` with an `aggregation_provenance`
+#'   attribute recording the row budget and estimated dense workspace.
+#' @examples
+#' x <- matrix(seq_len(8), nrow = 4)
+#' graph <- Matrix::sparseMatrix(
+#'   i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3),
+#'   x = 1, dims = c(4, 4)
+#' )
+#' output <- tempfile(fileext = ".h5")
+#' aggregated <- cellcharter_aggregate_hdf5(
+#'   x, list(slide1 = graph), list(slide1 = seq_len(4)), output,
+#'   n_layers = 1, block_rows = 2
+#' )
+#' dim(aggregated)
+#' unlink(output)
 #' @export
 cellcharter_aggregate_hdf5 <- function(x, adjacency_by_sample, rows_by_sample,
-                                       filepath, name = "X_cellcharter", n_layers = 3L) {
-  if (!requireNamespace("HDF5Array", quietly = TRUE)) stop("Install HDF5Array for disk-backed output.")
+                                       filepath, name = "X_cellcharter", n_layers = 3L,
+                                       block_rows = 8192L) {
+  if (!requireNamespace("HDF5Array", quietly = TRUE)) {
+    stop("Install HDF5Array for disk-backed output.", call. = FALSE)
+  }
+  if (is.null(dim(x)) || length(dim(x)) != 2L || nrow(x) == 0L || ncol(x) == 0L) {
+    stop("`x` must be a non-empty observation-by-feature matrix-like object.", call. = FALSE)
+  }
+  if (is.matrix(x) && (!is.numeric(x) || any(!is.finite(x)))) {
+    stop("A dense `x` must contain only finite numeric values.", call. = FALSE)
+  }
+  if (!is.character(filepath) || length(filepath) != 1L || is.na(filepath) ||
+      !nzchar(filepath)) {
+    stop("`filepath` must be one non-empty path.", call. = FALSE)
+  }
+  if (!is.character(name) || length(name) != 1L || is.na(name) || !nzchar(name)) {
+    stop("`name` must be one non-empty HDF5 dataset name.", call. = FALSE)
+  }
+  block_rows <- .cc_aggregation_block_rows(block_rows)
   layers <- .cc_layers(n_layers)
   sample_names <- names(rows_by_sample)
   if (!is.list(adjacency_by_sample) || !is.list(rows_by_sample) ||
@@ -276,6 +391,12 @@ cellcharter_aggregate_hdf5 <- function(x, adjacency_by_sample, rows_by_sample,
     stop("`rows_by_sample` must partition all rows of `x` exactly once.", call. = FALSE)
   }
   rows_by_sample <- checked_rows
+  adjacency_by_sample <- lapply(sample_names, function(sample_id) {
+    .cc_adjacency_topology(
+      adjacency_by_sample[[sample_id]], length(rows_by_sample[[sample_id]])
+    )
+  })
+  names(adjacency_by_sample) <- sample_names
   n_features <- ncol(x) * length(layers)
   # A realization sink creates the on-disk array first. Unlike
   # writeHDF5Array(matrix(0, ...)), it never allocates a cohort-sized zero
@@ -286,23 +407,39 @@ cellcharter_aggregate_hdf5 <- function(x, adjacency_by_sample, rows_by_sample,
   )
   for (sample_id in names(rows_by_sample)) {
     rows <- rows_by_sample[[sample_id]]
-    # The selected sample is the only data block allowed into memory.
-    aggregate <- cellcharter_aggregate(x[rows, , drop = FALSE], adjacency_by_sample[[sample_id]], layers)
-    # Only contiguous runs can be written as an HDF5 rectangular block. This
-    # preserves original cohort order while avoiding any global realization.
-    for (run in .cc_contiguous_runs(rows)) {
-      local_rows <- match(run, rows)
-      viewport <- S4Arrays::ArrayViewport(
-        refdim = c(nrow(x), n_features),
-        # One IRanges entry describes the selected extent in each dimension.
-        ranges = IRanges::IRanges(
-          start = c(run[[1]], 1L), width = c(length(run), n_features)
-        )
+    graph <- adjacency_by_sample[[sample_id]]
+    for (local_block in .cc_block_indices(length(rows), block_rows)) {
+      aggregate <- .cc_aggregate_rows_block(
+        x, graph, local_block, layers, block_rows, sample_rows = rows
       )
-      DelayedArray::write_block(target, viewport, as.matrix(aggregate[local_rows, , drop = FALSE]))
+      global_block <- rows[local_block]
+      # HDF5 writes rectangular extents, so interleaved cohort rows are split
+      # into contiguous runs without changing adjacency or feature order.
+      for (run in .cc_contiguous_runs(global_block)) {
+        block_positions <- match(run, global_block)
+        viewport <- S4Arrays::ArrayViewport(
+          refdim = c(nrow(x), n_features),
+          ranges = IRanges::IRanges(
+            start = c(run[[1]], 1L), width = c(length(run), n_features)
+          )
+        )
+        DelayedArray::write_block(
+          target, viewport, aggregate[block_positions, , drop = FALSE]
+        )
+      }
     }
   }
-  HDF5Array::HDF5Array(filepath, name)
+  answer <- HDF5Array::HDF5Array(filepath, name)
+  dense_values <- as.double(block_rows) * ncol(x) * (length(layers) + 2L)
+  attr(answer, "aggregation_provenance") <- list(
+    block_rows = block_rows,
+    estimated_dense_workspace_bytes = dense_values * 8,
+    estimate_scope = paste(
+      "one focal output block, one source representation block, and one",
+      "hop accumulator; excludes sparse graph/frontier and HDF5 library buffers"
+    )
+  )
+  answer
 }
 #' Build a Delaunay graph for one physical sample
 #'
@@ -314,6 +451,9 @@ cellcharter_aggregate_hdf5 <- function(x, adjacency_by_sample, rows_by_sample,
 #'
 #' @param coordinates numeric matrix with x and y in columns one and two.
 #' @return Symmetric binary sparse adjacency matrix.
+#' @examples
+#' xy <- rbind(c(0, 0), c(1, 0), c(0, 1), c(1, 1), c(0.5, 0.5))
+#' delaunay_graph(xy)
 #' @export
 delaunay_graph <- function(coordinates) {
   coordinates <- .cc_coordinates(coordinates)

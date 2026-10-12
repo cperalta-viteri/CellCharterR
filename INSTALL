@@ -1,0 +1,21 @@
+CellCharterR installation (Linux CPU)
+====================================
+
+The supported validation target for this release is x86_64 Linux on CPU. The
+package imports the R package `torch`, whose LibTorch runtime must be available
+before CellCharterR clustering is used.
+
+1. Install the current Bioconductor release/development dependencies.
+2. Install `torch` using its documented CPU installation procedure.
+3. Confirm the runtime before installing CellCharterR:
+
+       Rscript -e 'library(torch); print(torch::torch_randn(2, 2, device = "cpu"))'
+
+4. Install CellCharterR and run the tiny CPU smoke test or beginner vignette.
+
+Package builds, checks, examples, and vignettes do not download LibTorch,
+H5AD files, or the full mouse-spleen dataset. Full-data downloads shown in the
+conversion vignette are opt-in and unevaluated.
+
+Windows, macOS, Linux ARM, CUDA, and full-dataset platform validation are not
+claimed for this release.

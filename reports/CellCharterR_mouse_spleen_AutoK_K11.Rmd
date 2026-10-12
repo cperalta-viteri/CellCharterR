@@ -1,0 +1,407 @@
+---
+title: "CellCharterR mouse-spleen analysis: AutoK primary and standalone K=11 sensitivity"
+author: "CellCharterR second-review revision"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M UTC', tz = 'UTC')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: show
+params:
+  result_dir: "results/CellCharterR_mouse_spleen_v2/second_review_deliverables"
+---
+
+```{r setup, echo=TRUE, message=TRUE, warning=TRUE}
+# All analysis code remains visible in the rendered report.
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.align = "center", fig.retina = 1,
+                      dev.args = list(pointsize = 16))
+project_root <- if (file.exists(file.path(getwd(), "DESCRIPTION"))) {
+  getwd()
+} else if (file.exists(file.path(dirname(getwd()), "DESCRIPTION"))) {
+  dirname(getwd())
+} else {
+  stop("Render from the CellCharterR repository root or its reports directory.")
+}
+requested_result_dir <- params$result_dir
+if (!grepl("^/", requested_result_dir)) {
+  requested_result_dir <- file.path(project_root, requested_result_dir)
+}
+result_dir <- normalizePath(requested_result_dir, winslash = "/", mustWork = TRUE)
+manifest <- readRDS(file.path(result_dir, "CellCharterR_primary_K11_manifest.rds"))
+stopifnot(
+  identical(manifest$tool, "CellCharterR"),
+  identical(manifest$roles$Primary$role_id, "r_autok_primary"),
+  identical(manifest$roles$TutorialK11$role_id, "r_tutorial_k11_sensitivity"),
+  identical(manifest$roles$TutorialK11$seed, 12345L),
+  identical(
+    manifest$roles$PublishedH5ADReference$role_id,
+    "published_h5ad_reference"
+  ),
+  identical(manifest$displayed_samples, c("BALBc-1", "MRL-4")),
+  file.exists(manifest$autok_stability_plot),
+  identical(manifest$enrichment_plot_parameters$group_key, "cell_type"),
+  identical(manifest$enrichment_plot_parameters$size_threshold, 0.58),
+  identical(manifest$enrichment_plot_parameters$color_threshold, 0.58),
+  isTRUE(manifest$enrichment_plot_parameters$cluster_labels),
+  identical(manifest$differential_parameters$significance, 0.05)
+)
+
+plot_spatial_pair <- function(data, k) {
+  samples <- c("BALBc-1", "MRL-4")
+  domain <- factor(data$domain, levels = seq.int(0L, k - 1L))
+  palette <- grDevices::hcl.colors(k, "Dynamic")
+  symbols <- rep(c(16, 17, 15, 18, 3, 4, 8, 1, 2, 6, 0), length.out = k)
+  old <- graphics::par(no.readonly = TRUE)
+  on.exit(graphics::par(old))
+  graphics::par(mfrow = c(1, 2), mar = c(1, 1, 3, 1))
+  titles <- c("BALBc-1", "MRL-4 (early)")
+  for (i in seq_along(samples)) {
+    keep <- as.character(data$sample) == samples[[i]]
+    graphics::plot(
+      data$x[keep], data$y[keep], asp = 1, axes = FALSE,
+      xlab = "", ylab = "", pch = symbols[as.integer(domain[keep])], cex = 0.17,
+      col = palette[as.integer(domain[keep])],
+      main = paste0(titles[[i]], " (K=", k, ")")
+    )
+    graphics::box(col = "grey70")
+  }
+  invisible(palette)
+}
+
+matrix_long <- function(x, value_name, condition = NULL) {
+  result <- as.data.frame(as.table(as.matrix(x)), stringsAsFactors = FALSE)
+  names(result) <- c("source", "target", value_name)
+  if (!is.null(condition)) result$condition <- condition
+  result
+}
+
+plot_enrichment_dotplot <- function(enrichment, k) {
+  values <- as.matrix(enrichment$enrichment)
+  size_threshold <- 0.58
+  color_threshold <- 0.58
+
+  # CellCharter v0.2.0 defaults to cluster_labels=TRUE. Its complete-linkage
+  # clustering uses the thresholded color matrix, not the raw enrichment.
+  color_values <- ifelse(
+    values < 0, -1,
+    ifelse(values < color_threshold, 0, 1)
+  )
+  domain_order <- colnames(values)
+  if (ncol(values) > 1L) {
+    domain_order <- domain_order[stats::hclust(
+      stats::dist(t(color_values)), method = "complete"
+    )$order]
+  }
+
+  cells <- expand.grid(
+    cell_type = rownames(values), domain = colnames(values),
+    KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
+  )
+  cells$value <- as.vector(values)
+  # CellCharter maps [-1, 0.58] through TwoSlopeNorm. Scanpy 1.9.3 then
+  # clips negative dot-size fractions to zero and uses area = fraction^1.5.
+  # Base R `cex` scales diameter, hence exponent 1.5 / 2 = 0.75 here.
+  cells$size <- pmax(0, pmin(cells$value, size_threshold)) / size_threshold
+  cells$color_value <- as.vector(color_values)
+  palette <- grDevices::colorRampPalette(
+    c("#3B4CC0", "darkgrey", "#B40426")
+  )(101)
+  color_index <- pmax(
+    1L, pmin(101L, round((cells$color_value + 1) * 50) + 1L)
+  )
+  graphics::plot(
+    as.integer(factor(cells$cell_type, levels = rownames(values))),
+    as.integer(factor(cells$domain, levels = domain_order)),
+    pch = 21, bg = palette[color_index], col = "black",
+    cex = 2.5 * cells$size^0.75, axes = FALSE,
+    xlim = c(0.5, nrow(values) + 9),
+    xlab = "", ylab = "Spatial domain (complete-linkage order)",
+    main = paste0("Cluster ~ full cell type enrichment (K=", k, ")")
+  )
+  graphics::axis(
+    1, at = seq_len(nrow(values)), labels = rownames(values),
+    las = 2, cex.axis = 1
+  )
+  graphics::axis(
+    2, at = seq_along(domain_order), labels = domain_order, las = 1
+  )
+  graphics::box()
+  graphics::mtext("Cell type", side = 1, line = 16)
+  graphics::legend(
+    x = nrow(values) + 1, y = max(seq_along(domain_order)), xjust = 0,
+    legend = c("depleted", "positive < 0.58", "enriched >= 0.58"),
+    pt.bg = c("#3B4CC0", "darkgrey", "#B40426"),
+    pch = 21, cex = 1, title = "log2 observed/expected", bty = "n"
+  )
+}
+
+plot_heatmap <- function(x, title, limits = NULL, annotate = FALSE,
+                         pvalue = NULL, significance = NULL) {
+  x <- as.matrix(x)
+  plotted <- x
+  plotted[!is.finite(plotted)] <- NA_real_
+  if (is.null(limits)) {
+    limits <- range(plotted, finite = TRUE)
+  }
+  if (length(limits) != 2L || any(!is.finite(limits)) || limits[[1L]] >= 0 ||
+      limits[[2L]] <= 0) {
+    stop("Heatmap limits must be finite and span zero, as required by TwoSlopeNorm.")
+  }
+  palette <- grDevices::hcl.colors(101, "Blue-Red 3", rev = TRUE)
+  graphics::image(
+    seq_len(ncol(plotted)), seq_len(nrow(plotted)), t(plotted),
+    col = palette, zlim = limits, axes = FALSE,
+    xlab = "target domain", ylab = "source domain", main = title,
+    useRaster = TRUE
+  )
+  graphics::axis(
+    1, at = seq_len(ncol(plotted)), labels = colnames(plotted), las = 2
+  )
+  graphics::axis(
+    2, at = seq_len(nrow(plotted)), labels = rownames(plotted), las = 2
+  )
+  graphics::box()
+  if (annotate) {
+    for (i in seq_len(nrow(plotted))) for (j in seq_len(ncol(plotted))) {
+      if (!is.finite(plotted[i, j])) next
+      significant <- !is.null(pvalue) && !is.null(significance) &&
+        is.finite(pvalue[i, j]) && pvalue[i, j] <= significance
+      label <- paste0(sprintf("%.2f", plotted[i, j]), if (significant) "*" else "")
+      graphics::text(j, i, label, cex = 1)
+    }
+  }
+}
+```
+
+# Scope and artifact roles
+
+This report consumes regenerated outputs under a new result root. The frozen
+Phase-0 report and artifacts are provisional/stale and are not used here. The
+primary result is whatever K the R AutoK run selected independently; it is never
+fixed to K=4 or K=11. The K=11 panel is a separate `torch_gmm_fit()` sensitivity
+fit corresponding to `Cluster(n_clusters=11, random_state=12345)`. Its integer
+seed is matched, but R and Python use different initialization and random-number
+streams, so this does not claim seed-identical fitted parameters. Published H5AD
+`cluster_cellcharter` labels are retained only as a third reference artifact and
+are not plotted as the R tutorial fit.
+
+```{r roles, echo=TRUE}
+role_table <- do.call(rbind, lapply(manifest$roles, function(x) data.frame(
+  role_id = x$role_id,
+  k = x$k,
+  seed = if (is.na(x$seed)) "NA (not an R fit)" else as.character(x$seed),
+  model_path = if (is.na(x$model_path)) "NA (published labels)" else x$model_path,
+  cell_order_sha256 = x$cell_order_sha256,
+  aggregation_data_id = x$aggregation_data_id,
+  stringsAsFactors = FALSE
+)))
+knitr::kable(role_table, caption = "Non-interchangeable analysis roles")
+```
+
+Only BALBc-1 and early MRL-4 are displayed in maps. Enrichment and proximity
+statistics use all nine libraries. The full `cell_type` annotation is used for
+the log2 observed/expected dot plot with `size_threshold=0.58`,
+`color_threshold=0.58`, and the CellCharter v0.2.0 default clustered labels.
+
+# AutoK stability and K selection
+
+The points are all saved neighboring-K Fowlkes--Mallows comparisons from the
+seven repeated fits; the line is their mean. K=1 is shown as non-estimable
+because this criterion requires fitted solutions on both neighboring K values.
+K=4 is the independently selected global maximum. K=11 is annotated only as
+the predeclared tutorial-matched sensitivity and lies on the secondary K=10--11
+stability shoulder.
+
+```{r autok-stability, echo=TRUE, out.width="100%", fig.alt="Mouse-spleen neighboring-K Fowlkes-Mallows stability from K=1 through K=20; K=4 is selected and K=11 is highlighted"}
+knitr::include_graphics(manifest$autok_stability_plot)
+```
+
+# Independently R-selected AutoK primary analysis
+
+```{r primary-load, echo=TRUE}
+primary_k <- manifest$primary_k
+primary_paths <- manifest$artifacts$Primary
+primary_map <- readRDS(primary_paths[["map_input"]])
+primary_enrichment <- readRDS(primary_paths[["enrichment"]])
+primary_nhood <- readRDS(primary_paths[["nhood"]])
+primary_mrl_balbc <- readRDS(primary_paths[["differential_mrl_balbc"]])
+primary_balbc_mrl <- readRDS(primary_paths[["differential_balbc_mrl"]])
+```
+
+## BALBc-1 and early MRL-4 domains
+
+```{r primary-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Primary K=4 spatial domains on BALBc-1 and early MRL-4; domain is encoded by both colour and point shape"}
+plot_spatial_pair(primary_map, primary_k)
+```
+
+```{r primary-map-table, echo=TRUE}
+knitr::kable(
+  as.data.frame(table(sample = primary_map$sample, domain = primary_map$domain)),
+  caption = "Accessible cell counts underlying the primary domain maps"
+)
+```
+
+## Cluster ~ full cell type dot plot (log2 observed/expected)
+
+```{r primary-dotplot, echo=TRUE, fig.width=18, fig.height=9, fig.alt="Cell type by primary K=4 domain dot plot; colour and area encode log2 observed-to-expected enrichment"}
+graphics::par(mar = c(18, 6, 3, 1))
+plot_enrichment_dotplot(primary_enrichment, primary_k)
+```
+
+```{r primary-dotplot-table, echo=TRUE}
+primary_enrichment_table <- as.data.frame(
+  as.table(primary_enrichment$enrichment), stringsAsFactors = FALSE
+)
+names(primary_enrichment_table) <- c("cell_type", "domain", "log2_enrichment")
+knitr::kable(primary_enrichment_table,
+             caption = "Values underlying the primary enrichment dot plot")
+```
+
+## BALBc and MRL neighborhood enrichment
+
+```{r primary-nhood, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at primary K=4"}
+graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
+plot_heatmap(
+  primary_nhood$BALBc$enrichment, "Healthy spleen — BALBc",
+  limits = c(-1, 1), annotate = TRUE
+)
+plot_heatmap(
+  primary_nhood$MRL$enrichment, "Systemic lupus — MRL",
+  limits = c(-1, 1), annotate = TRUE
+)
+```
+
+```{r primary-nhood-table, echo=TRUE}
+primary_nhood_table <- rbind(
+  matrix_long(primary_nhood$BALBc$enrichment, "enrichment", "BALBc"),
+  matrix_long(primary_nhood$MRL$enrichment, "enrichment", "MRL")
+)
+knitr::kable(primary_nhood_table,
+             caption = "Values underlying the primary neighborhood heatmaps")
+```
+
+## Differential neighborhood enrichment in both display directions
+
+Both panels reuse one sample-level permutation result (`n_perms=100`). A star
+marks directional empirical `p <= 0.05`; reversing the display negates only the
+effect and reuses the same permutation counts and p-values.
+
+```{r primary-differential, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed BALBc minus MRL display"}
+graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
+plot_heatmap(
+  primary_mrl_balbc$effect, "MRL vs BALBc", annotate = TRUE,
+  pvalue = primary_mrl_balbc$pvalue, significance = 0.05
+)
+plot_heatmap(
+  primary_balbc_mrl$effect, "BALBc vs MRL", annotate = TRUE,
+  pvalue = primary_balbc_mrl$pvalue, significance = 0.05
+)
+```
+
+```{r primary-differential-table, echo=TRUE}
+primary_diff_table <- matrix_long(primary_mrl_balbc$effect, "MRL_minus_BALBc")
+primary_diff_table$empirical_pvalue <- as.vector(primary_mrl_balbc$pvalue)
+knitr::kable(primary_diff_table,
+             caption = "Values underlying the primary differential heatmaps")
+```
+
+# Standalone tutorial-matched K=11 sensitivity analysis
+
+```{r k11-load, echo=TRUE}
+k11_paths <- manifest$artifacts$TutorialK11
+k11_map <- readRDS(k11_paths[["map_input"]])
+k11_enrichment <- readRDS(k11_paths[["enrichment"]])
+k11_nhood <- readRDS(k11_paths[["nhood"]])
+k11_mrl_balbc <- readRDS(k11_paths[["differential_mrl_balbc"]])
+k11_balbc_mrl <- readRDS(k11_paths[["differential_balbc_mrl"]])
+```
+
+## BALBc-1 and early MRL-4 domains
+
+```{r k11-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="K=11 sensitivity spatial domains on BALBc-1 and early MRL-4; domain is encoded by both colour and point shape"}
+plot_spatial_pair(k11_map, 11L)
+```
+
+```{r k11-map-table, echo=TRUE}
+knitr::kable(
+  as.data.frame(table(sample = k11_map$sample, domain = k11_map$domain)),
+  caption = "Accessible cell counts underlying the K=11 domain maps"
+)
+```
+
+## Cluster ~ full cell type dot plot (log2 observed/expected)
+
+```{r k11-dotplot, echo=TRUE, fig.width=18, fig.height=10, fig.alt="Cell type by K=11 sensitivity domain dot plot; colour and area encode log2 observed-to-expected enrichment"}
+graphics::par(mar = c(18, 6, 3, 1))
+plot_enrichment_dotplot(k11_enrichment, 11L)
+```
+
+```{r k11-dotplot-table, echo=TRUE}
+k11_enrichment_table <- as.data.frame(
+  as.table(k11_enrichment$enrichment), stringsAsFactors = FALSE
+)
+names(k11_enrichment_table) <- c("cell_type", "domain", "log2_enrichment")
+knitr::kable(k11_enrichment_table,
+             caption = "Values underlying the K=11 enrichment dot plot")
+```
+
+## BALBc and MRL neighborhood enrichment
+
+```{r k11-nhood, echo=TRUE, fig.width=14, fig.height=7, fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at K=11"}
+graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
+plot_heatmap(
+  k11_nhood$BALBc$enrichment, "Healthy spleen — BALBc (K=11)",
+  limits = c(-1, 1), annotate = TRUE
+)
+plot_heatmap(
+  k11_nhood$MRL$enrichment, "Systemic lupus — MRL (K=11)",
+  limits = c(-1, 1), annotate = TRUE
+)
+```
+
+```{r k11-nhood-table, echo=TRUE}
+k11_nhood_table <- rbind(
+  matrix_long(k11_nhood$BALBc$enrichment, "enrichment", "BALBc"),
+  matrix_long(k11_nhood$MRL$enrichment, "enrichment", "MRL")
+)
+knitr::kable(k11_nhood_table,
+             caption = "Values underlying the K=11 neighborhood heatmaps")
+```
+
+## Differential neighborhood enrichment in both display directions
+
+```{r k11-differential, echo=TRUE, fig.width=15, fig.height=7.5, fig.alt="K=11 differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed display"}
+graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
+plot_heatmap(
+  k11_mrl_balbc$effect, "MRL vs BALBc (K=11)", annotate = TRUE,
+  pvalue = k11_mrl_balbc$pvalue, significance = 0.05
+)
+plot_heatmap(
+  k11_balbc_mrl$effect, "BALBc vs MRL (K=11)", annotate = TRUE,
+  pvalue = k11_balbc_mrl$pvalue, significance = 0.05
+)
+```
+
+```{r k11-differential-table, echo=TRUE}
+k11_diff_table <- matrix_long(k11_mrl_balbc$effect, "MRL_minus_BALBc")
+k11_diff_table$empirical_pvalue <- as.vector(k11_mrl_balbc$pvalue)
+knitr::kable(k11_diff_table,
+             caption = "Values underlying the K=11 differential heatmaps")
+```
+
+# Interpretation boundary
+
+The R-selected AutoK K remains the only primary result. K=11 is a separately
+fitted tutorial sensitivity analysis. The published H5AD labels remain a
+separate reference artifact. Representation-learning equivalence is not claimed
+because the supplied trVAE representation is treated as immutable input.
+Spatial panels use base-R rendering of the exact coordinates and labels rather
+than Squidpy's plotting stack, so pixel-level visual equivalence is not claimed.
+
+# Session information
+
+```{r session-info, echo=TRUE}
+utils::sessionInfo()
+```

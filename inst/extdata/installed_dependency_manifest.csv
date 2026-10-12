@@ -1,0 +1,27 @@
+ecosystem,package,version,scope,reason,location,installed_utc,evidence,original_command_retained
+R,geometry,0.5.2,direct validation dependency,Delaunay and Qhull graph construction,results/Rlib/geometry,2026-10-06T16:17:35Z,results/Rlib/geometry/DESCRIPTION,false
+R,magic,1.6-1-1,transitive validation dependency,geometry dependency,results/Rlib/magic,2026-10-06T16:17:25Z,results/Rlib/magic/DESCRIPTION,false
+R,lpSolve,5.6.23,transitive validation dependency,geometry dependency,results/Rlib/lpSolve,2026-10-06T16:17:26Z,results/Rlib/lpSolve/DESCRIPTION,false
+R,linprog,0.9-6,transitive validation dependency,geometry dependency,results/Rlib/linprog,2026-10-06T16:17:34Z,results/Rlib/linprog/DESCRIPTION,false
+R,RcppProgress,0.4.2,transitive validation dependency,geometry linking dependency,results/Rlib/RcppProgress,2026-10-06T16:17:34Z,results/Rlib/RcppProgress/DESCRIPTION,false
+Python,pip,26.2.1,diagnostic bootstrap,isolated pip bootstrap,results/reference/python-tools,2026-10-06T16:23:26Z,results/reference/python-tools/pip-26.2.1.dist-info/METADATA,true
+Python,scipy,1.14.1,diagnostic only,SciPy parity environment,results/reference/python-scipy,2026-10-06T16:23:45Z,results/reference/python-scipy/scipy-1.14.1.dist-info/METADATA,true
+Python,h5py,3.12.1,diagnostic only,HDF5 fixture inspection,results/reference/python-scipy,2026-10-06T16:23:44Z,results/reference/python-scipy/h5py-3.12.1.dist-info/METADATA,true
+Python,numpy,2.2.6,diagnostic transitive dependency,Resolved by pip for SciPy 1.14.1,results/reference/python-scipy,2026-10-06T16:23:43Z,results/reference/python-scipy/numpy-2.2.6.dist-info/METADATA,true
+Python,scipy,1.12.0,diagnostic only,SciPy version sensitivity environment,results/reference/python-scipy-1.12,2026-10-06T16:24:43Z,results/reference/python-scipy-1.12/scipy-1.12.0.dist-info/METADATA,true
+Python,h5py,3.12.1,diagnostic only,HDF5 fixture inspection,results/reference/python-scipy-1.12,2026-10-06T16:24:43Z,results/reference/python-scipy-1.12/h5py-3.12.1.dist-info/METADATA,true
+Python,numpy,1.26.4,diagnostic transitive dependency,Resolved by pip for SciPy 1.12.0,results/reference/python-scipy-1.12,2026-10-06T16:24:42Z,results/reference/python-scipy-1.12/numpy-1.26.4.dist-info/METADATA,true
+R,BiocStyle,2.38.0,documentation validation dependency,Bioconductor HTML vignette rendering,results/Rlib/BiocStyle,2026-10-12T09:41:24Z,results/Rlib/BiocStyle/DESCRIPTION,true
+R,BiocCheck,1.46.3,submission validation dependency,Bioconductor package-policy validation,results/Rlib/BiocCheck,2026-10-12T10:30:00Z,results/Rlib/BiocCheck/DESCRIPTION,true
+R,BH,1.90.0.1,transitive validation dependency,BiocCheck dependency,results/Rlib/BH,2026-10-12T10:30:00Z,results/Rlib/BH/DESCRIPTION,true
+R,bitops,1.0.9,transitive validation dependency,BiocCheck dependency,results/Rlib/bitops,2026-10-12T10:30:00Z,results/Rlib/bitops/DESCRIPTION,true
+R,filelock,1.0.3,transitive validation dependency,BiocCheck dependency,results/Rlib/filelock,2026-10-12T10:30:00Z,results/Rlib/filelock/DESCRIPTION,true
+R,RBGL,1.86.0,transitive validation dependency,BiocCheck dependency,results/Rlib/RBGL,2026-10-12T10:30:00Z,results/Rlib/RBGL/DESCRIPTION,true
+R,XML,3.99.0.23,transitive validation dependency,BiocCheck dependency,results/Rlib/XML,2026-10-12T10:30:00Z,results/Rlib/XML/DESCRIPTION,true
+R,RCurl,1.98.1.18,transitive validation dependency,BiocCheck dependency,results/Rlib/RCurl,2026-10-12T10:30:00Z,results/Rlib/RCurl/DESCRIPTION,true
+R,RUnit,0.4.33.1,transitive validation dependency,BiocCheck dependency,results/Rlib/RUnit,2026-10-12T10:30:00Z,results/Rlib/RUnit/DESCRIPTION,true
+R,BiocBaseUtils,1.12.0,transitive validation dependency,BiocCheck dependency,results/Rlib/BiocBaseUtils,2026-10-12T10:30:00Z,results/Rlib/BiocBaseUtils/DESCRIPTION,true
+R,BiocFileCache,3.0.0,transitive validation dependency,BiocCheck dependency,results/Rlib/BiocFileCache,2026-10-12T10:30:00Z,results/Rlib/BiocFileCache/DESCRIPTION,true
+R,biocViews,1.78.2,transitive validation dependency,BiocCheck dependency,results/Rlib/biocViews,2026-10-12T10:30:00Z,results/Rlib/biocViews/DESCRIPTION,true
+R,graph,1.88.1,transitive validation dependency,BiocCheck dependency,results/Rlib/graph,2026-10-12T10:30:00Z,results/Rlib/graph/DESCRIPTION,true
+R,stringdist,0.9.17,transitive validation dependency,BiocCheck dependency,results/Rlib/stringdist,2026-10-12T10:30:00Z,results/Rlib/stringdist/DESCRIPTION,true

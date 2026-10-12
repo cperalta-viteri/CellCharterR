@@ -31,3 +31,11 @@ trVAE representation from the official clustered H5AD. Cell identifiers must
 match exactly before either object is attached. The resulting SCE contains
 HDF5-backed assay and reduced-dimension matrices rather than dense copies.
 }
+\examples{
+raw <- system.file("extdata", "codex_mouse_spleen_tiny_raw.h5ad",
+                   package = "CellCharterR")
+clustered <- system.file("extdata", "codex_mouse_spleen_tiny_clustered.h5ad",
+                         package = "CellCharterR")
+example_sce <- read_codex_sce(raw, clustered)
+example_sce
+}
