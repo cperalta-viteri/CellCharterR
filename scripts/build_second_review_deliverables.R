@@ -206,12 +206,12 @@ for (analysis_name in names(analysis_roles)) {
   analysis_dir <- file.path(output_dir, analysis_slug)
   dir.create(analysis_dir, recursive = TRUE, showWarnings = FALSE)
 
-  enrichment <- cellcharter_enrichment(
+  enrichment <- .cc_enrichment(
     group = cell_type, label = labels, log2_fold_change = TRUE
   )
   nhood <- lapply(c("BALBc", "MRL"), function(group) {
     keep <- which(condition == group)
-    cellcharter_nhood_enrichment(
+    .cc_nhood_enrichment(
       combined_graph[keep, keep, drop = FALSE],
       droplevels(labels[keep]),
       log2_fold_change = FALSE,
@@ -222,7 +222,7 @@ for (analysis_name in names(analysis_roles)) {
 
   # Infer once in categorical order. The reverse panel negates only the effect
   # and reuses the exact same permutation counts and p-values.
-  differential_inference <- cellcharter_diff_nhood_enrichment(
+  differential_inference <- .cc_diff_nhood_enrichment(
     adjacency = combined_graph,
     cluster = labels,
     condition = condition,

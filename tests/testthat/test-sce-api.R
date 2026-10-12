@@ -44,10 +44,10 @@
 }
 .tiny_nll <- function(model) as.numeric(model$k)
 
-test_that("exported SCE adapters complete the tiny workflow without sample leakage", {
+test_that("public object API completes the tiny workflow without sample leakage", {
   skip_if_not_installed("geometry")
   checkpoint <- tempfile("sce-autok-")
-  sce <- cellcharter_sce_workflow(
+  sce <- cellcharter_workflow(
     .tiny_sce_fixture(), group_col = "cell_type", candidate_k = c(2L, 3L),
     checkpoint_dir = checkpoint, n_layers = 1L, n_perms = 4L, seed = 17L,
     autok_args = list(
@@ -79,7 +79,7 @@ test_that("native SpatialExperiment coordinates survive the complete workflow", 
   checkpoint <- tempfile("spe-autok-")
   spe <- .tiny_spe_fixture()
   expected_coordinates <- SpatialExperiment::spatialCoords(spe)
-  result <- cellcharter_sce_workflow(
+  result <- cellcharter_workflow(
     spe, group_col = "cell_type", candidate_k = c(2L, 3L),
     checkpoint_dir = checkpoint, n_layers = 1L, n_perms = 4L, seed = 17L,
     autok_args = list(
@@ -112,7 +112,7 @@ test_that("native SpatialExperiment coordinates survive the complete workflow", 
   expect_true(all(S4Vectors::to(subset_graph) <= ncol(subset)))
 })
 
-test_that("SCE adapters reject positional identity and stale subset metadata", {
+test_that("object API rejects positional identity and stale subset metadata", {
   skip_if_not_installed("geometry")
   sce <- .tiny_sce_fixture()
   expect_error(
@@ -120,22 +120,32 @@ test_that("SCE adapters reject positional identity and stale subset metadata", {
     "order mismatch", fixed = TRUE
   )
 
-  sce <- cellcharter_sce_graph(sce)
+  sce <- cellcharter_graph(sce)
   subset <- sce[, c(1:3, 5:7, 9:11, 13:15)]
   pairs <- SingleCellExperiment::colPair(subset, "cellcharter_graph")
   expect_true(all(S4Vectors::from(pairs) <= ncol(subset)))
   expect_true(all(S4Vectors::to(pairs) <= ncol(subset)))
   expect_error(
-    cellcharter_sce_aggregate(subset),
+    cellcharter_aggregate(subset),
     "stale after cell reordering or subsetting", fixed = TRUE
   )
 })
 
-test_that("SCE graph errors identify a degenerate physical sample", {
+test_that("graph errors identify a degenerate physical sample", {
   skip_if_not_installed("geometry")
   sce <- .tiny_sce_fixture()
   spatial <- SingleCellExperiment::reducedDim(sce, "spatial")
   spatial[1:4, ] <- cbind(1:4, 1:4)
   SingleCellExperiment::reducedDim(sce, "spatial") <- spatial
-  expect_error(cellcharter_sce_graph(sce), "sample-local graph for `A1`")
+  expect_error(cellcharter_graph(sce), "sample-local graph for `A1`")
+})
+
+test_that("legacy SCE-prefixed functions warn and forward", {
+  skip_if_not_installed("geometry")
+  expect_warning(
+    result <- cellcharter_sce_graph(.tiny_spe_fixture()),
+    "deprecated"
+  )
+  expect_s4_class(result, "SpatialExperiment")
+  expect_true("cellcharter_graph" %in% SingleCellExperiment::colPairNames(result))
 })

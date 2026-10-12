@@ -1,6 +1,6 @@
-# High-level SingleCellExperiment adapters. The numerical kernels remain
-# independently usable, while these functions make identity-sensitive wiring
-# explicit and keep every workflow stage attached to the same SCE.
+# High-level SpatialExperiment API. Numerical kernels use internal `.cc_*`
+# names, while these functions keep identity-sensitive workflow state attached
+# to one SpatialExperiment (or compatible SingleCellExperiment).
 
 .cc_sce_coldata <- function(sce, name, context = "column") {
   .cc_validate_sce_identity(sce)
@@ -106,7 +106,7 @@
   graph
 }
 
-#' Build sample-local CellCharter graphs on a SingleCellExperiment
+#' Build sample-local CellCharter graphs on a SpatialExperiment
 #'
 #' Delaunay graphs are built independently for every physical sample, then one
 #' global long-edge cutoff is calculated across those graph blocks. The final
@@ -134,11 +134,11 @@
 #' SingleCellExperiment::reducedDim(example_sce, "spatial") <- cbind(
 #'   x = c(0, 1, 0, 1, 0.5, 1.5), y = c(0, 0, 1, 1, 0.5, 0.5)
 #' )
-#' example_sce <- cellcharter_sce_graph(example_sce)
+#' example_sce <- cellcharter_graph(example_sce)
 #' SingleCellExperiment::colPairNames(example_sce)
 #' @export
-cellcharter_sce_graph <- function(sce, spatial = "spatial", sample_col = "sample",
-                                  graph_name = "cellcharter_graph", percentile = 99) {
+cellcharter_graph <- function(sce, spatial = "spatial", sample_col = "sample",
+                              graph_name = "cellcharter_graph", percentile = 99) {
   coordinates <- .cc_sce_spatial_coordinates(sce, spatial)
   coordinate_source <- attr(coordinates, "cellcharterr_coordinate_source")
   attr(coordinates, "cellcharterr_coordinate_source") <- NULL
@@ -191,7 +191,7 @@ cellcharter_sce_graph <- function(sce, spatial = "spatial", sample_col = "sample
   )
 }
 
-#' Aggregate CellCharter neighborhoods on a SingleCellExperiment
+#' Aggregate CellCharter neighborhoods on a SpatialExperiment
 #'
 #' @param sce A graph-annotated `SingleCellExperiment`.
 #' @param representation Input name in `reducedDims(sce)`.
@@ -208,12 +208,12 @@ cellcharter_sce_graph <- function(sce, spatial = "spatial", sample_col = "sample
 #'   "extdata", "codex_mouse_spleen_tiny_workflow.rds",
 #'   package = "CellCharterR"
 #' ))
-#' example_sce <- cellcharter_sce_aggregate(
+#' example_sce <- cellcharter_aggregate(
 #'   example_sce, output = "example_aggregation", n_layers = 1
 #' )
 #' dim(SingleCellExperiment::reducedDim(example_sce, "example_aggregation"))
 #' @export
-cellcharter_sce_aggregate <- function(
+cellcharter_aggregate <- function(
     sce, representation = "X_trVAE", graph_name = "cellcharter_graph",
     sample_col = "sample", output = "X_cellcharter", n_layers = 3L,
     filepath = NULL, block_rows = 8192L) {
@@ -224,12 +224,12 @@ cellcharter_sce_aggregate <- function(
   adjacency <- lapply(rows, function(i) graph[i, i, drop = FALSE])
 
   if (is.null(filepath)) {
-    pieces <- Map(function(i, g) cellcharter_aggregate(x[i, , drop = FALSE], g, n_layers),
+    pieces <- Map(function(i, g) .cc_aggregate(x[i, , drop = FALSE], g, n_layers),
                   rows, adjacency)
     value <- matrix(NA_real_, nrow = ncol(sce), ncol = ncol(pieces[[1L]]))
     for (id in names(rows)) value[rows[[id]], ] <- as.matrix(pieces[[id]])
   } else {
-    value <- cellcharter_aggregate_hdf5(
+    value <- .cc_aggregate_hdf5(
       x, adjacency, rows, filepath = filepath, name = output,
       n_layers = n_layers, block_rows = block_rows
     )
@@ -268,7 +268,7 @@ cellcharter_sce_aggregate <- function(
 #'   (seq_len(nrow(newdata)) - 1L) %% model$k
 #' }
 #' checkpoint <- tempfile("CellCharterR-example-")
-#' example_sce <- cellcharter_sce_cluster(
+#' example_sce <- cellcharter_cluster(
 #'   example_sce, representation = "X_cellcharter_tiny",
 #'   candidate_k = c(2L, 3L), checkpoint_dir = checkpoint,
 #'   domain_col = "example_domain", max_runs = 2L, convergence_tol = 0,
@@ -278,7 +278,7 @@ cellcharter_sce_aggregate <- function(
 #' table(example_sce$example_domain)
 #' unlink(checkpoint, recursive = TRUE)
 #' @export
-cellcharter_sce_cluster <- function(
+cellcharter_cluster <- function(
     sce, representation = "X_cellcharter", candidate_k,
     checkpoint_dir, domain_col = "cellcharter_domain", ...) {
   x <- .cc_sce_reduced_dim(sce, representation)
@@ -331,24 +331,24 @@ cellcharter_sce_cluster <- function(
 #'   "extdata", "codex_mouse_spleen_tiny_workflow.rds",
 #'   package = "CellCharterR"
 #' ))
-#' example_sce <- cellcharter_sce_enrichment(
+#' example_sce <- cellcharter_enrichment(
 #'   example_sce, group_col = "cell_type_reduced", domain_col = "tiny_domain"
 #' )
 #' names(S4Vectors::metadata(example_sce)$CellCharterR$results$enrichment$value)
 #' @export
-cellcharter_sce_enrichment <- function(
+cellcharter_enrichment <- function(
     sce, group_col, domain_col = "cellcharter_domain",
     result_name = "enrichment", log2_fold_change = TRUE) {
   .cc_sce_require_stage(sce, paste0("clustering:", domain_col))
   group <- .cc_sce_coldata(sce, group_col, "group column")
   domain <- .cc_sce_coldata(sce, domain_col, "domain column")
-  result <- cellcharter_enrichment(group, domain, log2_fold_change)
+  result <- .cc_enrichment(group, domain, log2_fold_change)
   .cc_sce_store_result(sce, result_name, result,
                        list(group_col = group_col, domain_col = domain_col))
 }
 
 #' Attach CellCharter neighborhood enrichment to an SCE
-#' @inheritParams cellcharter_sce_enrichment
+#' @inheritParams cellcharter_enrichment
 #' @param graph_name Graph name in `colPairs(sce)`.
 #' @param only_inter Exclude within-domain edges.
 #' @return The updated `SingleCellExperiment`.
@@ -357,19 +357,19 @@ cellcharter_sce_enrichment <- function(
 #'   "extdata", "codex_mouse_spleen_tiny_workflow.rds",
 #'   package = "CellCharterR"
 #' ))
-#' example_sce <- cellcharter_sce_nhood_enrichment(
+#' example_sce <- cellcharter_nhood_enrichment(
 #'   example_sce, domain_col = "tiny_domain"
 #' )
 #' S4Vectors::metadata(example_sce)$CellCharterR$results$nhood_enrichment$value$enrichment
 #' @export
-cellcharter_sce_nhood_enrichment <- function(
+cellcharter_nhood_enrichment <- function(
     sce, graph_name = "cellcharter_graph", domain_col = "cellcharter_domain",
     result_name = "nhood_enrichment", log2_fold_change = FALSE,
     only_inter = TRUE) {
   .cc_sce_require_stage(sce, paste0("clustering:", domain_col))
   graph <- .cc_sce_graph_matrix(sce, graph_name)
   domain <- .cc_sce_coldata(sce, domain_col, "domain column")
-  result <- cellcharter_nhood_enrichment(graph, domain, log2_fold_change, only_inter)
+  result <- .cc_nhood_enrichment(graph, domain, log2_fold_change, only_inter)
   .cc_sce_store_result(
     sce, result_name, result,
     list(graph_name = graph_name, domain_col = domain_col,
@@ -378,7 +378,7 @@ cellcharter_sce_nhood_enrichment <- function(
 }
 
 #' Attach differential CellCharter neighborhood enrichment to an SCE
-#' @inheritParams cellcharter_sce_nhood_enrichment
+#' @inheritParams cellcharter_nhood_enrichment
 #' @param condition_col Condition field in `colData(sce)`.
 #' @param sample_col Library/sample field in `colData(sce)`.
 #' @param condition_groups Two conditions to compare.
@@ -391,13 +391,13 @@ cellcharter_sce_nhood_enrichment <- function(
 #'   "extdata", "codex_mouse_spleen_tiny_workflow.rds",
 #'   package = "CellCharterR"
 #' ))
-#' example_sce <- cellcharter_sce_diff_nhood_enrichment(
+#' example_sce <- cellcharter_diff_nhood_enrichment(
 #'   example_sce, domain_col = "tiny_domain",
 #'   condition_groups = c("BALBc", "MRL"), n_perms = 5L, seed = 1L
 #' )
 #' S4Vectors::metadata(example_sce)$CellCharterR$results$diff_nhood_enrichment$value$pvalue
 #' @export
-cellcharter_sce_diff_nhood_enrichment <- function(
+cellcharter_diff_nhood_enrichment <- function(
     sce, graph_name = "cellcharter_graph", domain_col = "cellcharter_domain",
     condition_col = "condition", sample_col = "sample",
     result_name = "diff_nhood_enrichment", condition_groups = NULL,
@@ -408,7 +408,7 @@ cellcharter_sce_diff_nhood_enrichment <- function(
   domain <- .cc_sce_coldata(sce, domain_col, "domain column")
   condition <- .cc_sce_coldata(sce, condition_col, "condition column")
   sample <- .cc_sce_coldata(sce, sample_col, "sample column")
-  result <- cellcharter_diff_nhood_enrichment(
+  result <- .cc_diff_nhood_enrichment(
     graph, domain, condition, sample, condition_groups = condition_groups,
     n_perms = n_perms, seed = seed, log2_fold_change = log2_fold_change,
     only_inter = only_inter, permutation_mode = match.arg(permutation_mode)
@@ -423,7 +423,7 @@ cellcharter_sce_diff_nhood_enrichment <- function(
   )
 }
 
-#' Run the complete CellCharter SCE workflow
+#' Run the complete CellCharter SpatialExperiment workflow
 #'
 #' This convenience function composes the exported SCE adapters. Expensive
 #' full datasets should use the staged functions directly so each stage can be
@@ -452,7 +452,7 @@ cellcharter_sce_diff_nhood_enrichment <- function(
 #'   (seq_len(nrow(newdata)) - 1L) %% model$k
 #' }
 #' checkpoint <- tempfile("CellCharterR-workflow-")
-#' example_sce <- cellcharter_sce_workflow(
+#' example_sce <- cellcharter_workflow(
 #'   codex_mouse_spleen_tiny, group_col = "cell_type_reduced",
 #'   candidate_k = c(2L, 3L), checkpoint_dir = checkpoint,
 #'   n_layers = 1L, n_perms = 2L, seed = 1L,
@@ -466,15 +466,15 @@ cellcharter_sce_diff_nhood_enrichment <- function(
 #' example_sce
 #' unlink(checkpoint, recursive = TRUE)
 #' @export
-cellcharter_sce_workflow <- function(
+cellcharter_workflow <- function(
     sce, group_col, candidate_k, checkpoint_dir,
     spatial = "spatial", representation = "X_trVAE", sample_col = "sample",
     condition_col = "condition", graph_name = "cellcharter_graph",
     aggregated = "X_cellcharter", domain_col = "cellcharter_domain",
     n_layers = 3L, condition_groups = NULL, n_perms = 100L, seed = 1L,
     autok_args = list()) {
-  sce <- cellcharter_sce_graph(sce, spatial, sample_col, graph_name)
-  sce <- cellcharter_sce_aggregate(
+  sce <- cellcharter_graph(sce, spatial, sample_col, graph_name)
+  sce <- cellcharter_aggregate(
     sce, representation, graph_name, sample_col, aggregated, n_layers
   )
   cluster_args <- c(
@@ -482,10 +482,10 @@ cellcharter_sce_workflow <- function(
          checkpoint_dir = checkpoint_dir, domain_col = domain_col, seed = seed),
     autok_args
   )
-  sce <- do.call(cellcharter_sce_cluster, cluster_args)
-  sce <- cellcharter_sce_enrichment(sce, group_col, domain_col)
-  sce <- cellcharter_sce_nhood_enrichment(sce, graph_name, domain_col)
-  cellcharter_sce_diff_nhood_enrichment(
+  sce <- do.call(cellcharter_cluster, cluster_args)
+  sce <- cellcharter_enrichment(sce, group_col, domain_col)
+  sce <- cellcharter_nhood_enrichment(sce, graph_name, domain_col)
+  cellcharter_diff_nhood_enrichment(
     sce, graph_name, domain_col, condition_col, sample_col,
     condition_groups = condition_groups, n_perms = n_perms, seed = seed
   )

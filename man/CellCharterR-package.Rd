@@ -8,7 +8,7 @@
 \description{
 CellCharterR provides an SPE-first implementation of the post-representation
 CellCharter workflow, while retaining compatibility with ordinary SCEs.
-Start with \code{\link[=cellcharter_sce_workflow]{cellcharter_sce_workflow()}} for a compact
+Start with \code{\link[=cellcharter_workflow]{cellcharter_workflow()}} for a compact
 example or use the staged graph, aggregation, clustering, and enrichment
 adapters when durable checkpoints are required.
 }

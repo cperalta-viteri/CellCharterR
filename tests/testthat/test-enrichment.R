@@ -2,7 +2,7 @@ test_that("cell-type enrichment matches CellCharter v0.2.0 proportions", {
   cell_type <- factor(c("A", "A", "B", "B", "A", "B"), levels = c("A", "B"))
   domain <- factor(c("D1", "D1", "D2", "D2", "D2", "D1"), levels = c("D1", "D2"))
 
-  result <- cellcharter_enrichment(cell_type, domain)
+  result <- .cc_enrichment(cell_type, domain)
   expected_observed <- matrix(
     c(2 / 3, 1 / 3, 1 / 3, 2 / 3), nrow = 2L,
     dimnames = list(c("A", "B"), c("D1", "D2"))
@@ -27,7 +27,7 @@ test_that("asymmetric inter-domain expectation uses target cell fractions", {
   )
   cluster <- factor(c("A", "A", "B", "C"), levels = c("A", "B", "C"))
 
-  result <- cellcharter_nhood_enrichment(adjacency, cluster)
+  result <- .cc_nhood_enrichment(adjacency, cluster)
   expected_observed <- matrix(
     c(NA, 2 / 3, 1 / 3,
       2 / 3, NA, 1 / 3,
@@ -71,11 +71,11 @@ test_that("differential permutations are deterministic and library-level", {
   condition <- factor(rep(c("BALBc", "BALBc", "MRL", "MRL"), each = 3L),
                       levels = c("BALBc", "MRL"))
 
-  first <- cellcharter_diff_nhood_enrichment(
+  first <- .cc_diff_nhood_enrichment(
     adjacency, cluster, condition, library,
     condition_groups = c("BALBc", "MRL"), n_perms = 25L, seed = 81L
   )
-  second <- cellcharter_diff_nhood_enrichment(
+  second <- .cc_diff_nhood_enrichment(
     adjacency, cluster, condition, library,
     condition_groups = c("BALBc", "MRL"), n_perms = 25L, seed = 81L
   )
@@ -116,7 +116,7 @@ test_that("v0.2.0 differential null exactly replays unequal 3-vs-6 libraries", {
   n_perms <- 37L
   seed <- 9182L
 
-  result <- cellcharter_diff_nhood_enrichment(
+  result <- .cc_diff_nhood_enrichment(
     adjacency, cluster, condition, library,
     condition_groups = c("BALBc", "MRL"),
     n_perms = n_perms, seed = seed,
@@ -125,7 +125,7 @@ test_that("v0.2.0 differential null exactly replays unequal 3-vs-6 libraries", {
 
   enrichment_for <- function(ids) {
     rows <- which(as.character(library) %in% ids)
-    cellcharter_nhood_enrichment(
+    .cc_nhood_enrichment(
       adjacency[rows, rows, drop = FALSE], droplevels(cluster[rows]),
       log2_fold_change = FALSE, only_inter = TRUE
     )$enrichment
@@ -176,7 +176,7 @@ test_that("v0.2.0 differential null exactly replays unequal 3-vs-6 libraries", {
 
   # Supplying plot order in reverse must not silently change the inferential
   # null from a three-draw BALBc prefix to a six-draw MRL prefix.
-  reverse_request <- cellcharter_diff_nhood_enrichment(
+  reverse_request <- .cc_diff_nhood_enrichment(
     adjacency, cluster, condition, library,
     condition_groups = c("MRL", "BALBc"),
     n_perms = n_perms, seed = seed,
@@ -213,13 +213,13 @@ test_that("differential enrichment rejects split libraries and cross-library edg
   condition <- factor(c("BALBc", "MRL"))
 
   expect_error(
-    cellcharter_diff_nhood_enrichment(
+    .cc_diff_nhood_enrichment(
       adjacency, cluster, condition, factor(c("same", "same")), n_perms = 2L
     ),
     "exactly one condition"
   )
   expect_error(
-    cellcharter_diff_nhood_enrichment(
+    .cc_diff_nhood_enrichment(
       adjacency, cluster, condition, factor(c("lib1", "lib2")), n_perms = 2L
     ),
     "edges between physical libraries"

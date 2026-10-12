@@ -197,19 +197,19 @@ full_spe <- read_codex_spe(
   clustered_h5ad = file.path(destination, "codex_mouse_spleen_clustered.h5ad")
 )
 
-full_spe <- cellcharter_sce_graph(
+full_spe <- cellcharter_graph(
   full_spe,
   spatial = "spatial",       # resolves to native spatialCoords(full_spe)
   sample_col = "sample"
 )
-full_spe <- cellcharter_sce_aggregate(
+full_spe <- cellcharter_aggregate(
   full_spe,
   representation = "X_trVAE",
   n_layers = 3L,
   filepath = file.path(results_dir, "X_cellcharter.h5"),
   block_rows = 8192L
 )
-full_spe <- cellcharter_sce_cluster(
+full_spe <- cellcharter_cluster(
   full_spe,
   candidate_k = c(2L, 20L),
   checkpoint_dir = file.path(results_dir, "AutoK"),
@@ -219,11 +219,11 @@ full_spe <- cellcharter_sce_cluster(
   fit_args = list(device = "auto"),
   predict_args = list(device = "auto")
 )
-full_spe <- cellcharter_sce_enrichment(
+full_spe <- cellcharter_enrichment(
   full_spe, group_col = "cell_type_reduced"
 )
-full_spe <- cellcharter_sce_nhood_enrichment(full_spe)
-full_spe <- cellcharter_sce_diff_nhood_enrichment(
+full_spe <- cellcharter_nhood_enrichment(full_spe)
+full_spe <- cellcharter_diff_nhood_enrichment(
   full_spe,
   condition_col = "condition",
   sample_col = "sample",

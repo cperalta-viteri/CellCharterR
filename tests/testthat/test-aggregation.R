@@ -5,7 +5,7 @@ test_that("aggregation uses exclusive shortest-path rings", {
     x = 1, dims = c(5, 5)
   )
   x <- matrix(c(10, 20, 30, 40, 50), ncol = 1)
-  observed <- as.matrix(cellcharter_aggregate(x, path, n_layers = 3))
+  observed <- as.matrix(.cc_aggregate(x, path, n_layers = 3))
 
   expected <- cbind(
     native = c(10, 20, 30, 40, 50),
@@ -38,7 +38,7 @@ test_that("mean aggregation matches the pinned CellCharter v0.2.0 fixture", {
     c(120, 28 / 3, 26 / 3, 3, 262 / 3, 1, 1, 1, 8.5),
     c(3.75, 112 / 3, 176 / 3, 96, 193 / 3, 256, 256, 256, 136)
   )
-  observed <- as.matrix(cellcharter_aggregate(x, graph, 2))
+  observed <- as.matrix(.cc_aggregate(x, graph, 2))
 
   expect_equal(observed, cbind(x, hop1, hop2), tolerance = 1e-6)
 })
@@ -48,7 +48,7 @@ test_that("cycles do not reintroduce focal or previously visited cells", {
     matrix(c(0, 1, 1, 1, 0, 1, 1, 1, 0), 3, 3, byrow = TRUE),
     sparse = TRUE
   )
-  observed <- as.matrix(cellcharter_aggregate(matrix(1:3, ncol = 1), triangle, 3))
+  observed <- as.matrix(.cc_aggregate(matrix(1:3, ncol = 1), triangle, 3))
 
   expect_equal(observed[, 1], 1:3)
   expect_equal(observed[, 2], c(2.5, 2, 1.5))
@@ -61,7 +61,7 @@ test_that("zero-neighbor rows are zero and samples remain isolated", {
     dims = c(5, 5)
   )
   x <- matrix(c(1, 2, 100, 200, 999), ncol = 1)
-  observed <- as.matrix(cellcharter_aggregate(x, paired, 2))
+  observed <- as.matrix(.cc_aggregate(x, paired, 2))
 
   expect_equal(observed[, 2], c(2, 1, 200, 100, 0))
   expect_equal(observed[, 3], rep(0, 5))
@@ -74,7 +74,7 @@ test_that("explicit layer vectors select only requested exclusive rings", {
   )
   Matrix::diag(path) <- 10
   x <- cbind(a = 1:3, b = 11:13)
-  observed <- as.matrix(cellcharter_aggregate(x, path, n_layers = c(2, 0, 2)))
+  observed <- as.matrix(.cc_aggregate(x, path, n_layers = c(2, 0, 2)))
 
   expect_equal(dim(observed), c(3L, 4L))
   expect_equal(observed[, 1:2], x)
@@ -87,12 +87,12 @@ test_that("aggregation validates topology, dimensions, layers, and dense values"
   )
   asymmetric <- Matrix::sparseMatrix(i = 1, j = 2, x = 1, dims = c(2, 2))
 
-  expect_error(cellcharter_aggregate(matrix(1, 3, 1), graph), "one row and column")
-  expect_error(cellcharter_aggregate(matrix(1, 2, 1), asymmetric), "symmetric")
-  expect_error(cellcharter_aggregate(matrix(1, 2, 1), graph, c(1, 2)), "include 0")
-  expect_error(cellcharter_aggregate(matrix(1, 2, 1), graph, -1), "non-negative")
-  expect_error(cellcharter_aggregate(matrix(1, 2, 1), graph, 1.5), "whole numbers")
-  expect_error(cellcharter_aggregate(matrix(c(1, NA), 2, 1), graph), "finite numeric")
+  expect_error(.cc_aggregate(matrix(1, 3, 1), graph), "one row and column")
+  expect_error(.cc_aggregate(matrix(1, 2, 1), asymmetric), "symmetric")
+  expect_error(.cc_aggregate(matrix(1, 2, 1), graph, c(1, 2)), "include 0")
+  expect_error(.cc_aggregate(matrix(1, 2, 1), graph, -1), "non-negative")
+  expect_error(.cc_aggregate(matrix(1, 2, 1), graph, 1.5), "whole numbers")
+  expect_error(.cc_aggregate(matrix(c(1, NA), 2, 1), graph), "finite numeric")
 })
 
 test_that("HDF5 aggregation supports explicit layers and interleaved sample rows", {
@@ -110,7 +110,7 @@ test_that("HDF5 aggregation supports explicit layers and interleaved sample rows
   filepath <- tempfile(fileext = ".h5")
   on.exit(unlink(filepath), add = TRUE)
 
-  observed <- cellcharter_aggregate_hdf5(
+  observed <- .cc_aggregate_hdf5(
     x, graphs, rows, filepath, n_layers = c(0, 1)
   )
   expected <- rbind(
@@ -151,13 +151,13 @@ test_that("HDF5 aggregation preserves semantics across fixed odd row blocks", {
   )
   graphs <- list(A = graph_a, B = graph_b)
 
-  observed <- cellcharter_aggregate_hdf5(
+  observed <- .cc_aggregate_hdf5(
     x, graphs, rows, output_path, n_layers = 3L, block_rows = 2L
   )
   expected <- matrix(NA_real_, nrow(native), ncol(native) * 4L)
   for (sample_id in names(rows)) {
     sample_rows <- rows[[sample_id]]
-    expected[sample_rows, ] <- as.matrix(cellcharter_aggregate(
+    expected[sample_rows, ] <- as.matrix(.cc_aggregate(
       native[sample_rows, , drop = FALSE], graphs[[sample_id]], n_layers = 3L
     ))
   }
@@ -183,7 +183,7 @@ test_that("HDF5 aggregation validates its row budget before creating output", {
   on.exit(unlink(output_path), add = TRUE)
 
   expect_error(
-    cellcharter_aggregate_hdf5(
+    .cc_aggregate_hdf5(
       matrix(1:4, nrow = 2L), list(A = graph), list(A = 1:2),
       output_path, block_rows = 0L
     ),
@@ -202,9 +202,14 @@ test_that("direct aggregation accepts an HDF5-backed native representation", {
     j = c(2, 1, 1, 2, 4, 3, 3, 4), x = 1, dims = c(4, 4)
   )
 
-  observed <- cellcharter_aggregate(x, pair, n_layers = 1L)
+  observed <- .cc_aggregate(x, pair, n_layers = 1L)
 
   expect_s4_class(observed, "DelayedMatrix")
+  seeds <- DelayedArray::seedApply(observed, identity)
+  expect_true(any(vapply(
+    seeds, inherits, logical(1), what = "HDF5ArraySeed"
+  )))
+  expect_gte(DelayedArray::nseed(observed), 1L)
   expect_equal(as.matrix(observed)[, 1:2], as.matrix(x))
   expect_equal(as.matrix(observed)[, 3:4], as.matrix(x)[c(2, 1, 4, 3), ])
 })

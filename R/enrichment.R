@@ -10,13 +10,8 @@
 #' @param log2_fold_change Return log2 fold changes when `TRUE`; otherwise
 #'   return fold changes.
 #' @return A list containing `observed`, `expected`, `enrichment`, and `params`.
-#' @examples
-#' cellcharter_enrichment(
-#'   group = c("B", "B", "T", "T", "B", "T"),
-#'   label = c(1, 1, 1, 2, 2, 2)
-#' )
-#' @export
-cellcharter_enrichment <- function(group, label, log2_fold_change = TRUE) {
+#' @keywords internal
+.cc_enrichment <- function(group, label, log2_fold_change = TRUE) {
   group <- .cc_complete_factor(group, "group")
   label <- .cc_complete_factor(label, "label")
   if (length(group) != length(label)) {
@@ -83,16 +78,10 @@ cellcharter_enrichment <- function(group, label, log2_fold_change = TRUE) {
 #'   v0.2.0 default `observed - expected`.
 #' @param only_inter Remove same-domain links and return an `NA` diagonal.
 #' @return A list containing `observed`, `expected`, `enrichment`, and `params`.
-#' @examples
-#' graph <- Matrix::sparseMatrix(
-#'   i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3),
-#'   x = 1, dims = c(4, 4)
-#' )
-#' cellcharter_nhood_enrichment(graph, cluster = c(1, 1, 2, 2))
-#' @export
-cellcharter_nhood_enrichment <- function(adjacency, cluster,
-                                         log2_fold_change = FALSE,
-                                         only_inter = TRUE) {
+#' @keywords internal
+.cc_nhood_enrichment <- function(adjacency, cluster,
+                                 log2_fold_change = FALSE,
+                                 only_inter = TRUE) {
   checked <- .cc_nhood_inputs(adjacency, cluster)
   .cc_nhood_from_entries(
     entries = checked$entries,
@@ -136,20 +125,8 @@ cellcharter_nhood_enrichment <- function(adjacency, cluster,
 #' @return A list with condition-specific `observed`, `expected`, and
 #'   `enrichment` matrices, the differential `effect`, `permutation_counts`,
 #'   empirical `pvalue`, and complete `params`.
-#' @examples
-#' odd <- seq(1, 8, by = 2)
-#' graph <- Matrix::sparseMatrix(
-#'   i = c(odd, odd + 1L), j = c(odd + 1L, odd),
-#'   x = 1, dims = c(8, 8)
-#' )
-#' cellcharter_diff_nhood_enrichment(
-#'   graph, cluster = rep(c(1, 2), 4),
-#'   condition = rep(c("healthy", "lupus"), each = 4),
-#'   library = rep(paste0("sample", 1:4), each = 2),
-#'   n_perms = 5, seed = 1
-#' )
-#' @export
-cellcharter_diff_nhood_enrichment <- function(
+#' @keywords internal
+.cc_diff_nhood_enrichment <- function(
     adjacency, cluster, condition, library, condition_groups = NULL,
     n_perms = 100L, seed = 0L, log2_fold_change = FALSE,
     only_inter = TRUE,

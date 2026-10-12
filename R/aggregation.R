@@ -274,15 +274,8 @@ cellcharter_global_distance_cutoff <- function(
 #' @param n_layers largest neighbourhood distance, or explicit layer vector.
 #' @return A (possibly delayed) observation-by-feature matrix with concatenated
 #'   0, 1, ..., `n_layers` features.
-#' @examples
-#' x <- matrix(seq_len(8), nrow = 4)
-#' graph <- Matrix::sparseMatrix(
-#'   i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3),
-#'   x = 1, dims = c(4, 4)
-#' )
-#' cellcharter_aggregate(x, graph, n_layers = 1)
-#' @export
-cellcharter_aggregate <- function(x, adjacency, n_layers = 3L) {
+#' @keywords internal
+.cc_aggregate <- function(x, adjacency, n_layers = 3L) {
   if (is.null(dim(x)) || length(dim(x)) != 2L || nrow(x) == 0L || ncol(x) == 0L) {
     stop("`x` must be a non-empty observation-by-feature matrix-like object.", call. = FALSE)
   }
@@ -310,9 +303,10 @@ cellcharter_aggregate <- function(x, adjacency, n_layers = 3L) {
     }
   }
   if (delayed_input) {
-    # Use the public S4 cbind generic. `acbind()` was an implementation helper
-    # and is no longer exported by recent DelayedArray releases.
-    do.call(DelayedArray::cbind, output)
+    # `acbind()` moved to S4Arrays. Calling its owning public namespace avoids
+    # DelayedArray export differences across Bioconductor releases and keeps
+    # HDF5-backed seeds lazy.
+    do.call(S4Arrays::acbind, output)
   } else {
     do.call(cbind, output)
   }
@@ -337,23 +331,10 @@ cellcharter_aggregate <- function(x, adjacency, n_layers = 3L) {
 #'   frontier memory additionally depends on graph degree and requested hops.
 #' @return An HDF5-backed `DelayedMatrix` with an `aggregation_provenance`
 #'   attribute recording the row budget and estimated dense workspace.
-#' @examples
-#' x <- matrix(seq_len(8), nrow = 4)
-#' graph <- Matrix::sparseMatrix(
-#'   i = c(1, 2, 2, 3, 3, 4), j = c(2, 1, 3, 2, 4, 3),
-#'   x = 1, dims = c(4, 4)
-#' )
-#' output <- tempfile(fileext = ".h5")
-#' aggregated <- cellcharter_aggregate_hdf5(
-#'   x, list(slide1 = graph), list(slide1 = seq_len(4)), output,
-#'   n_layers = 1, block_rows = 2
-#' )
-#' dim(aggregated)
-#' unlink(output)
-#' @export
-cellcharter_aggregate_hdf5 <- function(x, adjacency_by_sample, rows_by_sample,
-                                       filepath, name = "X_cellcharter", n_layers = 3L,
-                                       block_rows = 8192L) {
+#' @keywords internal
+.cc_aggregate_hdf5 <- function(x, adjacency_by_sample, rows_by_sample,
+                               filepath, name = "X_cellcharter", n_layers = 3L,
+                               block_rows = 8192L) {
   if (!requireNamespace("HDF5Array", quietly = TRUE)) {
     stop("Install HDF5Array for disk-backed output.", call. = FALSE)
   }

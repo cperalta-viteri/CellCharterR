@@ -961,7 +961,7 @@ aggregation_dir <- file.path(
 )
 aggregation_manifest_path <- file.path(aggregation_dir, "aggregation_manifest.rds")
 aggregation_implementation <- .stage_implementation("aggregation", list(
-  aggregate_hdf5 = cellcharter_aggregate_hdf5,
+  aggregate_hdf5 = .cc_aggregate_hdf5,
   aggregate_rows = .cc_aggregate_rows_block,
   coordinates = .cc_coordinates,
   adjacency_topology = .cc_adjacency_topology,
@@ -1077,7 +1077,7 @@ if ("aggregation" %in% requested_stages && !aggregation_checkpoint_complete) {
       )
       sample_r_heap_peak_before_mb <- .peak_r_memory_mb()
       sample_process_peak_before_mb <- .peak_process_memory_mb()
-      aggregation_output <- cellcharter_aggregate_hdf5(
+      aggregation_output <- .cc_aggregate_hdf5(
         x_sample, stats::setNames(list(graphs[[sample_id]]), sample_id),
         stats::setNames(list(seq_along(rows)), sample_id), temporary,
         name = "X_cellcharter", n_layers = 3L,
@@ -1979,7 +1979,7 @@ if ("downstream" %in% requested_stages && !downstream_checkpoint_complete) {
     cell_type_reduced, levels = sort(unique(cell_type_reduced))
   )
   colData(sce)$cell_type_reduced <- cell_type_reduced
-  enrichment <- cellcharter_enrichment(cell_type_reduced, labels)
+  enrichment <- .cc_enrichment(cell_type_reduced, labels)
   enrichment_path <- file.path(downstream_dir, "cell_type_enrichment.rds")
   .atomic_save_rds(enrichment, enrichment_path)
 
@@ -1998,7 +1998,7 @@ if ("downstream" %in% requested_stages && !downstream_checkpoint_complete) {
   condition <- droplevels(colData(sce)$condition)
   nhood <- lapply(levels(condition), function(group) {
     keep <- which(condition == group)
-    cellcharter_nhood_enrichment(
+    .cc_nhood_enrichment(
       combined_graph[keep, keep, drop = FALSE], droplevels(labels[keep])
     )
   })
@@ -2006,7 +2006,7 @@ if ("downstream" %in% requested_stages && !downstream_checkpoint_complete) {
   nhood_path <- file.path(downstream_dir, "condition_neighborhood_enrichment.rds")
   .atomic_save_rds(nhood, nhood_path)
 
-  differential <- cellcharter_diff_nhood_enrichment(
+  differential <- .cc_diff_nhood_enrichment(
     combined_graph, labels, condition, colData(sce)$sample,
     condition_groups = c("BALBc", "MRL"), n_perms = n_perms,
     seed = seed, permutation_mode = "cellcharter_v0.2.0"

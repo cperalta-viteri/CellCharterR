@@ -188,7 +188,7 @@ test_that("revised deliverables enforce tutorial display and inference semantics
     fixed = TRUE
   )
   inference_calls <- gregexpr(
-    "cellcharter_diff_nhood_enrichment\\(", builder, perl = TRUE
+    "\\.cc_diff_nhood_enrichment\\(", builder, perl = TRUE
   )[[1L]]
   expect_equal(sum(inference_calls > 0L), 1L)
 

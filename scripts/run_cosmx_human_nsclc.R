@@ -42,8 +42,8 @@ saveRDS(graphs, file.path(out_dir, "sample_graphs.rds"), compress = FALSE)
 # safe concurrent writes to the same file.
 niche_file <- file.path(out_dir, "cellcharter_features.h5")
 if (file.exists(niche_file)) file.remove(niche_file)
-X_niche <- cellcharter_aggregate_hdf5(X_scvi, graphs, rows_by_sample, niche_file,
-                                      name = "X_cellcharter", n_layers = 3L)
+X_niche <- .cc_aggregate_hdf5(X_scvi, graphs, rows_by_sample, niche_file,
+                              name = "X_cellcharter", n_layers = 3L)
 
 # K=20 follows the published analysis.  EM uses tensor algebra and CUDA when
 # R Torch can see a GPU; on CPU it streams fixed-size disk-to-device batches.

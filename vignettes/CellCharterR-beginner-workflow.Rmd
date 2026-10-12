@@ -116,7 +116,7 @@ if (!torch_ready && identical(Sys.getenv("CELLCHARTERR_REQUIRE_TORCH"), "true"))
 }
 
 if (torch_ready) {
-  spe <- cellcharter_sce_workflow(
+  spe <- cellcharter_workflow(
     spe,
     group_col = "cell_type_reduced",
     candidate_k = c(2L, 10L),
@@ -345,7 +345,7 @@ reuse such stages until they are recomputed.
 ```{r subsetting-safety}
 smaller <- spe[, seq_len(100)]
 dim(SingleCellExperiment::colPair(smaller, "cellcharter_graph"))
-try(cellcharter_sce_aggregate(
+try(cellcharter_aggregate(
   smaller,
   representation = "X_trVAE",
   graph_name = "cellcharter_graph",
@@ -362,7 +362,7 @@ cell-type enrichment, neighborhood enrichment, and differential neighborhood
 enrichment. [Open the complete mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-mouse-spleen-reproducibility.html).
 
 For a real dataset, keep large representations HDF5-backed, use
-`cellcharter_sce_aggregate(..., filepath = ...)`, place checkpoints under a
+`cellcharter_aggregate(..., filepath = ...)`, place checkpoints under a
 durable results directory, use `max_runs = 10`, and decide the K range before
 looking at stability. Biological conclusions require the complete dataset and
 appropriate replication; they must not be inferred from this teaching subset.
