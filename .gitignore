@@ -1,0 +1,12 @@
+/results/
+/..Rcheck/
+/*.Rcheck/
+/*.tar.gz
+
+# Local workflow orchestration
+/scripts/codex-quota-watchdog.mjs
+/scripts/codex_quota_watchdog.py
+
+# Generated
+  vignette R extracts
+/docs/*.R
