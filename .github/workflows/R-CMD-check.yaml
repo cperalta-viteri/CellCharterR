@@ -23,7 +23,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends strace
           Rscript -e 'BiocManager::install(c("remotes", "rcmdcheck", "BiocCheck"), ask = FALSE, update = FALSE)'
-          Rscript -e 'remotes::install_deps(dependencies = TRUE, upgrade = "never")'
+          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = TRUE, upgrade = "never")'
           Rscript -e 'torch::install_torch(type = "cpu")'
 
       - name: Build, check, and run the tiny CPU smoke test without network access
