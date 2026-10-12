@@ -1,7 +1,7 @@
 #' Tiny portable CODEX mouse-spleen teaching data
 #'
 #' A deterministic random subset of 1,000 cells from the canonical portable
-#' mouse-spleen `SingleCellExperiment`. The subset retains the protein assay,
+#' mouse-spleen `SpatialExperiment`. The subset retains the protein assay,
 #' fixed trVAE representation, spatial coordinates, previously computed
 #' aggregate representation, annotations, K=4 primary labels, K=11 sensitivity
 #' labels, and published reference labels. Teaching workflows should recompute
@@ -16,7 +16,7 @@
 #' enough to reproduce the full mouse-spleen biological results or justify a
 #' particular K.
 #'
-#' @format A `SingleCellExperiment` with 29 rows and 1,000 columns.
+#' @format A `SpatialExperiment` with 29 rows and 1,000 columns.
 #' @source CODEX mouse-spleen data, dataset DOI
 #'   \doi{10.17632/zjnpwh8m5b.1}; original CODEX publication
 #'   \doi{10.1016/j.cell.2018.07.010}.

@@ -8,6 +8,14 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
+> **Independent implementation:** CellCharterR is an independent R
+> implementation of methods described by the CellCharter project. It is not
+> affiliated with, endorsed by, or maintained by the original CellCharter
+> authors or the Computational Systems Oncology group. Questions and bug
+> reports concerning CellCharterR should be directed to the
+> [CellCharterR issue tracker](https://github.com/cperalta-viteri/CellCharterR/issues),
+> not to the upstream CellCharter project.
+
 The complete mouse-spleen analysis is the primary CellCharterR reproducibility
 report. It contains the full visible code, pinned versions, checkpoints,
 AutoK-selected K=4 result, separately labelled K=11 sensitivity analysis,

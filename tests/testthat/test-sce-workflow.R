@@ -141,8 +141,9 @@ test_that("HDF5 representation attachment validates and records cell order", {
   )
 })
 
-test_that("packaged tiny H5AD pair reconstructs the portable tiny SCE", {
+test_that("packaged tiny H5AD pair reconstructs the portable tiny SPE", {
   skip_if_not_installed("HDF5Array")
+  skip_if_not_installed("SpatialExperiment")
   raw <- system.file(
     "extdata", "codex_mouse_spleen_tiny_raw.h5ad",
     package = "CellCharterR", mustWork = TRUE
@@ -155,7 +156,9 @@ test_that("packaged tiny H5AD pair reconstructs the portable tiny SCE", {
   data("codex_mouse_spleen_tiny", package = "CellCharterR", envir = environment)
   expected <- environment$codex_mouse_spleen_tiny
 
-  observed <- read_codex_sce(raw, clustered)
+  observed <- read_codex_spe(raw, clustered)
+  expect_s4_class(observed, "SpatialExperiment")
+  expect_s4_class(expected, "SpatialExperiment")
   observed_inputs <- S4Vectors::metadata(observed)$CellCharterR$inputs
   expect_identical(colnames(observed), colnames(expected))
   expect_identical(rownames(observed), rownames(expected))
@@ -183,9 +186,17 @@ test_that("packaged tiny H5AD pair reconstructs the portable tiny SCE", {
     as.matrix(SingleCellExperiment::reducedDim(expected, "X_trVAE")),
     tolerance = 0
   )
+  expect_false("spatial" %in% SingleCellExperiment::reducedDimNames(observed))
   expect_equal(
-    as.matrix(SingleCellExperiment::reducedDim(observed, "spatial")),
-    as.matrix(SingleCellExperiment::reducedDim(expected, "spatial")),
-    tolerance = 0
+    SpatialExperiment::spatialCoords(observed),
+    SpatialExperiment::spatialCoords(expected), tolerance = 0
+  )
+  index <- seq(1L, ncol(observed), by = 7L)
+  sampled <- observed[, index]
+  expect_s4_class(sampled, "SpatialExperiment")
+  expect_identical(colnames(sampled), colnames(observed)[index])
+  expect_equal(
+    SpatialExperiment::spatialCoords(sampled),
+    SpatialExperiment::spatialCoords(observed)[index, , drop = FALSE], tolerance = 0
   )
 })

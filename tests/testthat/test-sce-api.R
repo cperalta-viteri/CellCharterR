@@ -23,6 +23,21 @@
   sce
 }
 
+.tiny_spe_fixture <- function() {
+  sce <- .tiny_sce_fixture()
+  spatial <- SingleCellExperiment::reducedDim(sce, "spatial")
+  reduced <- SingleCellExperiment::reducedDims(sce)
+  reduced$spatial <- NULL
+  SpatialExperiment::SpatialExperiment(
+    assays = SummarizedExperiment::assays(sce),
+    rowData = SummarizedExperiment::rowData(sce),
+    colData = SummarizedExperiment::colData(sce),
+    reducedDims = reduced,
+    spatialCoords = spatial,
+    sample_id = as.character(SummarizedExperiment::colData(sce)$sample)
+  )
+}
+
 .tiny_fit <- function(x, n_clusters, seed, ...) list(k = n_clusters, seed = seed)
 .tiny_predict <- function(model, newdata, ...) {
   (seq_len(nrow(newdata)) - 1L) %% model$k
@@ -56,6 +71,45 @@ test_that("exported SCE adapters complete the tiny workflow without sample leaka
   expect_true(all(c("enrichment", "nhood_enrichment", "diff_nhood_enrichment") %in%
                     names(results)))
   expect_identical(results$diff_nhood_enrichment$value$params$library_unit, "sample")
+})
+
+test_that("native SpatialExperiment coordinates survive the complete workflow", {
+  skip_if_not_installed("SpatialExperiment")
+  skip_if_not_installed("geometry")
+  checkpoint <- tempfile("spe-autok-")
+  spe <- .tiny_spe_fixture()
+  expected_coordinates <- SpatialExperiment::spatialCoords(spe)
+  result <- cellcharter_sce_workflow(
+    spe, group_col = "cell_type", candidate_k = c(2L, 3L),
+    checkpoint_dir = checkpoint, n_layers = 1L, n_perms = 4L, seed = 17L,
+    autok_args = list(
+      max_runs = 2L, convergence_tol = 0,
+      fit_fun = .tiny_fit, predict_fun = .tiny_predict, nll_fun = .tiny_nll
+    )
+  )
+
+  expect_s4_class(result, "SpatialExperiment")
+  expect_equal(SpatialExperiment::spatialCoords(result), expected_coordinates, tolerance = 0)
+  expect_false("spatial" %in% SingleCellExperiment::reducedDimNames(result))
+  expect_identical(
+    S4Vectors::metadata(result)$CellCharterR$stages[["graph:cellcharter_graph"]]$
+      parameters$coordinate_source,
+    "spatialCoords"
+  )
+  graph <- SingleCellExperiment::colPair(result, "cellcharter_graph")
+  sample <- as.character(SummarizedExperiment::colData(result)$sample)
+  expect_true(all(sample[S4Vectors::from(graph)] == sample[S4Vectors::to(graph)]))
+
+  index <- c(1:3, 5:7, 9:11, 13:15)
+  subset <- result[, index]
+  expect_s4_class(subset, "SpatialExperiment")
+  expect_equal(
+    SpatialExperiment::spatialCoords(subset), expected_coordinates[index, , drop = FALSE],
+    tolerance = 0
+  )
+  subset_graph <- SingleCellExperiment::colPair(subset, "cellcharter_graph")
+  expect_true(all(S4Vectors::from(subset_graph) <= ncol(subset)))
+  expect_true(all(S4Vectors::to(subset_graph) <= ncol(subset)))
 })
 
 test_that("SCE adapters reject positional identity and stale subset metadata", {

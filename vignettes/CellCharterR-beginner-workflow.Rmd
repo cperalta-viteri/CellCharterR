@@ -10,6 +10,14 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
+> **Independent implementation:** CellCharterR is an independent R
+> implementation of methods described by the CellCharter project. It is not
+> affiliated with, endorsed by, or maintained by the original CellCharter
+> authors or the Computational Systems Oncology group. Questions and bug
+> reports concerning CellCharterR should be directed to the
+> [CellCharterR issue tracker](https://github.com/cperalta-viteri/CellCharterR/issues),
+> not to the upstream CellCharter project.
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
   collapse = TRUE, comment = "#>", fig.width = 8, fig.height = 6,
@@ -27,14 +35,15 @@ tissue. CellCharterR groups cells into **spatial domains**: regions whose cells
 have similar molecular measurements and similar neighborhoods.
 
 This vignette uses a portable 1,000-cell teaching subset. It is an exact seeded
-random subset of the canonical mouse-spleen SCE, but it is deliberately too
+random subset of the canonical mouse-spleen object, but it is deliberately too
 small to reproduce or interpret the full biological result. Its purpose is to
 show the complete interface safely, offline, and on a CPU.
 
 The workflow has five ideas:
 
-1. keep measurements, coordinates, annotations, and results together in one
-   `SingleCellExperiment` (SCE);
+1. keep measurements, canonical spatial coordinates, annotations, and results
+   together in one `SpatialExperiment` (SPE), a spatially aware subclass of
+   `SingleCellExperiment`;
 2. connect nearby cells separately within each physical tissue section;
 3. summarize each cell and its graph neighborhoods;
 4. repeat Gaussian-mixture clustering for candidate K values and choose a
@@ -43,7 +52,7 @@ The workflow has five ideas:
 
 ### Short glossary
 
-- **Cell:** one measured observation and one column of the SCE.
+- **Cell:** one measured observation and one column of the SPE.
 - **Marker:** a measured protein feature, stored as a row of the `protein`
   assay.
 - **Representation or embedding:** a compact numeric description of each cell;
@@ -62,22 +71,23 @@ The workflow has five ideas:
 ```{r load-data}
 library(CellCharterR)
 data("codex_mouse_spleen_tiny", package = "CellCharterR")
-sce <- codex_mouse_spleen_tiny
-sce
+spe <- codex_mouse_spleen_tiny
+spe
 ```
 
 Each column is a cell. The `protein` assay contains marker intensities,
-`reducedDims(sce)$spatial` contains x/y positions, and `X_trVAE` is the fixed
-representation used by the published CellCharter tutorial.
+`spatialCoords(spe)` contains canonical x/y positions, and `X_trVAE` is the
+fixed representation used by the published CellCharter tutorial.
 
 ```{r inspect-fields}
-SummarizedExperiment::assayNames(sce)
-SingleCellExperiment::reducedDimNames(sce)
-head(SummarizedExperiment::colData(sce)[, c("sample", "condition", "cell_type")])
-table(SummarizedExperiment::colData(sce)$sample)
+SummarizedExperiment::assayNames(spe)
+SingleCellExperiment::reducedDimNames(spe)
+SpatialExperiment::spatialCoordsNames(spe)
+head(SummarizedExperiment::colData(spe)[, c("sample", "condition", "cell_type")])
+table(SummarizedExperiment::colData(spe)$sample)
 ```
 
-## Run the SCE-first workflow
+## Run the SPE-first workflow
 
 The candidate range is declared before fitting: K=2 through K=10. CellCharter's
 neighboring-K calculation also fits the two boundary models needed to score
@@ -106,8 +116,8 @@ if (!torch_ready && identical(Sys.getenv("CELLCHARTERR_REQUIRE_TORCH"), "true"))
 }
 
 if (torch_ready) {
-  sce <- cellcharter_sce_workflow(
-    sce,
+  spe <- cellcharter_sce_workflow(
+    spe,
     group_col = "cell_type_reduced",
     candidate_k = c(2L, 10L),
     checkpoint_dir = checkpoint_dir,
@@ -136,7 +146,7 @@ if (torch_ready) {
   )
 } else {
   message("Torch runtime unavailable in this build process; using the validated tiny checkpoint.")
-  sce <- readRDS(system.file(
+  spe <- readRDS(system.file(
     "extdata", "codex_mouse_spleen_tiny_workflow.rds",
     package = "CellCharterR", mustWork = TRUE
   ))
@@ -148,10 +158,10 @@ The graph is stored in `colPairs()`, the aggregate representation in
 statistical results in `metadata()`.
 
 ```{r inspect-results}
-SingleCellExperiment::colPairNames(sce)
-SingleCellExperiment::reducedDimNames(sce)
-table(SummarizedExperiment::colData(sce)$tiny_domain)
-names(S4Vectors::metadata(sce)$CellCharterR$results)
+SingleCellExperiment::colPairNames(spe)
+SingleCellExperiment::reducedDimNames(spe)
+table(SummarizedExperiment::colData(spe)$tiny_domain)
+names(S4Vectors::metadata(spe)$CellCharterR$results)
 ```
 
 The graph was built independently for every slide before applying one global
@@ -160,8 +170,8 @@ different tissue sections are not biological neighbors. The following check
 must be `TRUE`.
 
 ```{r graph-isolation}
-pairs <- SingleCellExperiment::colPair(sce, "cellcharter_graph")
-sample_id <- as.character(SummarizedExperiment::colData(sce)$sample)
+pairs <- SingleCellExperiment::colPair(spe, "cellcharter_graph")
+sample_id <- as.character(SummarizedExperiment::colData(spe)$sample)
 all(sample_id[S4Vectors::from(pairs)] == sample_id[S4Vectors::to(pairs)])
 ```
 
@@ -178,7 +188,7 @@ not biological proof. The selected K is the highest mean stability, with the
 first K used to break ties.
 
 ```{r stability, fig.alt="AutoK stability from K 2 through K 10 on the tiny teaching data"}
-autok <- S4Vectors::metadata(sce)$CellCharterR$autok$tiny_domain
+autok <- S4Vectors::metadata(spe)$CellCharterR$autok$tiny_domain
 cellcharter_autok_best_k(autok)
 cellcharter_plot_autok_stability(autok, k_range = 2:10) +
   ggplot2::theme_minimal(base_size = 16)
@@ -187,10 +197,10 @@ cellcharter_plot_autok_stability(autok, k_range = 2:10) +
 ## Map the teaching domains
 
 ```{r spatial-map, fig.alt="Teaching domain labels plotted at spatial cell coordinates"}
-xy <- as.data.frame(SingleCellExperiment::reducedDim(sce, "spatial"))
+xy <- as.data.frame(SpatialExperiment::spatialCoords(spe))
 names(xy)[1:2] <- c("x", "y")
-xy$domain <- SummarizedExperiment::colData(sce)$tiny_domain
-xy$sample <- SummarizedExperiment::colData(sce)$sample
+xy$domain <- SummarizedExperiment::colData(spe)$tiny_domain
+xy$sample <- SummarizedExperiment::colData(spe)$sample
 xy <- xy[xy$sample %in% c("BALBc-1", "MRL-4"), , drop = FALSE]
 
 ggplot2::ggplot(xy, ggplot2::aes(x, y, colour = domain, shape = domain)) +
@@ -220,7 +230,7 @@ as the reverse direction. Differential neighborhood enrichment permutes the
 condition assignment at the **sample/library level**, never cell by cell.
 
 ```{r result-tables}
-results <- S4Vectors::metadata(sce)$CellCharterR$results
+results <- S4Vectors::metadata(spe)$CellCharterR$results
 round(results$enrichment$value$enrichment, 2)
 round(results$nhood_enrichment$value$enrichment, 2)
 round(results$diff_nhood_enrichment$value$effect, 2)
@@ -316,13 +326,14 @@ resolution, not a biological truth.
 
 ## Identity and subsetting safeguards
 
-`colPairs()` endpoints, reduced dimensions, and `colData()` subset together
-with the SCE. Dataset-level fitted results in `metadata()`, however, no longer
+`spatialCoords()`, `colPairs()` endpoints, reduced dimensions, and `colData()`
+subset together with the SPE. Dataset-level fitted results in `metadata()`,
+however, no longer
 describe the subset. CellCharterR records ordered-cell digests and refuses to
 reuse such stages until they are recomputed.
 
 ```{r subsetting-safety}
-smaller <- sce[, seq_len(100)]
+smaller <- spe[, seq_len(100)]
 dim(SingleCellExperiment::colPair(smaller, "cellcharter_graph"))
 try(cellcharter_sce_aggregate(
   smaller,
@@ -342,7 +353,7 @@ appropriate replication; they must not be inferred from this teaching subset.
 
 The companion H5AD vignette provides checksum-safe, unevaluated download code.
 The two official H5AD files total 600.4 MiB; reserve additional working space
-for HDF5 aggregation and checkpoints. The portable full SCE is 286.0 MiB on
+for HDF5 aggregation and checkpoints. The portable full spatial object is 286.0 MiB on
 disk and about 693.7 MiB after loading. Full AutoK repeats many GMM fits, so
 runtime is hardware- and K-range-dependent; use a durable checkpoint directory
 and resume completed fits rather than restarting. The preserved full report

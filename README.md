@@ -1,25 +1,69 @@
 # CellCharterR
 
+## Introduction
+
+CellCharter identifies spatial domains in spatial-omics data by combining each
+cell's molecular representation with the composition of its local
+neighbourhood. It builds spatial graphs, aggregates multi-hop neighbourhood
+features, fits full-covariance Gaussian mixture models, and uses cluster
+stability to select the number of domains. CellCharterR implements the
+post-representation CellCharter workflow natively in R, including enrichment
+and differential neighbourhood analyses. It accepts an existing embedding and
+does not reimplement the upstream scVI or trVAE representation model.
+
+References: [Varrone et al., *Nature Genetics* (2024)](https://doi.org/10.1038/s41588-023-01588-4);
+[CellCharter source](https://github.com/CSOgroup/cellcharter);
+[CellCharter documentation](https://cellcharter.readthedocs.io/).
+
+> **Independent implementation:** CellCharterR is an independent R
+> implementation of methods described by the CellCharter project. It is not
+> affiliated with, endorsed by, or maintained by the original CellCharter
+> authors or the Computational Systems Oncology group. Questions and bug
+> reports concerning CellCharterR should be directed to the
+> [CellCharterR repository](https://github.com/cperalta-viteri/CellCharterR/issues),
+> not to the upstream CellCharter project.
+
+## Motivation
+
+The Bioconductor ecosystem provides a high-performance foundation for
+single-cell analysis centred on `SingleCellExperiment` and its spatially aware
+subclass `SpatialExperiment`. These interoperable containers work with
+`DelayedArray` and `HDF5Array`, allowing assays and
+intermediate representations to remain on disk instead of requiring the whole
+dataset in memory. Implementing the CellCharter workflow in R lets large
+spatial datasets benefit from this infrastructure while remaining compatible
+with native Bioconductor annotation, visualization, testing, and statistical
+tools. CellCharterR therefore uses an SPE-first interface (while retaining SCE
+compatibility), sample-local graph processing, disk-backed checkpoints,
+bounded-memory prediction, and batched R Torch computation.
+
+Reference: [Amezquita et al., *Nature Methods* (2020)](https://doi.org/10.1038/s41592-019-0654-x).
+
+### Full mouse-spleen K=11 sensitivity
+
+![K=11 sensitivity spatial domains in the normal BALBc-1 and early lupus MRL-4 mouse-spleen slides](docs/images/mouse-spleen-k11-balbc1-mrl4.png)
+
+The preserved full-data report shows the normal BALBc-1 slide beside the early
+lupus MRL-4 slide. K=11 matches the original tutorial and is reported only as a
+sensitivity analysis; the independent R AutoK primary result is K=4.
+
+## Citation
+
+If you use this implementation, please cite CellCharterR and the original
+CellCharter method. Copy-ready text and BibTeX are provided in
+[`inst/CITATION.md`](inst/CITATION.md); an installed package also provides
+`citation("CellCharterR")`.
+
 ## Vignettes and reports
 
-- [Beginner SCE-first workflow](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-beginner-workflow.html)
+- [Beginner SPE-first workflow](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-beginner-workflow.html)
   runs K=2 through K=10 on the packaged 1,000-cell teaching object, on CPU.
-- [H5AD download and SCE conversion](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-h5ad-to-sce.html)
+- [H5AD download and SPE conversion](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-h5ad-to-sce.html)
   shows checksum-verified download and conversion code without executing the
   full download during package builds.
 - [Full CODEX mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-mouse-spleen-reproducibility.html)
   is the preserved, precomputed full-data report. It is not rerun during build,
   check, examples, or CI.
-
-`CellCharterR` is a disk-backed R implementation of the **post-representation**
-CellCharter workflow. It accepts a supplied embedding, constructs sample-local
-spatial graphs, aggregates exclusive graph-hop features, selects the number of
-domains with CellCharter-style AutoK, and fits a full-covariance GMM. It
-intentionally does not reimplement scVI or trVAE.
-
-CellCharterR is an independent R implementation and is not authored, endorsed,
-or maintained by the upstream CellCharter project. The package pins and cites
-the upstream version used for methodological comparisons.
 
 ## Installation
 
@@ -74,10 +118,11 @@ The GMM never materialises the whole feature matrix. Each iteration:
 library(CellCharterR)
 data("codex_mouse_spleen_tiny", package = "CellCharterR")
 
-# Build the spatial graph and exclusive one-hop neighborhood representation.
-sce <- cellcharter_sce_graph(codex_mouse_spleen_tiny)
-sce <- cellcharter_sce_aggregate(sce, n_layers = 1L)
-SingleCellExperiment::reducedDimNames(sce)
+# Build the spatial graph from native coordinates and aggregate one hop.
+spe <- cellcharter_sce_graph(codex_mouse_spleen_tiny)
+spe <- cellcharter_sce_aggregate(spe, n_layers = 1L)
+SpatialExperiment::spatialCoordsNames(spe)
+SingleCellExperiment::reducedDimNames(spe)
 ```
 
 ## Reproducing the official tutorial analyses

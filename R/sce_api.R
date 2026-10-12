@@ -32,6 +32,27 @@
   value
 }
 
+.cc_sce_spatial_coordinates <- function(sce, name = "spatial") {
+  .cc_validate_sce_identity(sce, reduced_dims = NULL)
+  if (inherits(sce, "SpatialExperiment") && identical(name, "spatial")) {
+    value <- SpatialExperiment::spatialCoords(sce)
+    source <- "spatialCoords"
+  } else {
+    value <- .cc_sce_reduced_dim(sce, name, "spatial reduced dimension")
+    source <- paste0("reducedDim:", name)
+  }
+  if (!is.numeric(value) || length(dim(value)) != 2L ||
+      nrow(value) != ncol(sce) || ncol(value) < 2L) {
+    stop("Spatial coordinates must be a numeric cell-by-coordinate matrix with at least two columns.",
+         call. = FALSE)
+  }
+  if (any(!is.finite(as.matrix(value[, seq_len(2L), drop = FALSE])))) {
+    stop("Spatial coordinates contain non-finite values.", call. = FALSE)
+  }
+  attr(value, "cellcharterr_coordinate_source") <- source
+  value
+}
+
 .cc_sce_metadata <- function(sce) {
   value <- S4Vectors::metadata(sce)$CellCharterR
   if (is.null(value)) value <- list()
@@ -92,8 +113,12 @@
 #' symmetric graph is stored in `colPairs(sce, graph_name)`, so endpoints remain
 #' synchronized when the SCE is subset.
 #'
-#' @param sce A `SingleCellExperiment` with named spatial coordinates.
-#' @param spatial Name of the spatial coordinate matrix in `reducedDims(sce)`.
+#' @param sce A `SingleCellExperiment` or `SpatialExperiment`. Native
+#'   `spatialCoords()` are used for a `SpatialExperiment` when `spatial` is the
+#'   default `"spatial"`.
+#' @param spatial Name of the legacy coordinate matrix in `reducedDims(sce)`.
+#'   This is retained for plain `SingleCellExperiment` inputs and non-default
+#'   coordinate representations.
 #' @param sample_col Name of the physical-sample field in `colData(sce)`.
 #' @param graph_name Name used in `colPairs(sce)`.
 #' @param percentile Global positive-edge distance percentile to retain.
@@ -114,7 +139,9 @@
 #' @export
 cellcharter_sce_graph <- function(sce, spatial = "spatial", sample_col = "sample",
                                   graph_name = "cellcharter_graph", percentile = 99) {
-  coordinates <- .cc_sce_reduced_dim(sce, spatial, "spatial reduced dimension")
+  coordinates <- .cc_sce_spatial_coordinates(sce, spatial)
+  coordinate_source <- attr(coordinates, "cellcharterr_coordinate_source")
+  attr(coordinates, "cellcharterr_coordinate_source") <- NULL
   if (ncol(coordinates) < 2L) stop("Spatial coordinates must have at least two columns.", call. = FALSE)
   sample <- .cc_sce_coldata(sce, sample_col, "sample column")
   sample <- as.character(sample)
@@ -156,7 +183,8 @@ cellcharter_sce_graph <- function(sce, spatial = "spatial", sample_col = "sample
   SingleCellExperiment::colPair(sce, graph_name) <- pairs
   .cc_sce_record_stage(
     sce, paste0("graph:", graph_name),
-    list(spatial = spatial, sample_col = sample_col, graph_name = graph_name,
+    list(spatial = spatial, coordinate_source = coordinate_source,
+         sample_col = sample_col, graph_name = graph_name,
          percentile = percentile, global_distance_cutoff = cutoff,
          construction = "sample-local Delaunay; globally trimmed"),
     list(sample_sha256 = digest::digest(sample, algo = "sha256"))

@@ -5,7 +5,7 @@
 \alias{codex_mouse_spleen_tiny}
 \title{Tiny portable CODEX mouse-spleen teaching data}
 \format{
-A \code{SingleCellExperiment} with 29 rows and 1,000 columns.
+A \code{SpatialExperiment} with 29 rows and 1,000 columns.
 }
 \source{
 CODEX mouse-spleen data, dataset DOI
@@ -17,7 +17,7 @@ codex_mouse_spleen_tiny
 }
 \description{
 A deterministic random subset of 1,000 cells from the canonical portable
-mouse-spleen \code{SingleCellExperiment}. The subset retains the protein assay,
+mouse-spleen \code{SpatialExperiment}. The subset retains the protein assay,
 fixed trVAE representation, spatial coordinates, previously computed
 aggregate representation, annotations, K=4 primary labels, K=11 sensitivity
 labels, and published reference labels. Teaching workflows should recompute

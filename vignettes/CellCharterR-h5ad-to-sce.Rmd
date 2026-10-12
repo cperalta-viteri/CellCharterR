@@ -1,14 +1,22 @@
 ---
-title: "Downloading H5AD data and creating a SingleCellExperiment"
+title: "Downloading H5AD data and creating a SpatialExperiment"
 author: "Christian Peralta Viteri"
 output:
   BiocStyle::html_document:
     toc: true
 vignette: >
-  %\VignetteIndexEntry{Downloading H5AD data and creating a SingleCellExperiment}
+  %\VignetteIndexEntry{Downloading H5AD data and creating a SpatialExperiment}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
+
+> **Independent implementation:** CellCharterR is an independent R
+> implementation of methods described by the CellCharter project. It is not
+> affiliated with, endorsed by, or maintained by the original CellCharter
+> authors or the Computational Systems Oncology group. Questions and bug
+> reports concerning CellCharterR should be directed to the
+> [CellCharterR issue tracker](https://github.com/cperalta-viteri/CellCharterR/issues),
+> not to the upstream CellCharter project.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
@@ -21,8 +29,8 @@ reproduction. Its download and full conversion chunks deliberately have
 `eval=FALSE`: package builds and checks must stay offline and must not download
 the 600.4 MiB of H5AD data (151.9 MiB raw plus 448.5 MiB clustered).
 
-The project used a custom `read_codex_sce()` reader built from `rhdf5`,
-`HDF5Array`, `DelayedArray`, and `SingleCellExperiment`. It did **not** use
+The project uses a custom `read_codex_spe()` reader built from `rhdf5`,
+`HDF5Array`, `DelayedArray`, and `SpatialExperiment`. It does **not** use
 `zellkonverter` or `anndataR`. For general H5AD files, users should consider
 those packages first because they support broader AnnData conventions. The
 custom reader exists to enforce the exact identity and disk-backed layout of
@@ -85,26 +93,30 @@ for (i in seq_len(nrow(files))) {
 Equivalent shell downloads may use `curl -L` or `wget`, followed by `sha256sum`.
 The R version above avoids assuming either shell program is installed.
 
-## Convert to a disk-backed SCE
+## Convert to a disk-backed SpatialExperiment
 
 ```{r convert, eval=FALSE}
 library(CellCharterR)
 
-sce <- read_codex_sce(
+spe <- read_codex_spe(
   raw_h5ad = file.path(destination, "codex_mouse_spleen.h5ad"),
   clustered_h5ad = file.path(destination, "codex_mouse_spleen_clustered.h5ad"),
   representation_dataset = "obsm/X_trVAE",
   spatial_dataset = "obsm/spatial"
 )
 
-sce
-SummarizedExperiment::assayNames(sce)
-SingleCellExperiment::reducedDimNames(sce)
+spe
+SummarizedExperiment::assayNames(spe)
+SingleCellExperiment::reducedDimNames(spe)
+SpatialExperiment::spatialCoordsNames(spe)
 ```
 
-The protein assay, trVAE representation, and spatial coordinates remain
-HDF5-backed. The reader validates global or sample-scoped cell identities and
-will not accept positional coincidence as proof of alignment.
+The protein assay and trVAE representation remain HDF5-backed. The canonical
+two-column `spatialCoords()` matrix is realized in memory (about 10.8 MiB for
+707,474 cells), as required by `SpatialExperiment`; the large assay and
+representation are not materialized. The reader validates global or
+sample-scoped cell identities and will not accept positional coincidence as
+proof of alignment.
 
 The package includes a miniature two-file fixture with the same storage
 contract, so the actual custom conversion can be demonstrated offline:
@@ -120,36 +132,38 @@ tiny_clustered <- system.file(
   "extdata", "codex_mouse_spleen_tiny_clustered.h5ad",
   package = "CellCharterR", mustWork = TRUE
 )
-tiny_from_h5ad <- read_codex_sce(tiny_raw, tiny_clustered)
+tiny_from_h5ad <- read_codex_spe(tiny_raw, tiny_clustered)
 tiny_from_h5ad
 SingleCellExperiment::reducedDimNames(tiny_from_h5ad)
+head(SpatialExperiment::spatialCoords(tiny_from_h5ad))
 ```
 
 This disk-backed object depends on the H5AD files staying at their recorded
 locations. It is appropriate for scalable computation, but it is not the
 portable distribution artifact.
 
-## Create a movable SCE
+## Create a movable SpatialExperiment
 
-To move one SCE elsewhere and forget the H5AD files, explicitly realize the
+To move one object elsewhere and forget the H5AD files, explicitly realize the
 arrays as ordinary matrices and build a new object. This needs enough RAM for
 all selected fields.
 
 ```{r portable, eval=FALSE}
-portable <- SingleCellExperiment::SingleCellExperiment(
+portable <- SpatialExperiment::SpatialExperiment(
   assays = list(
-    protein = as.matrix(SummarizedExperiment::assay(sce, "protein"))
+    protein = as.matrix(SummarizedExperiment::assay(spe, "protein"))
   ),
-  rowData = SummarizedExperiment::rowData(sce),
-  colData = SummarizedExperiment::colData(sce),
+  rowData = SummarizedExperiment::rowData(spe),
+  colData = SummarizedExperiment::colData(spe),
   reducedDims = S4Vectors::SimpleList(
-    X_trVAE = as.matrix(SingleCellExperiment::reducedDim(sce, "X_trVAE")),
-    spatial = as.matrix(SingleCellExperiment::reducedDim(sce, "spatial"))
+    X_trVAE = as.matrix(SingleCellExperiment::reducedDim(spe, "X_trVAE"))
   ),
-  metadata = S4Vectors::metadata(sce)
+  spatialCoords = as.matrix(SpatialExperiment::spatialCoords(spe)),
+  sample_id = as.character(SummarizedExperiment::colData(spe)$sample),
+  metadata = S4Vectors::metadata(spe)
 )
 
-saveRDS(portable, "CellCharterR_mouse_spleen_sce.rds")
+saveRDS(portable, "CellCharterR_mouse_spleen_spe.rds")
 ```
 
 The validated canonical portable artifact is 286.0 MiB on disk and occupies
@@ -157,13 +171,75 @@ approximately 693.7 MiB after loading in R. Its SHA-256 is
 `d9adda271ad26aca5887a2d4f38feea8bb3a1503b561e34ee9f13df129371219`.
 It is deliberately not bundled inside the software package; the project must
 publish it as a separate data product before assigning a durable download URL.
-The packaged 0.30 MiB teaching SCE is an exact seeded subset of that artifact.
+The packaged teaching `SpatialExperiment` retains the same deterministic 1,000
+cell identities and stores coordinates canonically in `spatialCoords()`.
 
 The repository's
 `inst/scripts/make-codex-portable-and-tiny.R` additionally attaches the already
 checkpointed aggregate representation, K=4 primary labels, K=11 sensitivity
 labels, checksums, and a deterministic 1,000-cell subset. It does not recompute
 the full analysis.
+
+## Full-dataset workflow template
+
+The tiny SPE vignette is the executable validation. The following code shows
+how the same native `SpatialExperiment` interface scales to the complete CODEX
+dataset, but is deliberately **not run** while building this vignette. It keeps
+the aggregate representation on disk, declares K=2 through K=20 before fitting,
+uses the required ten AutoK repeats, and checkpoints every fitted model.
+
+```{r full-workflow-template, eval=FALSE}
+results_dir <- file.path("results", "CellCharterR_mouse_spleen")
+dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
+
+full_spe <- read_codex_spe(
+  raw_h5ad = file.path(destination, "codex_mouse_spleen.h5ad"),
+  clustered_h5ad = file.path(destination, "codex_mouse_spleen_clustered.h5ad")
+)
+
+full_spe <- cellcharter_sce_graph(
+  full_spe,
+  spatial = "spatial",       # resolves to native spatialCoords(full_spe)
+  sample_col = "sample"
+)
+full_spe <- cellcharter_sce_aggregate(
+  full_spe,
+  representation = "X_trVAE",
+  n_layers = 3L,
+  filepath = file.path(results_dir, "X_cellcharter.h5"),
+  block_rows = 8192L
+)
+full_spe <- cellcharter_sce_cluster(
+  full_spe,
+  candidate_k = c(2L, 20L),
+  checkpoint_dir = file.path(results_dir, "AutoK"),
+  max_runs = 10L,
+  convergence_tol = 0.01,
+  seed = 1L,
+  fit_args = list(device = "auto"),
+  predict_args = list(device = "auto")
+)
+full_spe <- cellcharter_sce_enrichment(
+  full_spe, group_col = "cell_type_reduced"
+)
+full_spe <- cellcharter_sce_nhood_enrichment(full_spe)
+full_spe <- cellcharter_sce_diff_nhood_enrichment(
+  full_spe,
+  condition_col = "condition",
+  sample_col = "sample",
+  condition_groups = c("BALBc", "MRL"),
+  n_perms = 100L,
+  seed = 1L
+)
+
+saveRDS(full_spe, file.path(results_dir, "CellCharterR_mouse_spleen_spe.rds"))
+```
+
+For the canonical reproduction, prefer the repository's checkpoint-aware
+`scripts/run_codex_mouse_spleen.R`, which additionally records timings,
+versions, checksums, memory measurements, K=11 sensitivity results, and all
+report inputs. The template above is instructional and is not evidence that a
+fresh full-data run occurred during package validation.
 
 ## Provenance and licenses
 

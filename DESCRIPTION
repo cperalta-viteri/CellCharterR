@@ -3,13 +3,16 @@ Title: Disk-Backed R Implementation of CellCharter Spatial Domains
 Version: 0.99.0
 Authors@R: c(person(given = "Christian", family = "Peralta Viteri", role = c("aut", "cre"), email = "christian_94_97@hotmail.com"))
 Description: Implements a reproducible, disk-backed workflow for identifying
-    spatial domains in SingleCellExperiment data. It constructs sample-local
+    spatial domains in SpatialExperiment and SingleCellExperiment data. It
+    constructs sample-local
     spatial graphs, aggregates exclusive graph-hop representations, fits
     batched full-covariance Gaussian mixture models with R Torch, and selects
     domain counts using CellCharter-style stability. It also provides
     cell-type enrichment, directed neighborhood enrichment, differential
     neighborhood enrichment, durable checkpoints, and a version-pinned CODEX
-    mouse-spleen reproduction.
+    mouse-spleen reproduction. This independently developed package is not
+    affiliated with, endorsed by, or maintained by the original CellCharter
+    authors or the Computational Systems Oncology group.
 License: MIT + file LICENSE
 URL: https://github.com/cperalta-viteri/CellCharterR
 BugReports: https://github.com/cperalta-viteri/CellCharterR/issues
@@ -29,6 +32,7 @@ Imports:
     S4Arrays,
     S4Vectors,
     SingleCellExperiment,
+    SpatialExperiment,
     stats,
     SummarizedExperiment,
     torch,

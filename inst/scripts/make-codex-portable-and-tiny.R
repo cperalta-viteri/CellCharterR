@@ -1,7 +1,8 @@
 #!/usr/bin/env Rscript
 
 # Create the two data artifacts without recomputing any scientific analysis:
-# (1) a movable, self-contained full SCE and (2) its deterministic tiny subset.
+# (1) a movable, self-contained full SpatialExperiment and (2) its
+# deterministic tiny subset. This script never reruns the scientific analysis.
 
 args <- commandArgs(trailingOnly = TRUE)
 source_rds <- if (length(args) >= 1L) args[[1L]] else
@@ -51,12 +52,22 @@ col_data$r_domain_k11_sensitivity <- factor(
 # These are the only large realization calls. They copy already-computed arrays
 # into ordinary in-object matrices; no graph, clustering, or statistic is rerun.
 protein <- as.matrix(SummarizedExperiment::assay(source, "protein"))
-reduced <- lapply(SingleCellExperiment::reducedDimNames(source), function(name) {
+source_reduced_names <- setdiff(
+  SingleCellExperiment::reducedDimNames(source), "spatial"
+)
+reduced <- lapply(source_reduced_names, function(name) {
   value <- as.matrix(SingleCellExperiment::reducedDim(source, name))
   rownames(value) <- ids
   value
 })
-names(reduced) <- SingleCellExperiment::reducedDimNames(source)
+names(reduced) <- source_reduced_names
+spatial <- if (inherits(source, "SpatialExperiment")) {
+  as.matrix(SpatialExperiment::spatialCoords(source))
+} else {
+  as.matrix(SingleCellExperiment::reducedDim(source, "spatial"))
+}
+rownames(spatial) <- ids
+colnames(spatial) <- c("x", "y")
 
 metadata <- S4Vectors::metadata(source)
 cc <- metadata$CellCharterR
@@ -87,16 +98,21 @@ cc$portable_artifact <- list(
 )
 metadata$CellCharterR <- cc
 
-portable <- SingleCellExperiment::SingleCellExperiment(
+portable <- SpatialExperiment::SpatialExperiment(
   assays = list(protein = protein),
   rowData = SummarizedExperiment::rowData(source),
   colData = col_data,
   reducedDims = S4Vectors::SimpleList(reduced),
+  spatialCoords = spatial,
+  sample_id = as.character(col_data$sample),
   metadata = metadata
 )
 stopifnot(
   identical(colnames(portable), ids),
+  inherits(portable, "SpatialExperiment"),
   is.matrix(SummarizedExperiment::assay(portable, "protein")),
+  is.matrix(SpatialExperiment::spatialCoords(portable)),
+  !"spatial" %in% SingleCellExperiment::reducedDimNames(portable),
   all(vapply(
     SingleCellExperiment::reducedDimNames(portable),
     function(name) is.matrix(SingleCellExperiment::reducedDim(portable, name)),
@@ -152,7 +168,7 @@ manifest <- list(
 )
 saveRDS(manifest, file.path(output_dir, "portable_data_manifest.rds"))
 
-cat("Full portable SCE:", full_path, "\n")
+cat("Full portable SpatialExperiment:", full_path, "\n")
 cat("Full SHA-256:", full_sha256, "\n")
-cat("Tiny packaged SCE: data/codex_mouse_spleen_tiny.rda\n")
+cat("Tiny packaged SpatialExperiment: data/codex_mouse_spleen_tiny.rda\n")
 cat("Tiny cells:", tiny_n, "seed:", tiny_seed, "\n")

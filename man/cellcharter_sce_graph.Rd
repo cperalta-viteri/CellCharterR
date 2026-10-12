@@ -13,9 +13,13 @@ cellcharter_sce_graph(
 )
 }
 \arguments{
-\item{sce}{A \code{SingleCellExperiment} with named spatial coordinates.}
+\item{sce}{A \code{SingleCellExperiment} or \code{SpatialExperiment}. Native
+\code{spatialCoords()} are used for a \code{SpatialExperiment} when \code{spatial} is the
+default \code{"spatial"}.}
 
-\item{spatial}{Name of the spatial coordinate matrix in \code{reducedDims(sce)}.}
+\item{spatial}{Name of the legacy coordinate matrix in \code{reducedDims(sce)}.
+This is retained for plain \code{SingleCellExperiment} inputs and non-default
+coordinate representations.}
 
 \item{sample_col}{Name of the physical-sample field in \code{colData(sce)}.}
 

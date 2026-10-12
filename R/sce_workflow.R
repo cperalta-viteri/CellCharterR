@@ -1,5 +1,6 @@
 # Utilities in this file keep the full workflow centred on a
-# SingleCellExperiment while its large numeric matrices remain in HDF5.
+# SingleCellExperiment-compatible container. Spatial inputs use the
+# SpatialExperiment subclass while large numeric matrices remain in HDF5.
 
 .cc_h5ad_dataframe <- function(filepath, group) {
   listing <- rhdf5::h5ls(filepath, recursive = TRUE)
@@ -112,6 +113,18 @@
       paste0(context, " cell identifiers")
     )
   }
+  if (inherits(sce, "SpatialExperiment")) {
+    spatial <- SpatialExperiment::spatialCoords(sce)
+    if (!is.numeric(spatial) || length(dim(spatial)) != 2L ||
+        nrow(spatial) != ncol(sce) || ncol(spatial) < 2L) {
+      stop(context, " has invalid SpatialExperiment coordinates.", call. = FALSE)
+    }
+    .cc_align_observation_ids(
+      rownames(spatial), ids,
+      paste0(context, " spatialCoords row names"),
+      paste0(context, " cell identifiers")
+    )
+  }
   order_sha256 <- .cc_observation_order_sha256(ids, paste0(context, " cell identifiers"))
   if (!is.null(recorded_order_sha256) &&
       (!is.character(recorded_order_sha256) || length(recorded_order_sha256) != 1L ||
@@ -216,29 +229,31 @@ cellcharter_file_sha256 <- function(filepath) {
   digest::digest(file = filepath, algo = "sha256", serialize = FALSE)
 }
 
-#' Read the fixed CODEX inputs as a disk-backed SingleCellExperiment
+#' Read the fixed CODEX inputs as a disk-backed SpatialExperiment
 #'
 #' The marker assay is read from the historical tutorial H5AD and the immutable
 #' trVAE representation from the official clustered H5AD. Cell identifiers must
-#' match exactly before either object is attached. The resulting SCE contains
-#' HDF5-backed assay and reduced-dimension matrices rather than dense copies.
+#' match exactly before either object is attached. The resulting
+#' `SpatialExperiment` contains an HDF5-backed protein assay and trVAE reduced
+#' dimension. Only the two-column coordinate matrix is realized, because
+#' `spatialCoords()` is the canonical SpatialExperiment coordinate store.
 #'
 #' @param raw_h5ad Official CODEX input H5AD (Figshare file 38538101).
 #' @param clustered_h5ad Official clustered H5AD containing `X_trVAE`
 #'   (Figshare file 46832722).
 #' @param representation_dataset HDF5 dataset holding the fixed representation.
 #' @param spatial_dataset HDF5 dataset holding x/y coordinates.
-#' @return A `SingleCellExperiment` with disk-backed `protein`, `X_trVAE`, and
-#'   `spatial` matrices plus input provenance in `metadata()`.
+#' @return A `SpatialExperiment` with disk-backed `protein` and `X_trVAE`,
+#'   canonical `spatialCoords()`, and input provenance in `metadata()`.
 #' @examples
 #' raw <- system.file("extdata", "codex_mouse_spleen_tiny_raw.h5ad",
 #'                    package = "CellCharterR")
 #' clustered <- system.file("extdata", "codex_mouse_spleen_tiny_clustered.h5ad",
 #'                          package = "CellCharterR")
-#' example_sce <- read_codex_sce(raw, clustered)
-#' example_sce
+#' example_spe <- read_codex_spe(raw, clustered)
+#' example_spe
 #' @export
-read_codex_sce <- function(
+read_codex_spe <- function(
     raw_h5ad, clustered_h5ad,
     representation_dataset = "obsm/X_trVAE",
     spatial_dataset = "obsm/spatial") {
@@ -290,12 +305,17 @@ read_codex_sce <- function(
   colnames(representation) <- paste0("trVAE_", seq_len(ncol(representation)))
   colnames(spatial) <- c("x", "y")
 
-  sce <- SingleCellExperiment::SingleCellExperiment(
+  # SpatialExperiment requires an ordinary numeric coordinate matrix. This
+  # realizes only two columns, never the protein assay or trVAE representation.
+  spatial <- as.matrix(spatial)
+  spe <- SpatialExperiment::SpatialExperiment(
     assays = list(protein = marker_assay), rowData = row_data,
     colData = col_data,
-    reducedDims = S4Vectors::SimpleList(X_trVAE = representation, spatial = spatial)
+    reducedDims = S4Vectors::SimpleList(X_trVAE = representation),
+    spatialCoords = spatial,
+    sample_id = as.character(col_data$sample)
   )
-  S4Vectors::metadata(sce)$CellCharterR <- list(
+  S4Vectors::metadata(spe)$CellCharterR <- list(
     reference = list(
       cellcharter_version = "0.2.0",
       cellcharter_commit = "2a8fdde8213e32e5a00f1f9571bffd3dbb825a79",
@@ -322,7 +342,23 @@ read_codex_sce <- function(
       cell_id_alignment = identity$alignment
     )
   )
-  sce
+  spe
+}
+
+#' @rdname read_codex_spe
+#' @description `read_codex_sce()` is retained as a backward-compatible alias;
+#'   it returns the same `SpatialExperiment` as `read_codex_spe()`.
+#' @export
+read_codex_sce <- function(
+    raw_h5ad, clustered_h5ad,
+    representation_dataset = "obsm/X_trVAE",
+    spatial_dataset = "obsm/spatial") {
+  read_codex_spe(
+    raw_h5ad = raw_h5ad,
+    clustered_h5ad = clustered_h5ad,
+    representation_dataset = representation_dataset,
+    spatial_dataset = spatial_dataset
+  )
 }
 
 #' Attach an HDF5-backed CellCharter representation to an SCE
