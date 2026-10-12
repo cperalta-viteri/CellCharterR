@@ -1,0 +1,55 @@
+name: R 4.4 compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  r-4-4:
+    runs-on: ubuntu-latest
+    container: bioconductor/bioconductor_docker:RELEASE_3_20
+    env:
+      CELLCHARTERR_CPU_ONLY: "true"
+      CELLCHARTERR_REQUIRE_TORCH: "true"
+      CUDA_VISIBLE_DEVICES: ""
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm the compatibility environment
+        shell: bash
+        run: |
+          Rscript -e 'stopifnot(getRversion() >= "4.4", getRversion() < "4.5"); print(R.version.string); print(BiocManager::version()); print(packageVersion("BiocManager"))'
+
+      - name: Test the R 4.4 package floor without anndataR
+        shell: bash
+        run: |
+          Rscript -e 'path <- "DESCRIPTION"; x <- readLines(path); x <- sub("R (>= 4.5.0)", "R (>= 4.4.0)", x, fixed = TRUE); stopifnot(any(grepl("R (>= 4.4.0)", x, fixed = TRUE))); writeLines(x, path)'
+          Rscript -e 'BiocManager::install(c("remotes", "rcmdcheck"), ask = FALSE, update = FALSE)'
+          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = c("Depends", "Imports", "LinkingTo"), upgrade = "never")'
+          Rscript -e 'BiocManager::install(c("BiocStyle", "ggplot2", "ggspavis", "jsonlite", "knitr", "MASS", "mclust", "rmarkdown", "testthat"), ask = FALSE, update = FALSE)'
+          Rscript -e 'torch::install_torch(type = "cpu")'
+
+      - name: Build and check on R 4.4
+        shell: bash
+        run: |
+          R CMD build .
+          R CMD check --no-manual CellCharterR_*.tar.gz
+
+      - name: Verify the packaged H5AD to SPE reader
+        shell: bash
+        run: |
+          mkdir -p /tmp/CellCharterR-r44-library
+          R CMD INSTALL --library=/tmp/CellCharterR-r44-library CellCharterR_*.tar.gz
+          R_LIBS_USER=/tmp/CellCharterR-r44-library Rscript -e 'library(CellCharterR); raw <- system.file("extdata", "codex_mouse_spleen_tiny_raw.h5ad", package = "CellCharterR"); clustered <- system.file("extdata", "codex_mouse_spleen_tiny_clustered.h5ad", package = "CellCharterR"); spe <- read_codex_spe(raw, clustered); stopifnot(inherits(spe, "SpatialExperiment"), ncol(spe) > 0L, inherits(SummarizedExperiment::assay(spe, "protein"), "DelayedArray")); print(spe)'
+
+      - name: Retain R 4.4 compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CellCharterR-R-4.4-validation
+          path: |
+            CellCharterR.Rcheck/00check.log
+            CellCharterR.Rcheck/tests/testthat.Rout.fail
+            CellCharterR.Rcheck/tests/testthat.Rout

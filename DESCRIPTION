@@ -39,7 +39,6 @@ Imports:
     utils,
     withr
 Suggests:
-    anndataR,
     BiocStyle,
     ggplot2,
     ggspavis,
