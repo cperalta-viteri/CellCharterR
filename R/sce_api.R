@@ -444,7 +444,7 @@ cellcharter_diff_nhood_enrichment <- function(
 #'   testing hooks.
 #' @return The updated `SingleCellExperiment`.
 #' @examples
-#' data("codex_mouse_spleen_tiny", package = "CellCharterR")
+#' codex_mouse_spleen_tiny <- cellcharter_mouse_spleen_tiny()
 #' demo_fit <- function(x, n_clusters, seed, ...) {
 #'   list(k = n_clusters, seed = seed)
 #' }

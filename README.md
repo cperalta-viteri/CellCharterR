@@ -145,10 +145,10 @@ The GMM never materialises the whole feature matrix. Each iteration:
 
 ```r
 library(CellCharterR)
-data("codex_mouse_spleen_tiny", package = "CellCharterR")
+spe <- cellcharter_mouse_spleen_tiny()
 
 # Build the spatial graph from native coordinates and aggregate one hop.
-spe <- cellcharter_graph(codex_mouse_spleen_tiny)
+spe <- cellcharter_graph(spe)
 spe <- cellcharter_aggregate(spe, n_layers = 1L)
 SpatialExperiment::spatialCoordsNames(spe)
 SingleCellExperiment::reducedDimNames(spe)

@@ -1,23 +1,48 @@
-#' Tiny portable CODEX mouse-spleen teaching data
+#' Construct the portable mouse-spleen teaching SpatialExperiment
 #'
-#' A deterministic random subset of 1,000 cells from the canonical portable
-#' mouse-spleen `SpatialExperiment`. The subset retains the protein assay,
-#' fixed trVAE representation, spatial coordinates, previously computed
-#' aggregate representation, annotations, K=4 primary labels, K=11 sensitivity
-#' labels, and published reference labels. Teaching workflows should recompute
-#' their graph and aggregate representation on this subset rather than treat its
-#' stored full-data aggregation as a biological reproduction.
+#' Reconstructs the 1,000-cell teaching object from version-neutral matrices
+#' and data frames. This avoids serialized Bioconductor class incompatibilities
+#' between R 4.4/Bioconductor 3.20 and newer Bioconductor releases.
+#' The subset retains the protein assay, fixed trVAE representation, spatial
+#' coordinates, annotations, K=4 labels, and K=11 sensitivity labels. It is for
+#' examples and teaching, not for reproducing the full biological analysis.
 #'
-#' The cells were selected without replacement using seed 20261012. Exact cell
-#' identifiers, source-column indices, and the SHA-256 checksum of the canonical
-#' full SCE are stored in `metadata(codex_mouse_spleen_tiny)$CellCharterR$tiny_subset`.
-#'
-#' This object is for offline examples, tests, and teaching only. It is not large
-#' enough to reproduce the full mouse-spleen biological results or justify a
-#' particular K.
-#'
-#' @format A `SpatialExperiment` with 29 rows and 1,000 columns.
+#' @return A 29-feature by 1,000-cell `SpatialExperiment`.
 #' @source CODEX mouse-spleen data, dataset DOI
 #'   \doi{10.17632/zjnpwh8m5b.1}; original CODEX publication
 #'   \doi{10.1016/j.cell.2018.07.010}.
-"codex_mouse_spleen_tiny"
+#' @export
+#' @examples
+#' spe <- cellcharter_mouse_spleen_tiny()
+cellcharter_mouse_spleen_tiny <- function() {
+  path <- system.file(
+    "extdata", "codex_mouse_spleen_tiny_components.rds",
+    package = "CellCharterR", mustWork = TRUE
+  )
+  components <- readRDS(path)
+  row_data <- S4Vectors::DataFrame(components$row_data)
+  col_data <- S4Vectors::DataFrame(components$col_data)
+  rownames(row_data) <- components$row_names
+  rownames(col_data) <- components$col_names
+  assays <- S4Vectors::SimpleList(components$assays)
+  for (name in names(assays)) {
+    rownames(assays[[name]]) <- components$row_names
+    colnames(assays[[name]]) <- components$col_names
+  }
+  spatial <- components$spatial
+  rownames(spatial) <- components$col_names
+  spe <- SpatialExperiment::SpatialExperiment(
+    assays = assays,
+    rowData = row_data,
+    colData = col_data,
+    spatialCoords = spatial,
+    sample_id = as.character(col_data$sample_id)
+  )
+  for (name in names(components$reduced_dims)) {
+    value <- components$reduced_dims[[name]]
+    rownames(value) <- components$col_names
+    SingleCellExperiment::reducedDim(spe, name) <- value
+  }
+  S4Vectors::metadata(spe) <- components$metadata
+  spe
+}

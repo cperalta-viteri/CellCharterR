@@ -70,8 +70,7 @@ The workflow has five ideas:
 
 ```{r load-data}
 library(CellCharterR)
-data("codex_mouse_spleen_tiny", package = "CellCharterR")
-spe <- codex_mouse_spleen_tiny
+spe <- cellcharter_mouse_spleen_tiny()
 spe
 ```
 

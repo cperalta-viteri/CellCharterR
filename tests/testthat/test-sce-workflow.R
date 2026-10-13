@@ -152,9 +152,7 @@ test_that("packaged tiny H5AD pair reconstructs the portable tiny SPE", {
     "extdata", "codex_mouse_spleen_tiny_clustered.h5ad",
     package = "CellCharterR", mustWork = TRUE
   )
-  environment <- new.env(parent = emptyenv())
-  data("codex_mouse_spleen_tiny", package = "CellCharterR", envir = environment)
-  expected <- environment$codex_mouse_spleen_tiny
+  expected <- cellcharter_mouse_spleen_tiny()
 
   observed <- read_codex_spe(raw, clustered)
   expect_s4_class(observed, "SpatialExperiment")

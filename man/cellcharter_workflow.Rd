@@ -56,7 +56,7 @@ full datasets should use the staged functions directly so each stage can be
 checkpointed; this orchestrator is intended for compact examples and tests.
 }
 \examples{
-data("codex_mouse_spleen_tiny", package = "CellCharterR")
+codex_mouse_spleen_tiny <- cellcharter_mouse_spleen_tiny()
 demo_fit <- function(x, n_clusters, seed, ...) {
   list(k = n_clusters, seed = seed)
 }
