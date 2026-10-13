@@ -1,5 +1,9 @@
 # CellCharterR
 
+[![Linux CPU package check](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-CMD-check.yaml)
+[![R 4.4 compatibility](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.4-compat.yaml/badge.svg)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.4-compat.yaml)
+[![License](https://img.shields.io/github/license/cperalta-viteri/CellCharterR)](LICENSE)
+
 ## Introduction
 
 CellCharter identifies spatial domains in spatial-omics data by combining each
