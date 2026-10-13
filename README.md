@@ -130,6 +130,34 @@ SpatialExperiment::spatialCoordsNames(spe)
 SingleCellExperiment::reducedDimNames(spe)
 ```
 
+### Where results are stored
+
+CellCharterR keeps each result inside the same `SpatialExperiment`, using the
+standard Bioconductor component appropriate for that result:
+
+| Result | Location in `spe` | Default name |
+|---|---|---|
+| Spatial coordinates | `SpatialExperiment::spatialCoords(spe)` | `x`, `y` |
+| Trimmed sample-local graph | `SingleCellExperiment::colPair(spe, ...)` | `cellcharter_graph` |
+| Aggregated neighbourhood features | `SingleCellExperiment::reducedDim(spe, ...)` | `X_cellcharter` |
+| Selected domain labels | `SummarizedExperiment::colData(spe)` | `cellcharter_domain` |
+| AutoK fits and stability | `S4Vectors::metadata(spe)$CellCharterR$autok` | domain-column name |
+| Enrichment and proximity results | `S4Vectors::metadata(spe)$CellCharterR$results` | analysis name |
+| Parameters and cell-order provenance | `S4Vectors::metadata(spe)$CellCharterR$stages` | stage name |
+
+The available fields can be inspected without realizing disk-backed assays:
+
+```r
+SingleCellExperiment::colPairNames(spe)
+SingleCellExperiment::reducedDimNames(spe)
+colnames(SummarizedExperiment::colData(spe))
+names(S4Vectors::metadata(spe)$CellCharterR)
+```
+
+Subsetting an SPE automatically remaps its `colPairs`; CellCharterR detects
+identity-sensitive stage records as stale so derived representations are not
+silently reused after cell removal or reordering.
+
 ## Reproducing the official tutorial analyses
 
 Download the checksum-pinned public inputs, then run the checkpointed workflow:
