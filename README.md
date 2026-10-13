@@ -1,8 +1,9 @@
 # CellCharterR
 
 [![Linux CPU package check](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-CMD-check.yaml)
+[![R Torch CPU](https://img.shields.io/github/actions/workflow/status/cperalta-viteri/CellCharterR/R-CMD-check.yaml?branch=master&label=R%20Torch%20CPU)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-CMD-check.yaml)
+[![R 4.5 compatibility](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.5-compat.yaml/badge.svg)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.5-compat.yaml)
 [![R 4.4 compatibility](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.4-compat.yaml/badge.svg)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.4-compat.yaml)
-[![License](https://img.shields.io/github/license/cperalta-viteri/CellCharterR)](LICENSE)
 
 ## Introduction
 

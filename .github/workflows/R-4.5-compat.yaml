@@ -1,0 +1,46 @@
+name: R 4.5 compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  r-4-5:
+    runs-on: ubuntu-latest
+    container: bioconductor/bioconductor_docker:RELEASE_3_22
+    env:
+      CELLCHARTERR_CPU_ONLY: "true"
+      CELLCHARTERR_REQUIRE_TORCH: "true"
+      CUDA_VISIBLE_DEVICES: ""
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm the compatibility environment
+        shell: bash
+        run: |
+          Rscript -e 'stopifnot(getRversion() >= "4.5", getRversion() < "4.6"); print(R.version.string); print(BiocManager::version()); print(packageVersion("BiocManager"))'
+
+      - name: Install validation dependencies and CPU LibTorch
+        shell: bash
+        run: |
+          Rscript -e 'BiocManager::install(c("remotes", "rcmdcheck"), ask = FALSE, update = FALSE)'
+          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = TRUE, upgrade = "never")'
+          Rscript -e 'torch::install_torch(type = "cpu")'
+
+      - name: Build and check on R 4.5
+        shell: bash
+        run: |
+          R CMD build .
+          R CMD check --no-manual CellCharterR_*.tar.gz
+
+      - name: Retain R 4.5 compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CellCharterR-R-4.5-validation
+          path: |
+            CellCharterR.Rcheck/00check.log
+            CellCharterR.Rcheck/tests/testthat.Rout.fail
+            CellCharterR.Rcheck/tests/testthat.Rout
