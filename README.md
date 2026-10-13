@@ -100,6 +100,30 @@ torch_gmm_device("cpu")
 
 See [INSTALL](INSTALL) for the supported Linux CPU target and smoke test.
 
+### Importing a large H5AD on R 4.4
+
+`cellcharter_import_h5ad()` does not require Python, `anndataR`, reticulate, or
+zellkonverter. It makes a resumable byte-for-byte clone so the resulting SPE is
+independent of the source H5AD while its large arrays remain on disk:
+
+```r
+bundle <- "TCGA_OSCC_DeepSpotM_FFPE_merged_spe"
+spe <- cellcharter_import_h5ad(
+  "TCGA_OSCC_DeepSpotM_FFPE_merged.h5ad",
+  output_dir = bundle
+)
+```
+
+The complete bundle directory is the portable object. After moving it, reload
+and automatically rebase its HDF5 paths with:
+
+```r
+spe <- cellcharter_load_spe_bundle(bundle)
+```
+
+The source H5AD is never deleted. A full independent bundle requires equivalent
+free disk space; interrupted copies resume from `arrays.h5.partial`.
+
 ## Why the GMM uses Torch directly
 
 The GMM is an expectation-maximisation (EM) algorithm. Its E-step evaluates
