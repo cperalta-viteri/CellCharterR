@@ -13,8 +13,10 @@ cellcharter_load_spe_bundle(bundle_dir)
 A valid disk-backed \code{SpatialExperiment}.
 }
 \description{
-Reloads \code{spe.rds} and rebases every HDF5 seed to the bundle-local
-\code{arrays.h5}. Use this function after moving the complete directory.
+Reconstructs the S4 experiment shell with the locally installed
+Bioconductor classes and attaches it to the bundle-local \code{arrays.h5}. This
+avoids cross-release serialization dependencies such as \code{Seqinfo}. Use this
+function after moving the complete directory.
 }
 \examples{
 \dontrun{

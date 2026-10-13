@@ -219,30 +219,58 @@ read_transition_h5ad_spe <- function(
     arrays_file <- .transition_clone_file(h5ad_file, output_dir, chunk_mib)
     spe <- .transition_build_spe(arrays_file, assay_path, assay_name, obs_columns, var_columns,
                                  spatial_path, reduced_dims, aucell_path, sample_column)
+    # Keep the reconstruction recipe base-R-only. Serialized Bioconductor S4
+    # objects are not reliably portable across releases (for example, newer
+    # rowRanges can embed the separately packaged Seqinfo class).
+    manifest_path <- file.path(output_dir, "manifest.rds")
+    manifest <- readRDS(manifest_path)
+    manifest$format_version <- 2L
+    manifest$import_spec <- list(
+        assay_path = assay_path, assay_name = assay_name,
+        obs_columns = obs_columns, var_columns = var_columns,
+        spatial_path = spatial_path, reduced_dims = reduced_dims,
+        aucell_path = aucell_path, sample_column = sample_column
+    )
+    .transition_atomic_save_rds(manifest, manifest_path)
     S4Vectors::metadata(spe)$transitionR$bundle_dir <- output_dir
     rds_path <- file.path(output_dir, "spe.rds")
     if (file.exists(rds_path) && !overwrite) stop("spe.rds exists; set overwrite = TRUE.", call. = FALSE)
     .transition_atomic_save_rds(spe, rds_path); spe
 }
 
-# Load a moved SPE bundle and rebase every HDF5 seed to its arrays.h5.
+# Load a moved SPE bundle by rebuilding its S4 shell against local packages.
 load_transition_spe <- function(bundle_dir) {
     bundle_dir <- normalizePath(bundle_dir, mustWork = TRUE)
     arrays_file <- normalizePath(file.path(bundle_dir, "arrays.h5"), mustWork = TRUE)
-    spe <- readRDS(file.path(bundle_dir, "spe.rds"))
-    assays <- SummarizedExperiment::assays(spe, withDimnames = FALSE)
-    assays <- S4Vectors::endoapply(assays, .transition_rebase, arrays_file = arrays_file)
-    SummarizedExperiment::assays(spe, withDimnames = FALSE) <- assays
-    cd <- SummarizedExperiment::colData(spe)
-    for (j in seq_along(cd)) cd[[j]] <- .transition_rebase(cd[[j]], arrays_file)
-    SummarizedExperiment::colData(spe) <- cd
-    rd <- SingleCellExperiment::reducedDims(spe, withDimnames = FALSE)
-    rd <- S4Vectors::endoapply(rd, .transition_rebase, arrays_file = arrays_file)
-    SingleCellExperiment::reducedDims(spe, withDimnames = FALSE) <- rd
+    manifest_path <- file.path(bundle_dir, "manifest.rds")
+    if (!file.exists(manifest_path)) {
+        stop("Bundle lacks manifest.rds and cannot be reconstructed portably.", call. = FALSE)
+    }
+    manifest <- readRDS(manifest_path)
+    spec <- manifest$import_spec
+    if (is.null(spec)) {
+        # Format-1 bundles were created before reconstruction parameters were
+        # recorded. They used these public defaults; rebuilding avoids loading
+        # their release-specific serialized S4 skeleton.
+        spec <- list(
+            assay_path = "X", assay_name = "expression",
+            obs_columns = NULL, var_columns = NULL,
+            spatial_path = "obsm/spatial",
+            reduced_dims = c(PCA = "obsm/X_pca", cellcharter = "obsm/X_cellcharter"),
+            aucell_path = "obsm/score_aucell", sample_column = "slide_id_concat"
+        )
+    }
+    spe <- do.call(
+        .transition_build_spe,
+        c(list(arrays_file = arrays_file), spec)
+    )
     S4Vectors::metadata(spe)$transitionR$arrays_file <- arrays_file
     S4Vectors::metadata(spe)$transitionR$bundle_dir <- bundle_dir
+    S4Vectors::metadata(spe)$transitionR$manifest_format_version <-
+        manifest$format_version
+    S4Vectors::metadata(spe)$transitionR$reconstructed_locally <- TRUE
     valid <- methods::validObject(spe, test = TRUE)
-    if (!identical(valid, TRUE)) stop("Rebased SPE is invalid: ", paste(valid, collapse = "; "), call. = FALSE)
+    if (!identical(valid, TRUE)) stop("Reconstructed SPE is invalid: ", paste(valid, collapse = "; "), call. = FALSE)
     spe
 }
 
@@ -269,8 +297,10 @@ cellcharter_import_h5ad <- function(h5ad_file, output_dir, ...) {
 
 #' Load a movable disk-backed SpatialExperiment bundle
 #'
-#' Reloads `spe.rds` and rebases every HDF5 seed to the bundle-local
-#' `arrays.h5`. Use this function after moving the complete directory.
+#' Reconstructs the S4 experiment shell with the locally installed
+#' Bioconductor classes and attaches it to the bundle-local `arrays.h5`. This
+#' avoids cross-release serialization dependencies such as `Seqinfo`. Use this
+#' function after moving the complete directory.
 #'
 #' @param bundle_dir Directory created by [cellcharter_import_h5ad()].
 #' @return A valid disk-backed `SpatialExperiment`.
