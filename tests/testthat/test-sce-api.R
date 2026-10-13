@@ -112,6 +112,34 @@ test_that("native SpatialExperiment coordinates survive the complete workflow", 
   expect_true(all(S4Vectors::to(subset_graph) <= ncol(subset)))
 })
 
+test_that("disk-backed numeric reduced dimensions pass validation without realization", {
+  sce <- .tiny_sce_fixture()
+  delayed <- DelayedArray::DelayedArray(
+    SingleCellExperiment::reducedDim(sce, "X_trVAE")
+  )
+  SingleCellExperiment::reducedDim(sce, "X_delayed") <- delayed
+
+  observed <- .cc_sce_reduced_dim(sce, "X_delayed")
+
+  expect_s4_class(observed, "DelayedMatrix")
+  expect_identical(DelayedArray::type(observed), "double")
+  expect_equal(dim(observed), c(ncol(sce), 2L))
+})
+
+test_that("enrichment plotting accepts stored results and direct result lists", {
+  skip_if_not_installed("ggplot2")
+  spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
+  result <- S4Vectors::metadata(spe)$CellCharterR$results$enrichment$value
+
+  from_spe <- cellcharter_plot_enrichment(spe)
+  from_result <- cellcharter_plot_enrichment(result, title = "Tiny enrichment")
+
+  expect_s3_class(from_spe, "ggplot")
+  expect_s3_class(from_result, "ggplot")
+  expect_equal(nrow(from_result$data), length(result$enrichment))
+  expect_identical(from_result$labels$title, "Tiny enrichment")
+})
+
 test_that("object API rejects positional identity and stale subset metadata", {
   skip_if_not_installed("geometry")
   sce <- .tiny_sce_fixture()

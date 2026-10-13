@@ -205,6 +205,101 @@ statistics use all nine libraries. The full `cell_type` annotation is used for
 the log2 observed/expected dot plot with `size_threshold=0.58`,
 `color_threshold=0.58`, and the CellCharter v0.2.0 default clustered labels.
 
+# From input SPE to saved results
+
+The full mouse-spleen analysis is deliberately not rerun while this report is
+rendered. The code below shows the public stages used to create the graph,
+disk-backed neighborhood representation, AutoK fit, selected domains, and
+downstream statistics. The evaluated sections that follow load the corresponding
+precomputed artifacts and display their outputs.
+
+```{r full-staged-workflow, eval=FALSE}
+full_spe <- readRDS("results/CellCharterR_mouse_spleen_v2/representation/codex_sce.rds")
+
+full_spe <- cellcharter_graph(
+  full_spe,
+  spatial = "spatial",
+  sample_col = "sample",
+  graph_name = "cellcharter_graph",
+  percentile = 99
+)
+
+full_spe <- cellcharter_aggregate(
+  full_spe,
+  representation = "X_trVAE",
+  graph_name = "cellcharter_graph",
+  sample_col = "sample",
+  output = "X_cellcharter",
+  n_layers = 3L,
+  filepath = "results/CellCharterR_mouse_spleen_v2/aggregation/X_cellcharter.h5"
+)
+
+full_spe <- cellcharter_cluster(
+  full_spe,
+  representation = "X_cellcharter",
+  candidate_k = 2:20,
+  checkpoint_dir = "results/CellCharterR_mouse_spleen_v2/autok",
+  domain_col = "cellcharter_domain",
+  max_runs = 10L,
+  convergence_tol = 0.01,
+  seed = 1L,
+  fit_args = list(device = "auto", batch_size = 8192L),
+  predict_args = list(device = "auto", batch_size = 8192L),
+  resume = TRUE
+)
+
+full_spe <- cellcharter_enrichment(
+  full_spe,
+  group_col = "cell_type",
+  domain_col = "cellcharter_domain"
+)
+full_spe <- cellcharter_nhood_enrichment(
+  full_spe,
+  graph_name = "cellcharter_graph",
+  domain_col = "cellcharter_domain"
+)
+full_spe <- cellcharter_diff_nhood_enrichment(
+  full_spe,
+  graph_name = "cellcharter_graph",
+  domain_col = "cellcharter_domain",
+  condition_col = "condition",
+  sample_col = "sample",
+  condition_groups = c("BALBc", "MRL"),
+  n_perms = 100L,
+  seed = 1L
+)
+
+saveRDS(
+  full_spe,
+  "results/CellCharterR_mouse_spleen_v2/downstream/codex_spe_complete.rds"
+)
+```
+
+## Optional compact wrapper
+
+For a compact dataset, `cellcharter_workflow()` composes the same stages. It is
+shown for completeness, but the staged version above is preferable for the full
+dataset because it exposes the HDF5 aggregation path and each durable checkpoint.
+
+```{r full-workflow-wrapper, eval=FALSE}
+full_spe <- cellcharter_workflow(
+  full_spe,
+  group_col = "cell_type",
+  candidate_k = 2:20,
+  checkpoint_dir = "results/CellCharterR_mouse_spleen_v2/autok",
+  representation = "X_trVAE",
+  sample_col = "sample",
+  condition_col = "condition",
+  aggregated = "X_cellcharter",
+  domain_col = "cellcharter_domain",
+  n_layers = 3L,
+  condition_groups = c("BALBc", "MRL"),
+  n_perms = 100L,
+  seed = 1L
+)
+```
+
+
 # AutoK stability and K selection
 
 The points are all saved neighboring-K Fowlkes--Mallows comparisons from the
@@ -260,7 +355,10 @@ knitr::kable(
 
 ```{r primary-dotplot, echo=TRUE, fig.width=18, fig.height=9, fig.alt="Cell type by primary K=4 domain dot plot; colour and area encode log2 observed-to-expected enrichment"}
 graphics::par(mar = c(18, 6, 3, 1))
-plot_enrichment_dotplot(primary_enrichment, primary_k)
+CellCharterR::cellcharter_plot_enrichment(
+  primary_enrichment,
+  title = paste0("Cluster ~ full cell type enrichment (K=", primary_k, ")")
+)
 ```
 
 ```{r primary-dotplot-table, echo=TRUE, eval=FALSE}
@@ -361,7 +459,10 @@ knitr::kable(
 
 ```{r k11-dotplot, echo=TRUE, fig.width=18, fig.height=10, fig.alt="Cell type by K=11 sensitivity domain dot plot; colour and area encode log2 observed-to-expected enrichment"}
 graphics::par(mar = c(18, 6, 3, 1))
-plot_enrichment_dotplot(k11_enrichment, 11L)
+CellCharterR::cellcharter_plot_enrichment(
+  k11_enrichment,
+  title = "Cluster ~ full cell type enrichment (K=11)"
+)
 ```
 
 ```{r k11-dotplot-table, echo=TRUE, eval=FALSE}

@@ -385,6 +385,81 @@ if (file.exists(autok_provenance_path)) {
 }
 ```
 
+## Reproduce the checkpointed stages
+
+The full dataset is not recomputed while this report is rendered. The commands
+below show the public SPE workflow that produces the graph, disk-backed
+neighborhood representation, AutoK domains, and downstream statistics. The
+following report sections load and display the durable artifacts created by
+these stages.
+
+```{r full-staged-workflow, eval=FALSE}
+# Start from the immutable, disk-backed trVAE SpatialExperiment.
+full_spe <- readRDS(file.path(result_dir, "representation", "codex_sce.rds"))
+
+full_spe <- cellcharter_graph(
+  full_spe,
+  spatial = "spatial",
+  sample_col = "sample",
+  graph_name = "cellcharter_graph",
+  percentile = 99
+)
+saveRDS(full_spe, file.path(result_dir, "graph", "codex_spe_graph.rds"))
+
+full_spe <- cellcharter_aggregate(
+  full_spe,
+  representation = "X_trVAE",
+  graph_name = "cellcharter_graph",
+  sample_col = "sample",
+  output = "X_cellcharter",
+  n_layers = 3L,
+  filepath = file.path(result_dir, "aggregation_pinned_global", "X_cellcharter.h5")
+)
+saveRDS(full_spe, file.path(result_dir, "aggregation_pinned_global", "codex_spe.rds"))
+
+full_spe <- cellcharter_cluster(
+  full_spe,
+  representation = "X_cellcharter",
+  candidate_k = 2:20,
+  checkpoint_dir = file.path(result_dir, "autok_pinned_global"),
+  domain_col = "cellcharter_domain",
+  max_runs = 10L,
+  convergence_tol = 0.01,
+  seed = 1L,
+  fit_args = list(device = "auto", batch_size = 8192L),
+  predict_args = list(device = "auto", batch_size = 8192L),
+  resume = TRUE
+)
+saveRDS(full_spe, file.path(result_dir, "selected", "codex_spe_clustered.rds"))
+
+full_spe <- cellcharter_enrichment(
+  full_spe,
+  group_col = "cell_type_reduced",
+  domain_col = "cellcharter_domain"
+)
+full_spe <- cellcharter_nhood_enrichment(
+  full_spe,
+  graph_name = "cellcharter_graph",
+  domain_col = "cellcharter_domain"
+)
+full_spe <- cellcharter_diff_nhood_enrichment(
+  full_spe,
+  graph_name = "cellcharter_graph",
+  domain_col = "cellcharter_domain",
+  condition_col = "condition",
+  sample_col = "sample",
+  condition_groups = c("BALBc", "MRL"),
+  n_perms = 100L,
+  seed = 1L
+)
+saveRDS(full_spe, file.path(result_dir, "downstream", "codex_spe_complete.rds"))
+```
+
+For production regeneration, `scripts/run_codex_mouse_spleen.R` performs the
+same scientific stages with the stricter reference-parity checks and granular
+checkpoint manifests documented below.
+
+
 ## Graph and aggregation checks
 
 The R-native Qhull graphs were constructed independently within physical
@@ -631,11 +706,10 @@ plot_matrix(
 )
 ```
 
-```{r cell-type-enrichment, echo=TRUE, fig.width=12, fig.height=10, fig.alt="Heatmap of reduced-cell-type log2 observed-to-expected enrichment in primary domains"}
-plot_matrix(
-  cell_type_enrichment$enrichment,
-  "Reduced-cell-type enrichment: log2(observed / expected)",
-  diverging = TRUE
+```{r cell-type-enrichment, echo=TRUE, fig.width=12, fig.height=10, fig.alt="Dot plot of reduced-cell-type log2 observed-to-expected enrichment in primary domains"}
+CellCharterR::cellcharter_plot_enrichment(
+  cell_type_enrichment,
+  title = "Reduced-cell-type enrichment: log2(observed / expected)"
 )
 ```
 

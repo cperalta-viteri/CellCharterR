@@ -21,7 +21,13 @@
 .cc_sce_reduced_dim <- function(sce, name, context = "representation") {
   .cc_validate_sce_identity(sce, reduced_dims = name)
   value <- SingleCellExperiment::reducedDim(sce, name)
-  if (!is.numeric(value) || length(dim(value)) != 2L || nrow(value) != ncol(sce) ||
+  # `is.numeric()` is FALSE for an S4 DelayedMatrix even when its seed stores
+  # doubles or integers. Inspect the delayed storage type without realizing the
+  # representation, which is essential for multi-million-spot inputs.
+  numeric_value <- is.numeric(value) ||
+    (inherits(value, "DelayedArray") &&
+       DelayedArray::type(value) %in% c("integer", "double"))
+  if (!numeric_value || length(dim(value)) != 2L || nrow(value) != ncol(sce) ||
       ncol(value) == 0L) {
     stop("SCE ", context, " `", name, "` must be a non-empty numeric matrix-like object.",
          call. = FALSE)

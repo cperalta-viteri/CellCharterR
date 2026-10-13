@@ -86,7 +86,7 @@ head(SummarizedExperiment::colData(spe)[, c("sample", "condition", "cell_type")]
 table(SummarizedExperiment::colData(spe)$sample)
 ```
 
-## Run the SPE-first workflow
+## Run the workflow one stage at a time
 
 The candidate range is declared before fitting: K=2 through K=10. CellCharter's
 neighboring-K calculation also fits the two boundary models needed to score
@@ -94,62 +94,122 @@ that range. The tutorial uses three repeated runs to keep package builds short;
 a scientific analysis should retain the package default `max_runs = 10` and
 `convergence_tol = 0.01`.
 
-All Torch computation is forced to the CPU here. AutoK checkpoints are written
-to a temporary directory so interrupted fits can be resumed during an ordinary
-analysis.
+The individual calls below are the recommended way to learn the workflow and
+the required approach for a large dataset: each object has a clear location,
+and expensive stages can be saved independently. They are displayed rather
+than executed during package building; the validated result is loaded
+afterwards so every following output remains visible.
 
-```{r run-workflow, message=TRUE, eval=FALSE}
+```{r staged-setup, eval=FALSE}
 checkpoint_dir <- tempfile("CellCharterR-tiny-AutoK-")
+```
 
-# This is executable user code. Package builds display it without refitting 33
-# Torch GMMs and restore the validated version-neutral checkpoint below.
-torch_ready <- tryCatch({
-  loadNamespace("torch")
-  TRUE
-}, error = function(error) FALSE)
+### 1. Construct the sample-local spatial graph
 
-if (!torch_ready && identical(Sys.getenv("CELLCHARTERR_REQUIRE_TORCH"), "true")) {
-  stop("The required CPU Torch workflow could not start in this validation run.")
-}
+```{r staged-graph, eval=FALSE}
+spe <- cellcharter_graph(
+  spe,
+  spatial = "spatial",
+  sample_col = "sample",
+  graph_name = "cellcharter_graph",
+  percentile = 99
+)
+```
 
-if (torch_ready) {
-  spe <- cellcharter_workflow(
-    spe,
-    group_col = "cell_type_reduced",
-    candidate_k = c(2L, 10L),
-    checkpoint_dir = checkpoint_dir,
-    spatial = "spatial",
-    representation = "X_trVAE",
-    sample_col = "sample",
-    condition_col = "condition",
-    graph_name = "cellcharter_graph",
-    aggregated = "X_cellcharter_tiny",
-    domain_col = "tiny_domain",
-    n_layers = 3L,
-    condition_groups = c("BALBc", "MRL"),
-    n_perms = 10L,
-    seed = 1L,
-    autok_args = list(
-      max_runs = 3L,
-      convergence_tol = 0.01,
-      fit_args = list(
-        batch_size = 256L,
-        max_iter = 20L,
-        device = "cpu",
-        num_threads = 1L
-      ),
-      predict_args = list(batch_size = 256L, device = "cpu")
-    )
+### 2. Aggregate exclusive graph-hop representations
+
+The tiny example can remain in memory. For a large dataset, supply
+`filepath = "checkpoints/X_cellcharter.h5"` to keep this matrix disk-backed.
+
+```{r staged-aggregation, eval=FALSE}
+spe <- cellcharter_aggregate(
+  spe,
+  representation = "X_trVAE",
+  graph_name = "cellcharter_graph",
+  sample_col = "sample",
+  output = "X_cellcharter_tiny",
+  n_layers = 3L
+)
+```
+
+### 3. Run AutoK and attach the selected domains
+
+```{r staged-clustering, eval=FALSE}
+spe <- cellcharter_cluster(
+  spe,
+  representation = "X_cellcharter_tiny",
+  candidate_k = c(2L, 10L),
+  checkpoint_dir = checkpoint_dir,
+  domain_col = "tiny_domain",
+  max_runs = 3L,
+  convergence_tol = 0.01,
+  seed = 1L,
+  fit_args = list(
+    batch_size = 256L,
+    max_iter = 20L,
+    device = "cpu",
+    num_threads = 1L
+  ),
+  predict_args = list(batch_size = 256L, device = "cpu")
+)
+```
+
+Use `max_runs = 10L`, the default model iteration limit, and `device = "auto"`
+for a scientific analysis. The smaller values above only bound vignette work.
+
+### 4. Compute downstream statistics
+
+```{r staged-statistics, eval=FALSE}
+spe <- cellcharter_enrichment(
+  spe, group_col = "cell_type_reduced", domain_col = "tiny_domain"
+)
+spe <- cellcharter_nhood_enrichment(
+  spe, graph_name = "cellcharter_graph", domain_col = "tiny_domain"
+)
+spe <- cellcharter_diff_nhood_enrichment(
+  spe,
+  graph_name = "cellcharter_graph",
+  domain_col = "tiny_domain",
+  condition_col = "condition",
+  sample_col = "sample",
+  condition_groups = c("BALBc", "MRL"),
+  n_perms = 10L,
+  seed = 1L
+)
+```
+
+### Optional compact wrapper
+
+`cellcharter_workflow()` composes exactly those stages. It is convenient for
+small examples, but staged calls with durable output paths are safer for large
+experiments.
+
+```{r workflow-wrapper, eval=FALSE}
+spe <- cellcharter_workflow(
+  spe,
+  group_col = "cell_type_reduced",
+  candidate_k = c(2L, 10L),
+  checkpoint_dir = checkpoint_dir,
+  spatial = "spatial",
+  representation = "X_trVAE",
+  sample_col = "sample",
+  condition_col = "condition",
+  aggregated = "X_cellcharter_tiny",
+  domain_col = "tiny_domain",
+  condition_groups = c("BALBc", "MRL"),
+  n_perms = 10L,
+  seed = 1L,
+  autok_args = list(
+    max_runs = 3L,
+    convergence_tol = 0.01,
+    fit_args = list(batch_size = 256L, max_iter = 20L, device = "cpu"),
+    predict_args = list(batch_size = 256L, device = "cpu")
   )
-} else {
-  message("Torch runtime unavailable; using the validated tiny checkpoint.")
-  spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
-}
+)
 ```
 
 ```{r load-workflow-checkpoint, include=FALSE}
-# Package builds restore version-neutral validated results so installation does
-# not refit 33 Torch GMMs. The complete executable code remains visible above.
+# Load the precomputed result corresponding to the visible staged calls.
 spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 ```
 
@@ -255,19 +315,15 @@ round(results$nhood_enrichment$value$enrichment, 2)
 round(results$diff_nhood_enrichment$value$effect, 2)
 ```
 
-```{r enrichment-plot, fig.alt="Cell-type by teaching-domain log2 fold-change enrichment heatmap"}
+```{r enrichment-plot, fig.alt="Cell-type by teaching-domain log2 fold-change enrichment dot plot"}
 enrichment <- results$enrichment$value$enrichment
-enrichment_long <- as.data.frame(as.table(enrichment), stringsAsFactors = FALSE)
-names(enrichment_long) <- c("cell_type", "domain", "log2_fc")
-ggplot2::ggplot(enrichment_long,
-                ggplot2::aes(domain, cell_type, fill = log2_fc)) +
-  ggplot2::geom_tile(colour = "grey85") +
-  ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B") +
-  ggplot2::labs(x = "Teaching domain", y = "Cell type", fill = "log2 FC") +
-  ggplot2::theme_minimal(base_size = 16)
+cellcharter_plot_enrichment(
+  spe,
+  title = "Cell-type enrichment in teaching domains"
+)
 ```
 
-Positive cells in this heatmap are more common in a domain than expected from
+Positive points are more common in a domain than expected from
 their overall abundance; negative cells are depleted. For example, the code
 below reports the strongest finite enrichment and depletion in this teaching
 subset. These are demonstrations, not full-data biological conclusions.
