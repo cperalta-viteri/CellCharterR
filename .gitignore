@@ -23,3 +23,4 @@
 # Local transitionR source data and generated SPE bundles
 /transitionR/*.h5ad
 /transitionR/*_spe/
+/transitionR/
