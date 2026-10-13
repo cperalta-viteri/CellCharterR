@@ -1,0 +1,5 @@
+# Rendered documentation is generated from authored R Markdown sources.
+# Keep it tracked for GitHub Pages and installed-package access, but exclude
+# the embedded HTML, JavaScript, CSS, and base64 figures from language totals.
+docs/*.html linguist-generated=true
+inst/reports/*.html linguist-generated=true
