@@ -98,13 +98,11 @@ All Torch computation is forced to the CPU here. AutoK checkpoints are written
 to a temporary directory so interrupted fits can be resumed during an ordinary
 analysis.
 
-```{r run-workflow, message=TRUE}
+```{r run-workflow, message=TRUE, eval=FALSE}
 checkpoint_dir <- tempfile("CellCharterR-tiny-AutoK-")
 
-# Some sandboxed build systems cannot expose their own process ID to the
-# processx dependency used by torch. Normal installations execute this branch;
-# the packaged checkpoint keeps documentation rebuilds available when that
-# external runtime facility is unavailable.
+# This is executable user code. Package builds display it without refitting 33
+# Torch GMMs and restore the validated version-neutral checkpoint below.
 torch_ready <- tryCatch({
   loadNamespace("torch")
   TRUE
@@ -144,12 +142,15 @@ if (torch_ready) {
     )
   )
 } else {
-  message("Torch runtime unavailable in this build process; using the validated tiny checkpoint.")
-  spe <- readRDS(system.file(
-    "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-    package = "CellCharterR", mustWork = TRUE
-  ))
+  message("Torch runtime unavailable; using the validated tiny checkpoint.")
+  spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 }
+```
+
+```{r load-workflow-checkpoint, include=FALSE}
+# Package builds restore version-neutral validated results so installation does
+# not refit 33 Torch GMMs. The complete executable code remains visible above.
+spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 ```
 
 The graph is stored in `colPairs()`, the aggregate representation in

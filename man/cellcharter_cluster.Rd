@@ -34,10 +34,7 @@ The updated \code{SingleCellExperiment}.
 Run CellCharter AutoK and attach selected domains to an SCE
 }
 \examples{
-example_sce <- readRDS(system.file(
-  "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-  package = "CellCharterR"
-))
+example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 demo_fit <- function(x, n_clusters, seed, ...) {
   list(k = n_clusters, seed = seed)
 }

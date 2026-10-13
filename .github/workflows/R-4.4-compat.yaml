@@ -25,16 +25,21 @@ jobs:
       - name: Test the R 4.4 package floor without anndataR
         shell: bash
         run: |
-          Rscript -e 'path <- "DESCRIPTION"; x <- readLines(path); x <- sub("R (>= 4.5.0)", "R (>= 4.4.0)", x, fixed = TRUE); stopifnot(any(grepl("R (>= 4.4.0)", x, fixed = TRUE))); writeLines(x, path)'
           Rscript -e 'BiocManager::install(c("remotes", "rcmdcheck"), ask = FALSE, update = FALSE)'
-          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = c("Depends", "Imports", "LinkingTo"), upgrade = "never")'
+          Rscript -e 'BiocManager::install(c("zlibbioc", "DelayedArray", "HDF5Array", "IRanges", "rhdf5", "S4Arrays", "S4Vectors", "SingleCellExperiment", "SpatialExperiment", "SummarizedExperiment"), dependencies = c("Depends", "Imports", "LinkingTo"), ask = FALSE, update = FALSE)'
+          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = c("Depends", "Imports", "LinkingTo"), upgrade = "never", repos = BiocManager::repositories())'
           Rscript -e 'BiocManager::install(c("BiocStyle", "ggplot2", "ggspavis", "jsonlite", "knitr", "MASS", "mclust", "rmarkdown", "testthat"), ask = FALSE, update = FALSE)'
           Rscript -e 'torch::install_torch(type = "cpu")'
+
+      - name: Verify the Bioconductor 3.20 dependency closure
+        shell: bash
+        run: |
+          Rscript -e 'pkgs <- c("zlibbioc", "DelayedArray", "HDF5Array", "IRanges", "rhdf5", "S4Arrays", "S4Vectors", "SingleCellExperiment", "SpatialExperiment", "SummarizedExperiment", "BiocStyle", "knitr", "rmarkdown"); print(.libPaths()); print(BiocManager::repositories()); print(vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)); stopifnot(all(vapply(pkgs, requireNamespace, logical(1), quietly = TRUE))); print(BiocManager::valid())'
 
       - name: Build and check on R 4.4
         shell: bash
         run: |
-          R CMD build .
+          R CMD build . 2>&1 | tee R-CMD-build.log
           R CMD check --no-manual CellCharterR_*.tar.gz
 
       - name: Verify the packaged H5AD to SPE reader
@@ -53,3 +58,4 @@ jobs:
             CellCharterR.Rcheck/00check.log
             CellCharterR.Rcheck/tests/testthat.Rout.fail
             CellCharterR.Rcheck/tests/testthat.Rout
+            R-CMD-build.log

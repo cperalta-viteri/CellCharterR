@@ -33,10 +33,7 @@ The updated \code{SingleCellExperiment}.
 Attach CellCharter neighborhood enrichment to an SCE
 }
 \examples{
-example_sce <- readRDS(system.file(
-  "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-  package = "CellCharterR"
-))
+example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 example_sce <- cellcharter_nhood_enrichment(
   example_sce, domain_col = "tiny_domain"
 )

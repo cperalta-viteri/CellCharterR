@@ -198,3 +198,25 @@ test_that("packaged tiny H5AD pair reconstructs the portable tiny SPE", {
     SpatialExperiment::spatialCoords(observed)[index, , drop = FALSE], tolerance = 0
   )
 })
+
+test_that("version-neutral teaching workflow restores graph and results", {
+  spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
+  expect_s4_class(spe, "SpatialExperiment")
+  expect_true(methods::validObject(spe, test = TRUE))
+  expect_identical(dim(spe), c(29L, 1000L))
+  expect_true("i-niche" %in% colnames(SummarizedExperiment::colData(spe)))
+  expect_false("i.niche" %in% colnames(SummarizedExperiment::colData(spe)))
+  expect_true("cellcharter_graph" %in% SingleCellExperiment::colPairNames(spe))
+  expect_true(all(c("X_trVAE", "X_cellcharter", "X_cellcharter_tiny") %in%
+                    SingleCellExperiment::reducedDimNames(spe)))
+  expect_true("tiny_domain" %in% colnames(SummarizedExperiment::colData(spe)))
+  pair <- SingleCellExperiment::colPair(spe, "cellcharter_graph")
+  sample_id <- as.character(SummarizedExperiment::colData(spe)$sample)
+  expect_true(all(sample_id[S4Vectors::from(pair)] == sample_id[S4Vectors::to(pair)]))
+  info <- S4Vectors::metadata(spe)$CellCharterR
+  expect_true(all(c("enrichment", "nhood_enrichment", "diff_nhood_enrichment") %in%
+                    names(info$results)))
+  expect_identical(info$autok$tiny_domain$candidate_k, 2:10)
+  expect_identical(info$autok$tiny_domain$max_runs, 3L)
+  expect_error(cellcharter_mouse_spleen_tiny(with_results = NA), "TRUE or FALSE")
+})

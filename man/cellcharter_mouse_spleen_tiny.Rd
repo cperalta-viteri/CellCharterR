@@ -9,7 +9,12 @@ CODEX mouse-spleen data, dataset DOI
 \doi{10.1016/j.cell.2018.07.010}.
 }
 \usage{
-cellcharter_mouse_spleen_tiny()
+cellcharter_mouse_spleen_tiny(with_results = FALSE)
+}
+\arguments{
+\item{with_results}{If \code{TRUE}, also restore the validated teaching workflow's
+graph, AutoK summary, labels, and downstream statistical results. The
+default returns the clean input object used to demonstrate the workflow.}
 }
 \value{
 A 29-feature by 1,000-cell \code{SpatialExperiment}.

@@ -40,10 +40,7 @@ The updated \code{SingleCellExperiment}.
 Aggregate CellCharter neighborhoods on a SpatialExperiment
 }
 \examples{
-example_sce <- readRDS(system.file(
-  "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-  package = "CellCharterR"
-))
+example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 example_sce <- cellcharter_aggregate(
   example_sce, output = "example_aggregation", n_layers = 1
 )

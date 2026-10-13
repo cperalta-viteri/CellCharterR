@@ -204,10 +204,7 @@ cellcharter_graph <- function(sce, spatial = "spatial", sample_col = "sample",
 #' @param block_rows HDF5 aggregation row budget.
 #' @return The updated `SingleCellExperiment`.
 #' @examples
-#' example_sce <- readRDS(system.file(
-#'   "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-#'   package = "CellCharterR"
-#' ))
+#' example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 #' example_sce <- cellcharter_aggregate(
 #'   example_sce, output = "example_aggregation", n_layers = 1
 #' )
@@ -257,10 +254,7 @@ cellcharter_aggregate <- function(
 #' @param ... Additional arguments passed to [cellcharter_autok_fit()].
 #' @return The updated `SingleCellExperiment`.
 #' @examples
-#' example_sce <- readRDS(system.file(
-#'   "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-#'   package = "CellCharterR"
-#' ))
+#' example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 #' demo_fit <- function(x, n_clusters, seed, ...) {
 #'   list(k = n_clusters, seed = seed)
 #' }
@@ -327,10 +321,7 @@ cellcharter_cluster <- function(
 #' @param log2_fold_change Return log2 fold change.
 #' @return The updated `SingleCellExperiment`.
 #' @examples
-#' example_sce <- readRDS(system.file(
-#'   "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-#'   package = "CellCharterR"
-#' ))
+#' example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 #' example_sce <- cellcharter_enrichment(
 #'   example_sce, group_col = "cell_type_reduced", domain_col = "tiny_domain"
 #' )
@@ -353,10 +344,7 @@ cellcharter_enrichment <- function(
 #' @param only_inter Exclude within-domain edges.
 #' @return The updated `SingleCellExperiment`.
 #' @examples
-#' example_sce <- readRDS(system.file(
-#'   "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-#'   package = "CellCharterR"
-#' ))
+#' example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 #' example_sce <- cellcharter_nhood_enrichment(
 #'   example_sce, domain_col = "tiny_domain"
 #' )
@@ -387,10 +375,7 @@ cellcharter_nhood_enrichment <- function(
 #' @param permutation_mode CellCharter parity or conventional shuffle mode.
 #' @return The updated `SingleCellExperiment`.
 #' @examples
-#' example_sce <- readRDS(system.file(
-#'   "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-#'   package = "CellCharterR"
-#' ))
+#' example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 #' example_sce <- cellcharter_diff_nhood_enrichment(
 #'   example_sce, domain_col = "tiny_domain",
 #'   condition_groups = c("BALBc", "MRL"), n_perms = 5L, seed = 1L

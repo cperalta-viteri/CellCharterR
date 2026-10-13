@@ -51,10 +51,7 @@ The updated \code{SingleCellExperiment}.
 Attach differential CellCharter neighborhood enrichment to an SCE
 }
 \examples{
-example_sce <- readRDS(system.file(
-  "extdata", "codex_mouse_spleen_tiny_workflow.rds",
-  package = "CellCharterR"
-))
+example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 example_sce <- cellcharter_diff_nhood_enrichment(
   example_sce, domain_col = "tiny_domain",
   condition_groups = c("BALBc", "MRL"), n_perms = 5L, seed = 1L
