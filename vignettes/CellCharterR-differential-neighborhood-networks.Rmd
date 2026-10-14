@@ -48,6 +48,12 @@ k4_result <- readRDS(system.file(
   package = "CellCharterR"
 ))
 
+k4_enrichment <- readRDS(system.file(
+  "extdata",
+  "mouse_spleen_k4_enrichment.rds",
+  package = "CellCharterR"
+))
+
 k4_result$params[c(
   "contrast_definition", "library_unit", "library_counts",
   "n_perms", "permutation_mode", "empirical_tail"
@@ -58,6 +64,27 @@ This result compares three BALBc libraries with six MRL libraries, uses the
 sample as the permutation unit, and contains 100 permutations with the pinned
 CellCharter 0.2.0 compatibility mode. Its SHA-256 checksum is
 `ae65446954faeb1b15aa53bcf5f1ec45e2ebd09d553a61a12c59c28029c3f6d7`.
+The matching cell-type enrichment artifact has SHA-256 checksum
+`be78548f33e16fd2f668c79cd7aa539a97df95f4a9a7ccdd0ab1b00665c0d261`.
+
+# Meet the ecosystems
+
+Before interpreting connections between domains, first inspect which cell types
+characterize each domain. The dot plot shows positive observed-to-expected
+cell-type enrichment as log2 fold change. Darker and larger red points indicate
+stronger positive enrichment; non-positive values remain in the stored result
+but are omitted from this display, following the CellCharter presentation.
+
+```{r ecosystem-enrichment, fig.width=12, fig.height=8, fig.cap="Cell-type enrichment defining the four K=4 mouse-spleen spatial ecosystems."}
+cellcharter_plot_enrichment(
+  k4_enrichment,
+  title = "Cell types defining the K=4 spatial ecosystems"
+)
+```
+
+These enrichment profiles provide the biological context for the numbered
+nodes below: each network node is one of these four spatial ecosystems, not an
+individual cell type.
 
 # Plot both favored-condition networks
 
