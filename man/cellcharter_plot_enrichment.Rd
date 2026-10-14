@@ -8,7 +8,10 @@ cellcharter_plot_enrichment(
   x,
   result_name = "enrichment",
   title = NULL,
-  point_range = c(1, 8)
+  point_range = c(1, 8),
+  size_threshold = 0.58,
+  colour_threshold = 0.58,
+  cluster_domains = TRUE
 )
 }
 \arguments{
@@ -21,13 +24,23 @@ enrichment result, a list with an \code{enrichment} matrix, or the matrix itself
 \item{title}{Optional plot title.}
 
 \item{point_range}{Two positive numbers controlling the point-size range.}
+
+\item{size_threshold}{Positive log2 fold-change at which point size is
+capped. The CellCharter CODEX tutorial uses \code{0.58}.}
+
+\item{colour_threshold}{Positive log2 fold-change at which colour intensity
+is capped. The CellCharter CODEX tutorial uses \code{0.58}.}
+
+\item{cluster_domains}{Whether to order domains by complete-linkage
+clustering of the thresholded enrichment profiles, as in CellCharter.}
 }
 \value{
 A \code{ggplot} object.
 }
 \description{
-Draws a dot plot in which colour represents signed log2 observed-to-expected
-enrichment and point area represents its magnitude. The input can be a
+Draws a CellCharter-style dot plot that focuses on positive log2
+observed-to-expected enrichment. Non-positive values remain in the returned
+statistical result but are omitted from the plot. The input can be a
 clustered \code{SpatialExperiment}, a result returned by the enrichment kernel,
 or an enrichment matrix.
 }

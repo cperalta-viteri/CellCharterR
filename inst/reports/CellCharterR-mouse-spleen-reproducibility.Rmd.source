@@ -385,7 +385,7 @@ knitr::kable(
 
 ## Cluster ~ full cell type dot plot (log2 observed/expected)
 
-```{r primary-dotplot, echo=TRUE, fig.width=18, fig.height=9, fig.alt="Cell type by primary K=4 domain dot plot; colour and area encode log2 observed-to-expected enrichment"}
+```{r primary-dotplot, echo=TRUE, fig.width=18, fig.height=9, fig.alt="Positive cell-type enrichment by primary K=4 domain; darker and larger red points indicate stronger positive log2 fold change"}
 graphics::par(mar = c(18, 6, 3, 1))
 CellCharterR::cellcharter_plot_enrichment(
   primary_enrichment,
@@ -489,7 +489,7 @@ knitr::kable(
 
 ## Cluster ~ full cell type dot plot (log2 observed/expected)
 
-```{r k11-dotplot, echo=TRUE, fig.width=18, fig.height=10, fig.alt="Cell type by K=11 sensitivity domain dot plot; colour and area encode log2 observed-to-expected enrichment"}
+```{r k11-dotplot, echo=TRUE, fig.width=18, fig.height=10, fig.alt="Positive cell-type enrichment by K=11 sensitivity domain; darker and larger red points indicate stronger positive log2 fold change"}
 graphics::par(mar = c(18, 6, 3, 1))
 CellCharterR::cellcharter_plot_enrichment(
   k11_enrichment,

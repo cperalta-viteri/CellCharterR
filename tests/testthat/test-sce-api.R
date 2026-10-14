@@ -136,8 +136,33 @@ test_that("enrichment plotting accepts stored results and direct result lists", 
 
   expect_s3_class(from_spe, "ggplot")
   expect_s3_class(from_result, "ggplot")
-  expect_equal(nrow(from_result$data), length(result$enrichment))
+  expected_positive <- sum(
+    is.finite(result$enrichment) & result$enrichment > 0
+  )
+  expect_equal(nrow(from_result$data), expected_positive)
+  expect_true(all(from_result$data$enrichment > 0))
+  expect_equal(from_result$labels$x, "Cell type")
+  expect_equal(from_result$labels$y, "CellCharter domain")
   expect_identical(from_result$labels$title, "Tiny enrichment")
+})
+
+test_that("enrichment plotting suppresses depletion and caps positive display values", {
+  skip_if_not_installed("ggplot2")
+  values <- matrix(
+    c(-Inf, -3, -0.3, 0, 0.3, 2), nrow = 3L,
+    dimnames = list(c("A", "B", "C"), c("0", "1"))
+  )
+
+  plotted <- cellcharter_plot_enrichment(
+    values, size_threshold = 0.58, colour_threshold = 0.58,
+    cluster_domains = FALSE
+  )
+
+  expect_equal(sort(plotted$data$enrichment), c(0.3, 2))
+  expect_equal(sort(plotted$data$point_size), c(0.3, 0.58))
+  expect_equal(sort(plotted$data$colour_value), c(0.3, 0.58))
+  expect_identical(levels(plotted$data$group), rownames(values))
+  expect_identical(levels(plotted$data$domain), rev(colnames(values)))
 })
 
 test_that("object API rejects positional identity and stale subset metadata", {

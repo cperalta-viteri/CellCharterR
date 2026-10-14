@@ -348,7 +348,7 @@ round(results$nhood_enrichment$value$enrichment, 2)
 round(results$diff_nhood_enrichment$value$effect, 2)
 ```
 
-```{r enrichment-plot, fig.alt="Cell-type by teaching-domain log2 fold-change enrichment dot plot"}
+```{r enrichment-plot, fig.alt="Positive cell-type enrichment by teaching domain; darker and larger red points indicate stronger positive log2 fold change"}
 enrichment <- results$enrichment$value$enrichment
 cellcharter_plot_enrichment(
   spe,
@@ -356,10 +356,14 @@ cellcharter_plot_enrichment(
 )
 ```
 
-Positive points are more common in a domain than expected from
-their overall abundance; negative cells are depleted. For example, the code
-below reports the strongest finite enrichment and depletion in this teaching
-subset. These are demonstrations, not full-data biological conclusions.
+Displayed points are more common in a domain than expected from their overall
+abundance. Non-positive associations remain available in the enrichment matrix
+but are omitted from this CellCharter-style plot so depletion does not dominate
+the display. Darker and larger red points indicate stronger positive
+enrichment, capped at the tutorial display threshold of 0.58. For example, the
+code below reports the strongest finite enrichment and depletion in this
+teaching subset. These are demonstrations, not full-data biological
+conclusions.
 
 ```{r interpret-enrichment}
 finite_index <- which(is.finite(enrichment), arr.ind = TRUE)
