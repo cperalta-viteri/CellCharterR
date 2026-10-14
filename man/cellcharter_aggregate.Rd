@@ -28,8 +28,9 @@ cellcharter_aggregate(
 
 \item{n_layers}{Largest exclusive graph hop to aggregate.}
 
-\item{filepath}{Optional HDF5 output path. Use this for non-tiny data; \code{NULL}
-creates an in-memory matrix suitable for packaged examples.}
+\item{filepath}{Optional HDF5 output path. The default \code{NULL} keeps the
+aggregated representation in memory and avoids an additional backing-file
+dependency. Supply a path only when available RAM is insufficient.}
 
 \item{block_rows}{HDF5 aggregation row budget.}
 }

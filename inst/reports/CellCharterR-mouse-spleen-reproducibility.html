@@ -440,7 +440,7 @@ display: none;
 <h1 class="title toc-ignore">CellCharterR mouse-spleen analysis: AutoK
 primary and standalone K=11 sensitivity</h1>
 <h4 class="author">CellCharterR second-review revision</h4>
-<h4 class="date">2026-10-13 16:15 UTC</h4>
+<h4 class="date">2026-10-13 17:45 UTC</h4>
 
 </div>
 
@@ -449,7 +449,9 @@ primary and standalone K=11 sensitivity</h1>
 <li><a href="#scope-and-artifact-roles" id="toc-scope-and-artifact-roles"><span class="toc-section-number">1</span> Scope and artifact roles</a></li>
 <li><a href="#from-input-spe-to-saved-results" id="toc-from-input-spe-to-saved-results"><span class="toc-section-number">2</span> From input SPE to saved results</a>
 <ul>
-<li><a href="#optional-compact-wrapper" id="toc-optional-compact-wrapper"><span class="toc-section-number">2.1</span> Optional compact wrapper</a></li>
+<li><a href="#resume-autok-after-an-interruption" id="toc-resume-autok-after-an-interruption"><span class="toc-section-number">2.1</span> Resume AutoK after an
+interruption</a></li>
+<li><a href="#optional-compact-wrapper" id="toc-optional-compact-wrapper"><span class="toc-section-number">2.2</span> Optional compact wrapper</a></li>
 </ul></li>
 <li><a href="#autok-stability-and-k-selection" id="toc-autok-stability-and-k-selection"><span class="toc-section-number">3</span> AutoK stability and K
 selection</a></li>
@@ -482,166 +484,6 @@ enrichment in both display directions</a></li>
 </ul>
 </div>
 
-<pre class="r"><code># All analysis code remains visible in the rendered report.
-knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
-                      fig.align = &quot;center&quot;, fig.retina = 1,
-                      dev.args = list(pointsize = 16))
-project_root &lt;- if (file.exists(file.path(getwd(), &quot;DESCRIPTION&quot;))) {
-  getwd()
-} else if (file.exists(file.path(dirname(getwd()), &quot;DESCRIPTION&quot;))) {
-  dirname(getwd())
-} else {
-  stop(&quot;Render from the CellCharterR repository root or its reports directory.&quot;)
-}
-requested_result_dir &lt;- params$result_dir
-if (!grepl(&quot;^/&quot;, requested_result_dir)) {
-  requested_result_dir &lt;- file.path(project_root, requested_result_dir)
-}
-result_dir &lt;- normalizePath(requested_result_dir, winslash = &quot;/&quot;, mustWork = TRUE)
-manifest &lt;- readRDS(file.path(result_dir, &quot;CellCharterR_primary_K11_manifest.rds&quot;))
-stopifnot(
-  identical(manifest$tool, &quot;CellCharterR&quot;),
-  identical(manifest$roles$Primary$role_id, &quot;r_autok_primary&quot;),
-  identical(manifest$roles$TutorialK11$role_id, &quot;r_tutorial_k11_sensitivity&quot;),
-  identical(manifest$roles$TutorialK11$seed, 12345L),
-  identical(
-    manifest$roles$PublishedH5ADReference$role_id,
-    &quot;published_h5ad_reference&quot;
-  ),
-  identical(manifest$displayed_samples, c(&quot;BALBc-1&quot;, &quot;MRL-4&quot;)),
-  file.exists(manifest$autok_stability_plot),
-  identical(manifest$enrichment_plot_parameters$group_key, &quot;cell_type&quot;),
-  identical(manifest$enrichment_plot_parameters$size_threshold, 0.58),
-  identical(manifest$enrichment_plot_parameters$color_threshold, 0.58),
-  isTRUE(manifest$enrichment_plot_parameters$cluster_labels),
-  identical(manifest$differential_parameters$significance, 0.05)
-)
-
-map_to_spe &lt;- function(data, k) {
-  samples &lt;- c(&quot;BALBc-1&quot;, &quot;MRL-4&quot;)
-  keep &lt;- as.character(data$sample) %in% samples
-  data &lt;- data[keep, , drop = FALSE]
-  display_spe &lt;- SpatialExperiment::SpatialExperiment(
-    assays = list(display = matrix(0, nrow = 1L, ncol = nrow(data))),
-    colData = S4Vectors::DataFrame(
-      sample_id = factor(
-        as.character(data$sample), levels = samples,
-        labels = c(&quot;BALBc-1&quot;, &quot;MRL-4 (early)&quot;)
-      ),
-      domain = factor(data$domain, levels = seq.int(0L, k - 1L))
-    ),
-    spatialCoords = as.matrix(data[, c(&quot;x&quot;, &quot;y&quot;)]),
-    sample_id = factor(
-      as.character(data$sample), levels = samples,
-      labels = c(&quot;BALBc-1&quot;, &quot;MRL-4 (early)&quot;)
-    )
-  )
-  display_spe
-}
-
-matrix_long &lt;- function(x, value_name, condition = NULL) {
-  result &lt;- as.data.frame(as.table(as.matrix(x)), stringsAsFactors = FALSE)
-  names(result) &lt;- c(&quot;source&quot;, &quot;target&quot;, value_name)
-  if (!is.null(condition)) result$condition &lt;- condition
-  result
-}
-
-plot_enrichment_dotplot &lt;- function(enrichment, k) {
-  values &lt;- as.matrix(enrichment$enrichment)
-  size_threshold &lt;- 0.58
-  color_threshold &lt;- 0.58
-
-  # CellCharter v0.2.0 defaults to cluster_labels=TRUE. Its complete-linkage
-  # clustering uses the thresholded color matrix, not the raw enrichment.
-  color_values &lt;- ifelse(
-    values &lt; 0, -1,
-    ifelse(values &lt; color_threshold, 0, 1)
-  )
-  domain_order &lt;- colnames(values)
-  if (ncol(values) &gt; 1L) {
-    domain_order &lt;- domain_order[stats::hclust(
-      stats::dist(t(color_values)), method = &quot;complete&quot;
-    )$order]
-  }
-
-  cells &lt;- expand.grid(
-    cell_type = rownames(values), domain = colnames(values),
-    KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
-  )
-  cells$value &lt;- as.vector(values)
-  # CellCharter maps [-1, 0.58] through TwoSlopeNorm. Scanpy 1.9.3 then
-  # clips negative dot-size fractions to zero and uses area = fraction^1.5.
-  # Base R `cex` scales diameter, hence exponent 1.5 / 2 = 0.75 here.
-  cells$size &lt;- pmax(0, pmin(cells$value, size_threshold)) / size_threshold
-  cells$color_value &lt;- as.vector(color_values)
-  palette &lt;- grDevices::colorRampPalette(
-    c(&quot;#3B4CC0&quot;, &quot;darkgrey&quot;, &quot;#B40426&quot;)
-  )(101)
-  color_index &lt;- pmax(
-    1L, pmin(101L, round((cells$color_value + 1) * 50) + 1L)
-  )
-  graphics::plot(
-    as.integer(factor(cells$cell_type, levels = rownames(values))),
-    as.integer(factor(cells$domain, levels = domain_order)),
-    pch = 21, bg = palette[color_index], col = &quot;black&quot;,
-    cex = 2.5 * cells$size^0.75, axes = FALSE,
-    xlim = c(0.5, nrow(values) + 9),
-    xlab = &quot;&quot;, ylab = &quot;Spatial domain (complete-linkage order)&quot;,
-    main = paste0(&quot;Cluster ~ full cell type enrichment (K=&quot;, k, &quot;)&quot;)
-  )
-  graphics::axis(
-    1, at = seq_len(nrow(values)), labels = rownames(values),
-    las = 2, cex.axis = 1
-  )
-  graphics::axis(
-    2, at = seq_along(domain_order), labels = domain_order, las = 1
-  )
-  graphics::box()
-  graphics::mtext(&quot;Cell type&quot;, side = 1, line = 16)
-  graphics::legend(
-    x = nrow(values) + 1, y = max(seq_along(domain_order)), xjust = 0,
-    legend = c(&quot;depleted&quot;, &quot;positive &lt; 0.58&quot;, &quot;enriched &gt;= 0.58&quot;),
-    pt.bg = c(&quot;#3B4CC0&quot;, &quot;darkgrey&quot;, &quot;#B40426&quot;),
-    pch = 21, cex = 1, title = &quot;log2 observed/expected&quot;, bty = &quot;n&quot;
-  )
-}
-
-plot_heatmap &lt;- function(x, title, limits = NULL, annotate = FALSE,
-                         pvalue = NULL, significance = NULL) {
-  x &lt;- as.matrix(x)
-  plotted &lt;- x
-  plotted[!is.finite(plotted)] &lt;- NA_real_
-  if (is.null(limits)) {
-    limits &lt;- range(plotted, finite = TRUE)
-  }
-  if (length(limits) != 2L || any(!is.finite(limits)) || limits[[1L]] &gt;= 0 ||
-      limits[[2L]] &lt;= 0) {
-    stop(&quot;Heatmap limits must be finite and span zero, as required by TwoSlopeNorm.&quot;)
-  }
-  palette &lt;- grDevices::hcl.colors(101, &quot;Blue-Red 3&quot;, rev = TRUE)
-  graphics::image(
-    seq_len(ncol(plotted)), seq_len(nrow(plotted)), t(plotted),
-    col = palette, zlim = limits, axes = FALSE,
-    xlab = &quot;target domain&quot;, ylab = &quot;source domain&quot;, main = title,
-    useRaster = TRUE
-  )
-  graphics::axis(
-    1, at = seq_len(ncol(plotted)), labels = colnames(plotted), las = 2
-  )
-  graphics::axis(
-    2, at = seq_len(nrow(plotted)), labels = rownames(plotted), las = 2
-  )
-  graphics::box()
-  if (annotate) {
-    for (i in seq_len(nrow(plotted))) for (j in seq_len(ncol(plotted))) {
-      if (!is.finite(plotted[i, j])) next
-      significant &lt;- !is.null(pvalue) &amp;&amp; !is.null(significance) &amp;&amp;
-        is.finite(pvalue[i, j]) &amp;&amp; pvalue[i, j] &lt;= significance
-      label &lt;- paste0(sprintf(&quot;%.2f&quot;, plotted[i, j]), if (significant) &quot;*&quot; else &quot;&quot;)
-      graphics::text(j, i, label, cex = 1)
-    }
-  }
-}</code></pre>
 <div id="scope-and-artifact-roles" class="section level1" number="1">
 <h1><span class="header-section-number">1</span> Scope and artifact
 roles</h1>
@@ -678,7 +520,7 @@ clustered labels.</p>
 results</h1>
 <p>The full mouse-spleen analysis is deliberately not rerun while this
 report is rendered. The code below shows the public stages used to
-create the graph, disk-backed neighborhood representation, AutoK fit,
+create the graph, in-memory neighborhood representation, AutoK fit,
 selected domains, and downstream statistics. The evaluated sections that
 follow load the corresponding precomputed artifacts and display their
 outputs.</p>
@@ -698,8 +540,13 @@ full_spe &lt;- cellcharter_aggregate(
   graph_name = &quot;cellcharter_graph&quot;,
   sample_col = &quot;sample&quot;,
   output = &quot;X_cellcharter&quot;,
-  n_layers = 3L,
-  filepath = &quot;results/CellCharterR_mouse_spleen_v2/aggregation/X_cellcharter.h5&quot;
+  n_layers = 3L
+)
+
+saveRDS(
+  full_spe,
+  &quot;results/CellCharterR_mouse_spleen_v2/aggregation/spe_after_aggregation.rds&quot;,
+  compress = FALSE
 )
 
 full_spe &lt;- cellcharter_cluster(
@@ -741,13 +588,40 @@ saveRDS(
   full_spe,
   &quot;results/CellCharterR_mouse_spleen_v2/downstream/codex_spe_complete.rds&quot;
 )</code></pre>
-<div id="optional-compact-wrapper" class="section level2" number="2.1">
-<h2><span class="header-section-number">2.1</span> Optional compact
+<div id="resume-autok-after-an-interruption" class="section level2" number="2.1">
+<h2><span class="header-section-number">2.1</span> Resume AutoK after an
+interruption</h2>
+<p>Keep the post-aggregation SPE and AutoK directory together. Days or
+weeks later, repeat the exact clustering call with
+<code>resume = TRUE</code>; completed <code>run_*.rds</code> fits are
+reused.</p>
+<pre class="r"><code>full_spe &lt;- readRDS(
+  &quot;results/CellCharterR_mouse_spleen_v2/aggregation/spe_after_aggregation.rds&quot;
+)
+
+full_spe &lt;- cellcharter_cluster(
+  full_spe,
+  representation = &quot;X_cellcharter&quot;,
+  candidate_k = 2:20,
+  checkpoint_dir = &quot;results/CellCharterR_mouse_spleen_v2/autok&quot;,
+  domain_col = &quot;cellcharter_domain&quot;,
+  max_runs = 10L,
+  convergence_tol = 0.01,
+  seed = 1L,
+  fit_args = list(device = &quot;cuda&quot;, batch_size = 16384L),
+  predict_args = list(device = &quot;cuda&quot;, batch_size = 32768L),
+  resume = TRUE
+)</code></pre>
+</div>
+<div id="optional-compact-wrapper" class="section level2" number="2.2">
+<h2><span class="header-section-number">2.2</span> Optional compact
 wrapper</h2>
 <p>For a compact dataset, <code>cellcharter_workflow()</code> composes
 the same stages. It is shown for completeness, but the staged version
-above is preferable for the full dataset because it exposes the HDF5
-aggregation path and each durable checkpoint.</p>
+above is preferable for the full dataset because it exposes each durable
+checkpoint. If aggregation exceeds available RAM, add
+<code>filepath = ...</code> and retain that optional HDF5 file with the
+SPE.</p>
 <pre class="r"><code>full_spe &lt;- cellcharter_workflow(
   full_spe,
   group_col = &quot;cell_type&quot;,
@@ -993,7 +867,8 @@ information</h1>
 ## [1] stats     graphics  grDevices utils     datasets  methods   base     
 ## 
 ## other attached packages:
-## [1] CellCharterR_0.99.0 testthat_3.3.2     
+## [1] BiocStyle_2.38.0    CellCharterR_0.99.0 testthat_3.3.2     
+## [4] torch_0.17.0       
 ## 
 ## loaded via a namespace (and not attached):
 ##  [1] tidyselect_1.2.1            dplyr_1.2.1                
@@ -1014,33 +889,34 @@ information</h1>
 ## [31] desc_1.4.3                  grid_4.5.3                 
 ## [33] stats4_4.5.3                Rhdf5lib_1.32.0            
 ## [35] ggplot2_4.0.3               scales_1.4.0               
-## [37] SummarizedExperiment_1.40.0 cli_3.6.6                  
-## [39] rmarkdown_2.31              ggspavis_1.16.0            
-## [41] generics_0.1.4              otel_0.2.0                 
-## [43] rstudioapi_0.18.0           rjson_0.2.23               
-## [45] magic_1.6-1-1               sessioninfo_1.2.3          
-## [47] cachem_1.1.0                rhdf5_2.54.1               
-## [49] XVector_0.50.0              coro_1.1.0                 
-## [51] matrixStats_1.5.0           vctrs_0.7.3                
-## [53] devtools_2.5.1              Matrix_1.7-4               
-## [55] jsonlite_2.0.0              callr_3.7.6                
-## [57] IRanges_2.44.0              S4Vectors_0.48.1           
-## [59] ggrepel_0.9.8               bit64_4.8.0                
-## [61] magick_2.9.1                h5mread_1.2.1              
-## [63] jquerylib_0.1.4             ggside_0.4.1               
-## [65] glue_1.8.1                  ps_1.9.3                   
-## [67] gtable_0.3.6                GenomicRanges_1.62.1       
-## [69] tibble_3.3.1                pillar_1.11.1              
-## [71] htmltools_0.5.9             Seqinfo_1.0.0              
-## [73] brio_1.1.5                  rhdf5filters_1.22.0        
-## [75] torch_0.17.0                R6_2.6.1                   
-## [77] rprojroot_2.1.1             evaluate_1.0.5             
-## [79] lattice_0.22-9              Biobase_2.70.0             
-## [81] SpatialExperiment_1.20.0    memoise_2.0.1              
-## [83] bslib_0.10.0                Rcpp_1.1.1-1               
-## [85] SparseArray_1.10.10         xfun_0.57                  
-## [87] pkgconfig_2.0.3             fs_2.1.0                   
-## [89] MatrixGenerics_1.22.0       usethis_3.2.1</code></pre>
+## [37] tinytex_0.59                SummarizedExperiment_1.40.0
+## [39] cli_3.6.6                   rmarkdown_2.31             
+## [41] ggspavis_1.16.0             generics_0.1.4             
+## [43] otel_0.2.0                  rstudioapi_0.18.0          
+## [45] rjson_0.2.23                magic_1.6-1-1              
+## [47] sessioninfo_1.2.3           cachem_1.1.0               
+## [49] rhdf5_2.54.1                BiocManager_1.30.27        
+## [51] XVector_0.50.0              coro_1.1.0                 
+## [53] matrixStats_1.5.0           vctrs_0.7.3                
+## [55] devtools_2.5.1              Matrix_1.7-4               
+## [57] jsonlite_2.0.0              bookdown_0.46              
+## [59] callr_3.7.6                 IRanges_2.44.0             
+## [61] S4Vectors_0.48.1            ggrepel_0.9.8              
+## [63] bit64_4.8.0                 magick_2.9.1               
+## [65] h5mread_1.2.1               jquerylib_0.1.4            
+## [67] ggside_0.4.1                glue_1.8.1                 
+## [69] ps_1.9.3                    gtable_0.3.6               
+## [71] GenomicRanges_1.62.1        tibble_3.3.1               
+## [73] pillar_1.11.1               htmltools_0.5.9            
+## [75] Seqinfo_1.0.0               brio_1.1.5                 
+## [77] rhdf5filters_1.22.0         R6_2.6.1                   
+## [79] rprojroot_2.1.1             evaluate_1.0.5             
+## [81] lattice_0.22-9              Biobase_2.70.0             
+## [83] SpatialExperiment_1.20.0    memoise_2.0.1              
+## [85] bslib_0.10.0                Rcpp_1.1.1-1               
+## [87] SparseArray_1.10.10         xfun_0.57                  
+## [89] pkgconfig_2.0.3             fs_2.1.0                   
+## [91] MatrixGenerics_1.22.0       usethis_3.2.1</code></pre>
 </div>
 
 

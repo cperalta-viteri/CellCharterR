@@ -124,6 +124,51 @@ spe <- cellcharter_load_spe_bundle(bundle)
 The source H5AD is never deleted. A full independent bundle requires equivalent
 free disk space; interrupted copies resume from `arrays.h5.partial`.
 
+### Saving a completed large analysis
+
+After graph construction, aggregation, clustering, and enrichment, save the
+completed `SpatialExperiment` as an RDS inside its bundle directory:
+
+```r
+# With filepath = NULL, the aggregated representation is stored in the SPE.
+spe <- cellcharter_aggregate(
+  spe,
+  representation = "PCA",
+  graph_name = "cellcharter_graph",
+  n_layers = 3L,
+  output = "X_cellcharter"
+)
+
+# Run clustering and downstream analyses, then checkpoint the complete state.
+analysis_rds <- file.path(bundle, "cellcharter_complete.rds")
+saveRDS(spe, analysis_rds, compress = FALSE)
+```
+
+The RDS contains the graph, in-memory aggregated representation, domain labels,
+models, analysis results, parameters, and provenance, so these stages do not
+need to be recomputed. Imported assays and reduced dimensions remain lazily
+backed by `arrays.h5`; consequently, keep the RDS and the complete bundle
+together:
+
+```text
+TCGA_OSCC_DeepSpotM_FFPE_merged_spe/
+├── arrays.h5
+├── manifest.rds
+└── cellcharter_complete.rds
+```
+
+When the bundle remains at the same path, reopen the completed analysis with:
+
+```r
+spe <- readRDS(file.path(bundle, "cellcharter_complete.rds"))
+methods::validObject(spe)
+```
+
+Place the bundle at its intended permanent location before a long analysis.
+A plain RDS records the current HDF5 backing path, so moving only the RDS will
+not move its large arrays. The analysis is independent of the original H5AD,
+but not of the bundle-local `arrays.h5`; copy or archive the entire directory.
+
 ## Why the GMM uses Torch directly
 
 The GMM is an expectation-maximisation (EM) algorithm. Its E-step evaluates
@@ -140,6 +185,31 @@ The GMM never materialises the whole feature matrix. Each iteration:
 3. calculates responsibilities and sufficient statistics;
 4. releases the chunk and advances to the next one;
 5. updates only the small K-by-P means and K P-by-P covariance matrices.
+
+For CUDA analyses, opt into the full-data Torch initializer and automatic
+batch sizing. `cellcharter_cluster_fixed()` fits exactly one K and therefore
+does not expand it into the neighbouring models required by AutoK:
+
+```r
+spe <- cellcharter_cluster_fixed(
+  spe,
+  representation = "X_cellcharter",
+  n_clusters = 12L,
+  domain_col = "cellcharter_k12",
+  checkpoint_dir = "checkpoints/fixed_k12_gpu",
+  seed = 42L,
+  fit_args = list(
+    device = "cuda",
+    batch_size = "auto",
+    initialization_method = "torch"
+  ),
+  predict_args = list(device = "cuda", batch_size = 131072L)
+)
+```
+
+The accelerated initializer uses the complete dataset; it is not mini-batch or
+sampled K-means. Use a new checkpoint directory when switching numerical
+engines. The original `initialization_method = "legacy"` path remains available.
 
 ## Minimal example
 

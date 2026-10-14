@@ -13,7 +13,9 @@ torch_gmm_fit(
   covariance_regularization = 1e-06,
   device = "auto",
   seed = 1L,
-  num_threads = NULL
+  num_threads = NULL,
+  initialization_method = c("legacy", "torch"),
+  validate_input = TRUE
 )
 }
 \arguments{
@@ -22,7 +24,8 @@ chunks and never materialised jointly.}
 
 \item{n_clusters}{number of mixture components.}
 
-\item{batch_size}{maximum number of observations transferred per E-step.}
+\item{batch_size}{Maximum observations transferred per E-step, or \code{"auto"}
+for conservative CUDA-memory-aware selection.}
 
 \item{max_iter}{maximum EM iterations.}
 
@@ -36,6 +39,12 @@ chunks and never materialised jointly.}
 
 \item{num_threads}{Requested CPU thread count, or \code{NULL} to retain Torch's
 current setting.}
+
+\item{initialization_method}{\code{"legacy"} for the original base-R streamed
+initializer or \code{"torch"} for the accelerated full-data Torch initializer.}
+
+\item{validate_input}{Whether to scan every input block for finite values
+before fitting. AutoK may perform this scan once for the whole campaign.}
 }
 \value{
 A \code{torch_gmm} model.  Only mixture parameters are retained in memory.

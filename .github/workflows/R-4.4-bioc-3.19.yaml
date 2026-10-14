@@ -1,0 +1,57 @@
+name: R 4.4 / Bioconductor 3.19 compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bioc-3-19:
+    runs-on: ubuntu-latest
+    container: bioconductor/bioconductor_docker:RELEASE_3_19
+    env:
+      CELLCHARTERR_CPU_ONLY: "true"
+      CELLCHARTERR_REQUIRE_TORCH: "true"
+      CUDA_VISIBLE_DEVICES: ""
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm R 4.4 and Bioconductor 3.19
+        shell: bash
+        run: |
+          Rscript -e 'stopifnot(getRversion() >= "4.4", getRversion() < "4.5"); stopifnot(as.character(BiocManager::version()) == "3.19"); print(R.version.string); print(BiocManager::version()); print(packageVersion("BiocManager"))'
+
+      - name: Install the declared dependency closure
+        shell: bash
+        run: |
+          Rscript -e 'BiocManager::install(c("remotes", "rcmdcheck"), ask = FALSE, update = FALSE)'
+          Rscript -e 'BiocManager::install(c("zlibbioc", "DelayedArray", "HDF5Array", "IRanges", "rhdf5", "S4Arrays", "S4Vectors", "SingleCellExperiment", "SpatialExperiment", "SummarizedExperiment"), dependencies = c("Depends", "Imports", "LinkingTo"), ask = FALSE, update = FALSE)'
+          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = c("Depends", "Imports", "LinkingTo"), upgrade = "never", repos = BiocManager::repositories())'
+          Rscript -e 'BiocManager::install(c("BiocStyle", "ggplot2", "ggspavis", "jsonlite", "knitr", "MASS", "rmarkdown", "testthat"), ask = FALSE, update = FALSE)'
+          Rscript -e 'torch::install_torch(type = "cpu")'
+
+      - name: Build and check on the oldest requested environment
+        shell: bash
+        run: |
+          R CMD build . 2>&1 | tee R-CMD-build-bioc-3.19.log
+          R CMD check --no-manual CellCharterR_*.tar.gz
+
+      - name: Exercise movable bundle reconstruction in a fresh R process
+        shell: bash
+        run: |
+          mkdir -p /tmp/CellCharterR-bioc319-library
+          R CMD INSTALL --library=/tmp/CellCharterR-bioc319-library CellCharterR_*.tar.gz
+          R_LIBS_USER=/tmp/CellCharterR-bioc319-library Rscript -e 'library(CellCharterR); spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE); stopifnot(inherits(spe, "SpatialExperiment"), methods::validObject(spe)); print(spe)'
+          if test -f tests/testthat/test-analysis-bundle.R; then R_LIBS_USER=/tmp/CellCharterR-bioc319-library Rscript -e 'testthat::test_file("tests/testthat/test-analysis-bundle.R", package = "CellCharterR", reporter = "summary")'; else echo 'Portable completed-analysis bundle test is pending implementation.'; fi
+
+      - name: Retain compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CellCharterR-R-4.4-Bioc-3.19-validation
+          path: |
+            CellCharterR.Rcheck/00check.log
+            CellCharterR.Rcheck/tests/testthat.Rout.fail
+            CellCharterR.Rcheck/tests/testthat.Rout
+            R-CMD-build-bioc-3.19.log

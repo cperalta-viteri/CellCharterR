@@ -205,8 +205,9 @@ cellcharter_graph <- function(sce, spatial = "spatial", sample_col = "sample",
 #' @param sample_col Physical-sample field in `colData(sce)`.
 #' @param output Output name in `reducedDims(sce)`.
 #' @param n_layers Largest exclusive graph hop to aggregate.
-#' @param filepath Optional HDF5 output path. Use this for non-tiny data; `NULL`
-#'   creates an in-memory matrix suitable for packaged examples.
+#' @param filepath Optional HDF5 output path. The default `NULL` keeps the
+#'   aggregated representation in memory and avoids an additional backing-file
+#'   dependency. Supply a path only when available RAM is insufficient.
 #' @param block_rows HDF5 aggregation row budget.
 #' @return The updated `SingleCellExperiment`.
 #' @examples

@@ -104,6 +104,20 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   artifact
 }
 
+.autok_read_labels <- function(path, n_obs) {
+  artifact <- tryCatch(
+    readRDS(path),
+    error = function(e) stop(
+      "Cannot read AutoK checkpoint `", path, "`: ", conditionMessage(e)
+    )
+  )
+  value <- artifact$labels
+  if (length(value) != n_obs || anyNA(value)) {
+    stop("AutoK checkpoint `", path, "` has invalid labels.")
+  }
+  value
+}
+
 .autok_mirror_stability <- function(edge_stability, fit_k) {
   candidate_k <- fit_k[-c(1L, length(fit_k))]
   if (!nrow(edge_stability)) {
@@ -243,6 +257,35 @@ cellcharter_autok_fit <- function(
   if (!is.function(fit_fun) || !is.function(predict_fun) || !is.function(nll_fun)) {
     stop("`fit_fun`, `predict_fun`, and `nll_fun` must be functions.")
   }
+  # The default Torch fitter otherwise performs the same complete finite-value
+  # scan for every K/run. Validate once for this immutable AutoK invocation and
+  # pass an explicit trusted flag to each fit. Custom fit hooks retain their own
+  # validation policy.
+  if (identical(fit_fun, .autok_default_fit)) {
+    validation_batch_size <- fit_args$batch_size %||% 8192L
+    if (is.character(validation_batch_size) &&
+        length(validation_batch_size) == 1L &&
+        identical(validation_batch_size, "auto")) {
+      tuning <- torch_gmm_autotune_batch_size(
+        n_features = ncol(x), n_clusters = max(fit_k), n_obs = nrow(x),
+        device = fit_args$device %||% "auto"
+      )
+      validation_batch_size <- tuning$batch_size
+      fit_args$batch_size <- tuning$batch_size
+      fit_args$device <- tuning$device
+    }
+    validation_batch_size <- .rc_positive_integer(
+      validation_batch_size, "fit_args$batch_size"
+    )
+    validation_reader <- .rc_reader(x)
+    for (start in .rc_chunk_starts(validation_reader$n, validation_batch_size)) {
+      .rc_get(
+        validation_reader,
+        .rc_chunk_index(start, validation_reader$n, validation_batch_size)
+      )
+    }
+    fit_args$validate_input <- FALSE
+  }
   implementation_functions <- list(
     fit = fit_fun, predict = predict_fun, nll = nll_fun
   )
@@ -264,6 +307,11 @@ cellcharter_autok_fit <- function(
         kmeans_tolerance = .rc_kmeans_tolerance,
         kmeans_plus_plus = .rc_kmeans_plus_plus,
         stream_kmeans = .rc_stream_kmeans,
+        torch_squared_distances = .rc_torch_squared_distances,
+        torch_nearest = .rc_torch_nearest,
+        torch_kmeans_plus_plus = .rc_torch_kmeans_plus_plus,
+        torch_kmeans_tolerance = .rc_torch_kmeans_tolerance,
+        torch_stream_kmeans = .rc_torch_stream_kmeans,
         log_probability = .rc_logprob,
         cholesky = .rc_cholesky,
         estep = .rc_estep_stats,
@@ -311,6 +359,11 @@ cellcharter_autok_fit <- function(
   for (run in seq_len(max_runs)) {
     run_seed <- as.integer(seed + run - 1L)
     if (is.na(run_seed)) stop("Run seed exceeds R's integer range.")
+    current_round_labels <- if (run > 1L) {
+      stats::setNames(vector("list", length(fit_k) - 1L), fit_k[-length(fit_k)])
+    } else {
+      NULL
+    }
 
     for (k in fit_k) {
       path <- .autok_checkpoint_path(checkpoint_dir, k, run)
@@ -352,22 +405,28 @@ cellcharter_autok_fit <- function(
         data.frame(k = k, run = run, seed = run_seed, nll = artifact$nll,
                    path = path, resumed = reused, stringsAsFactors = FALSE)
       )
+      if (run > 1L && k != fit_k[[length(fit_k)]]) {
+        current_round_labels[[as.character(k)]] <- artifact$labels
+      }
       rm(artifact)
     }
 
     if (run > 1L) {
       scores <- vector("list", (run - 1L) * (length(fit_k) - 1L))
       score_index <- 0L
+      # The current round's lower-K labels are reused for every prior run.
+      # Read each vector once, then release the cache after this round. This
+      # preserves CellCharter's comparison order while avoiding repeated RDS
+      # decompression and bounds memory to one round of label vectors.
+      current_labels <- current_round_labels
       # Preserve v0.2.0's comparison order: prior run outside, K edge inside.
       for (previous_run in seq_len(run - 1L)) {
         for (edge in seq_len(length(fit_k) - 1L)) {
           lower_k <- fit_k[[edge]]
           upper_k <- fit_k[[edge + 1L]]
-          current_path <- .autok_checkpoint_path(checkpoint_dir, lower_k, run)
           previous_path <- .autok_checkpoint_path(checkpoint_dir, upper_k, previous_run)
-          current_labels <- readRDS(current_path)$labels
-          previous_labels <- readRDS(previous_path)$labels
-          score <- similarity_fun(current_labels, previous_labels)
+          previous_labels <- .autok_read_labels(previous_path, n_obs)
+          score <- similarity_fun(current_labels[[as.character(lower_k)]], previous_labels)
           if (length(score) != 1L || !is.numeric(score) || !is.finite(score)) {
             stop("`similarity_fun` must return one finite numeric value.")
           }
@@ -376,9 +435,10 @@ cellcharter_autok_fit <- function(
             run = run, previous_run = previous_run, lower_k = lower_k,
             upper_k = upper_k, score = as.numeric(score)
           )
-          rm(current_labels, previous_labels)
+          rm(previous_labels)
         }
       }
+      rm(current_labels)
       edge_stability <- rbind(edge_stability, do.call(rbind, scores))
       stability <- .autok_mirror_stability(edge_stability, fit_k)
       stability_mean <- rowMeans(stability)
@@ -393,6 +453,7 @@ cellcharter_autok_fit <- function(
       }
       previous_stability <- stability
     }
+    rm(current_round_labels)
 
     runs_completed <- run
     partial <- list(

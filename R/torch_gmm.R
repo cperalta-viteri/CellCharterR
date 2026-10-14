@@ -237,15 +237,19 @@ torch_gmm_sample_rows <- function(x, n = 10000L, seed = 1L) {
   k <- dim(means)[1]
   p <- dim(means)[2]
   norm <- p * log(2 * pi)
-  pieces <- lapply(seq_len(k), function(j) {
-    centered <- x - means[j, ]
-    # R Torch exports the modern linalg wrappers without a `torch_` prefix.
-    solved <- torch::linalg_solve_triangular(chol[[j]], centered$t(), upper = FALSE)
-    maha <- torch::torch_sum(solved$pow(2), dim = 1)
-    logdet <- 2 * torch::torch_log(torch::torch_diag(chol[[j]]))$sum()$item()
-    -0.5 * (norm + logdet + maha) + torch::torch_log(weights[j])
-  })
-  torch::torch_stack(pieces, dim = 2)
+  # Solve all components in one batched kernel. Keeping log-determinants on the
+  # device is important on CUDA: `$item()` here used to introduce one device
+  # synchronization per component and per input batch.
+  chol_tensor <- torch::torch_stack(chol, dim = 1)
+  centered <- x$unsqueeze(2) - means$unsqueeze(1) # observations x K x features
+  rhs <- centered$permute(c(2, 3, 1))             # K x features x observations
+  solved <- torch::linalg_solve_triangular(chol_tensor, rhs, upper = FALSE)
+  maha <- solved$pow(2)$sum(dim = 2)$transpose(1, 2)
+  logdet <- 2 * torch::torch_log(
+    torch::torch_diagonal(chol_tensor, dim1 = 2, dim2 = 3)
+  )$sum(dim = 2)
+  -0.5 * (norm + maha + logdet$unsqueeze(1)) +
+    torch::torch_log(weights)$unsqueeze(1)
 }
 
 .rc_cholesky_failure <- function(message) {
@@ -458,7 +462,8 @@ torch_gmm_runtime_info <- function(device = "auto", batch_size = 8192L,
 #' @param x observation-by-feature matrix or DelayedMatrix. Rows are read in
 #'   chunks and never materialised jointly.
 #' @param n_clusters number of mixture components.
-#' @param batch_size maximum number of observations transferred per E-step.
+#' @param batch_size Maximum observations transferred per E-step, or `"auto"`
+#'   for conservative CUDA-memory-aware selection.
 #' @param max_iter maximum EM iterations.
 #' @param tolerance stop when per-observation NLL change is below this value.
 #' @param covariance_regularization diagonal ridge added before Cholesky.
@@ -466,6 +471,10 @@ torch_gmm_runtime_info <- function(device = "auto", batch_size = 8192L,
 #' @param seed initialisation seed.
 #' @param num_threads Requested CPU thread count, or `NULL` to retain Torch's
 #'   current setting.
+#' @param initialization_method `"legacy"` for the original base-R streamed
+#'   initializer or `"torch"` for the accelerated full-data Torch initializer.
+#' @param validate_input Whether to scan every input block for finite values
+#'   before fitting. AutoK may perform this scan once for the whole campaign.
 #' @return A `torch_gmm` model.  Only mixture parameters are retained in memory.
 #' @examplesIf requireNamespace("torch", quietly = TRUE)
 #' # A tiny, deterministic, CPU-only fit.
@@ -483,10 +492,21 @@ torch_gmm_runtime_info <- function(device = "auto", batch_size = 8192L,
 #' @export
 torch_gmm_fit <- function(x, n_clusters, batch_size = 8192L, max_iter = 100L,
                           tolerance = 1e-3, covariance_regularization = 1e-6,
-                          device = "auto", seed = 1L, num_threads = NULL) {
+                          device = "auto", seed = 1L, num_threads = NULL,
+                          initialization_method = c("legacy", "torch"),
+                          validate_input = TRUE) {
   reader <- .rc_reader(x)
   k <- .rc_positive_integer(n_clusters, "n_clusters")
-  batch_size <- .rc_positive_integer(batch_size, "batch_size")
+  if (is.character(batch_size) && length(batch_size) == 1L &&
+      identical(batch_size, "auto")) {
+    tuning <- torch_gmm_autotune_batch_size(
+      reader$p, k, reader$n, device = device
+    )
+    batch_size <- tuning$batch_size
+    device <- tuning$device
+  } else {
+    batch_size <- .rc_positive_integer(batch_size, "batch_size")
+  }
   max_iter <- .rc_positive_integer(max_iter, "max_iter")
   seed <- .rc_positive_integer(seed, "seed", allow_zero = TRUE)
   tolerance <- .rc_nonnegative_number(tolerance, "tolerance", strictly_positive = TRUE)
@@ -494,6 +514,11 @@ torch_gmm_fit <- function(x, n_clusters, batch_size = 8192L, max_iter = 100L,
     covariance_regularization, "covariance_regularization", strictly_positive = TRUE
   )
   num_threads <- .rc_positive_integer(num_threads, "num_threads", allow_null = TRUE)
+  initialization_method <- match.arg(initialization_method)
+  if (!is.logical(validate_input) || length(validate_input) != 1L ||
+      is.na(validate_input)) {
+    stop("`validate_input` must be TRUE or FALSE.", call. = FALSE)
+  }
   # CPU Torch otherwise may inherit a conservative one-thread configuration.
   # Do not combine a large thread count with outer AutoK parallel workers.
   if (!is.null(num_threads)) {
@@ -506,8 +531,10 @@ torch_gmm_fit <- function(x, n_clusters, batch_size = 8192L, max_iter = 100L,
   if (k < 1L || k > reader$n) stop("`n_clusters` must be between 1 and nrow(x).")
   # Validate every disk-backed block before starting an expensive EM fit. This
   # is a streaming scan and never realizes the complete matrix.
-  for (start in .rc_chunk_starts(reader$n, batch_size))
-    .rc_get(reader, .rc_chunk_index(start, reader$n, batch_size))
+  if (validate_input) {
+    for (start in .rc_chunk_starts(reader$n, batch_size))
+      .rc_get(reader, .rc_chunk_index(start, reader$n, batch_size))
+  }
 
   runtime <- torch_gmm_runtime_info(device, batch_size, seed, num_threads)
   message(sprintf(
@@ -517,7 +544,11 @@ torch_gmm_fit <- function(x, n_clusters, batch_size = 8192L, max_iter = 100L,
     runtime$seed, runtime$cpu_threads
   ))
   dev <- torch_gmm_device(runtime$device)
-  initialization <- .rc_stream_kmeans(reader, k, batch_size, seed)
+  initialization <- if (identical(initialization_method, "torch")) {
+    .rc_torch_stream_kmeans(reader, k, batch_size, seed, dev)
+  } else {
+    .rc_stream_kmeans(reader, k, batch_size, seed)
+  }
   eye <- .rc_eye(reader$p, dev)
   collapse_threshold <- 1e-6
   maximum_regularization_attempts <- 8L

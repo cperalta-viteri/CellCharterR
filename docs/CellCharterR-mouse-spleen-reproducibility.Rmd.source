@@ -12,7 +12,7 @@ params:
   result_dir: "results/CellCharterR_mouse_spleen_v2/second_review_deliverables"
 ---
 
-```{r setup, echo=TRUE, message=TRUE, warning=TRUE}
+```{r setup, include=FALSE}
 # All analysis code remains visible in the rendered report.
 knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
                       fig.align = "center", fig.retina = 1,
@@ -209,7 +209,7 @@ the log2 observed/expected dot plot with `size_threshold=0.58`,
 
 The full mouse-spleen analysis is deliberately not rerun while this report is
 rendered. The code below shows the public stages used to create the graph,
-disk-backed neighborhood representation, AutoK fit, selected domains, and
+in-memory neighborhood representation, AutoK fit, selected domains, and
 downstream statistics. The evaluated sections that follow load the corresponding
 precomputed artifacts and display their outputs.
 
@@ -230,8 +230,13 @@ full_spe <- cellcharter_aggregate(
   graph_name = "cellcharter_graph",
   sample_col = "sample",
   output = "X_cellcharter",
-  n_layers = 3L,
-  filepath = "results/CellCharterR_mouse_spleen_v2/aggregation/X_cellcharter.h5"
+  n_layers = 3L
+)
+
+saveRDS(
+  full_spe,
+  "results/CellCharterR_mouse_spleen_v2/aggregation/spe_after_aggregation.rds",
+  compress = FALSE
 )
 
 full_spe <- cellcharter_cluster(
@@ -275,11 +280,38 @@ saveRDS(
 )
 ```
 
+## Resume AutoK after an interruption
+
+Keep the post-aggregation SPE and AutoK directory together. Days or weeks
+later, repeat the exact clustering call with
+`resume = TRUE`; completed `run_*.rds` fits are reused.
+
+```{r full-resume-workflow, eval=FALSE}
+full_spe <- readRDS(
+  "results/CellCharterR_mouse_spleen_v2/aggregation/spe_after_aggregation.rds"
+)
+
+full_spe <- cellcharter_cluster(
+  full_spe,
+  representation = "X_cellcharter",
+  candidate_k = 2:20,
+  checkpoint_dir = "results/CellCharterR_mouse_spleen_v2/autok",
+  domain_col = "cellcharter_domain",
+  max_runs = 10L,
+  convergence_tol = 0.01,
+  seed = 1L,
+  fit_args = list(device = "cuda", batch_size = 16384L),
+  predict_args = list(device = "cuda", batch_size = 32768L),
+  resume = TRUE
+)
+```
+
 ## Optional compact wrapper
 
 For a compact dataset, `cellcharter_workflow()` composes the same stages. It is
 shown for completeness, but the staged version above is preferable for the full
-dataset because it exposes the HDF5 aggregation path and each durable checkpoint.
+dataset because it exposes each durable checkpoint. If aggregation exceeds
+available RAM, add `filepath = ...` and retain that optional HDF5 file with the SPE.
 
 ```{r full-workflow-wrapper, eval=FALSE}
 full_spe <- cellcharter_workflow(

@@ -101,7 +101,8 @@ than executed during package building; the validated result is loaded
 afterwards so every following output remains visible.
 
 ```{r staged-setup, eval=FALSE}
-checkpoint_dir <- tempfile("CellCharterR-tiny-AutoK-")
+checkpoint_dir <- "checkpoints/tiny_autok"
+dir.create(checkpoint_dir, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ### 1. Construct the sample-local spatial graph
@@ -118,8 +119,10 @@ spe <- cellcharter_graph(
 
 ### 2. Aggregate exclusive graph-hop representations
 
-The tiny example can remain in memory. For a large dataset, supply
-`filepath = "checkpoints/X_cellcharter.h5"` to keep this matrix disk-backed.
+Aggregation remains in memory by default, avoiding an additional backing-file
+dependency. If the representation does not fit comfortably in RAM, supply
+`filepath = "checkpoints/X_cellcharter.h5"` as an optional low-memory mode and
+retain that file with the object.
 
 ```{r staged-aggregation, eval=FALSE}
 spe <- cellcharter_aggregate(
@@ -130,6 +133,13 @@ spe <- cellcharter_aggregate(
   output = "X_cellcharter_tiny",
   n_layers = 3L
 )
+```
+
+Save the post-aggregation object before a long AutoK run:
+
+```{r save-aggregation-checkpoint, eval=FALSE}
+dir.create("checkpoints", recursive = TRUE, showWarnings = FALSE)
+saveRDS(spe, "checkpoints/spe_after_aggregation.rds", compress = FALSE)
 ```
 
 ### 3. Run AutoK and attach the selected domains
@@ -151,6 +161,29 @@ spe <- cellcharter_cluster(
     num_threads = 1L
   ),
   predict_args = list(batch_size = 256L, device = "cpu")
+)
+```
+
+If the run is interrupted, load the same object later and repeat the identical
+call with the same checkpoint directory and `resume = TRUE`. Completed fits are
+reused; only an unfinished fit is restarted.
+
+```{r resume-clustering, eval=FALSE}
+spe <- readRDS("checkpoints/spe_after_aggregation.rds")
+checkpoint_dir <- "checkpoints/tiny_autok"
+
+spe <- cellcharter_cluster(
+  spe,
+  representation = "X_cellcharter_tiny",
+  candidate_k = c(2L, 10L),
+  checkpoint_dir = checkpoint_dir,
+  domain_col = "tiny_domain",
+  max_runs = 3L,
+  convergence_tol = 0.01,
+  seed = 1L,
+  fit_args = list(batch_size = 256L, max_iter = 20L, device = "cpu"),
+  predict_args = list(batch_size = 256L, device = "cpu"),
+  resume = TRUE
 )
 ```
 
@@ -426,11 +459,14 @@ AutoK-selected K=4 result, separately labelled K=11 sensitivity analysis,
 cell-type enrichment, neighborhood enrichment, and differential neighborhood
 enrichment. [Open the complete mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-mouse-spleen-reproducibility.html).
 
-For a real dataset, keep large representations HDF5-backed, use
-`cellcharter_aggregate(..., filepath = ...)`, place checkpoints under a
-durable results directory, use `max_runs = 10`, and decide the K range before
-looking at stability. Biological conclusions require the complete dataset and
-appropriate replication; they must not be inferred from this teaching subset.
+For a real dataset whose aggregated representation fits comfortably in RAM,
+leave `filepath = NULL` and save the post-aggregation object directly. Use
+`cellcharter_aggregate(..., filepath = ...)` only when RAM is limiting; in that
+mode retain the aggregation HDF5 file with the object. Place AutoK checkpoints
+under a durable results directory, use `max_runs = 10`, and decide the K range
+before looking at stability. Biological conclusions require the complete
+dataset and appropriate replication; they must not be inferred from this
+teaching subset.
 
 The companion H5AD vignette provides checksum-safe, unevaluated download code.
 The two official H5AD files total 600.4 MiB; reserve additional working space
