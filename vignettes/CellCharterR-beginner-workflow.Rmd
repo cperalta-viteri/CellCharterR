@@ -461,7 +461,7 @@ The complete mouse-spleen analysis is the primary CellCharterR reproducibility
 report. It contains the full visible code, pinned versions, checkpoints,
 AutoK-selected K=4 result, separately labelled K=11 sensitivity analysis,
 cell-type enrichment, neighborhood enrichment, and differential neighborhood
-enrichment. [Open the complete mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/CellCharterR-mouse-spleen-reproducibility.html).
+enrichment. [Open the complete mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html).
 
 For a real dataset whose aggregated representation fits comfortably in RAM,
 leave `filepath = NULL` and save the post-aggregation object directly. Use
