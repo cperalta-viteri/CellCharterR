@@ -40,7 +40,7 @@ jobs:
           mkdir /tmp/CellCharterR-ci-library
           strace -f -e trace=network -o network-install.trace R CMD INSTALL --library=/tmp/CellCharterR-ci-library CellCharterR_*.tar.gz
           R_LIBS_USER=/tmp/CellCharterR-ci-library strace -f -e trace=network -o network-smoke.trace Rscript inst/scripts/ci-cpu-smoke.R cpu-smoke.rds
-          R_LIBS_USER=/tmp/CellCharterR-ci-library Rscript -e 'library(CellCharterR); testthat::test_file("tests/testthat/test-analysis-bundle.R", package = "CellCharterR", reporter = "summary", stop_on_failure = TRUE, stop_on_warning = TRUE)'
+          R_LIBS_USER=/tmp/CellCharterR-ci-library Rscript -e 'invisible(suppressWarnings(lapply(c("HDF5Array", "SummarizedExperiment"), requireNamespace, quietly = TRUE))); library(CellCharterR); testthat::test_file("tests/testthat/test-analysis-bundle.R", package = "CellCharterR", reporter = "summary", stop_on_failure = TRUE, stop_on_warning = TRUE)'
           if grep -E 'socket\(AF_INET6?|connect\([^,]+,.*(AF_INET6?|sin_port)' network-*.trace; then
             echo 'Unexpected IPv4/IPv6 network activity occurred after dependency installation.' >&2
             exit 1

@@ -13,6 +13,9 @@
   report as immediately viewable HTML.
 - Added a movable, separately distributed full mouse-spleen SPE checkpoint with
   no H5AD or HDF5Array dependency.
+- Added `cellcharter_plot_graph_diff()` for deterministic two-panel directed
+  differential-neighborhood networks, together with a full mouse-spleen K=4
+  illustrative vignette and rendered HTML.
 - Incorporated the second-round methodological corrections and tests for graph,
   aggregation, AutoK, full-covariance GMM, enrichment, differential inference,
   provenance, and bounded-memory behavior.

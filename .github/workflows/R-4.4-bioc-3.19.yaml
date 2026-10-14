@@ -44,7 +44,7 @@ jobs:
           R CMD INSTALL --library=/tmp/CellCharterR-bioc319-library CellCharterR_*.tar.gz
           R_LIBS_USER=/tmp/CellCharterR-bioc319-library Rscript -e 'library(CellCharterR); spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE); stopifnot(inherits(spe, "SpatialExperiment"), methods::validObject(spe)); print(spe)'
           test -f tests/testthat/test-analysis-bundle.R
-          R_LIBS_USER=/tmp/CellCharterR-bioc319-library Rscript -e 'library(CellCharterR); testthat::test_file("tests/testthat/test-analysis-bundle.R", package = "CellCharterR", reporter = "summary", stop_on_failure = TRUE, stop_on_warning = TRUE)'
+          R_LIBS_USER=/tmp/CellCharterR-bioc319-library Rscript -e 'invisible(suppressWarnings(lapply(c("HDF5Array", "SummarizedExperiment"), requireNamespace, quietly = TRUE))); library(CellCharterR); testthat::test_file("tests/testthat/test-analysis-bundle.R", package = "CellCharterR", reporter = "summary", stop_on_failure = TRUE, stop_on_warning = TRUE)'
 
       - name: Retain compatibility evidence
         if: always()

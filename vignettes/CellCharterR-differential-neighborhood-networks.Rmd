@@ -1,0 +1,150 @@
+---
+title: "Visualizing differential neighborhood-enrichment networks"
+author: "CellCharterR contributors"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+vignette: >
+  %\VignetteIndexEntry{Visualizing differential neighborhood-enrichment networks}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 12,
+  fig.height = 6.5,
+  dpi = 120
+)
+```
+
+# Purpose
+
+Differential neighborhood enrichment asks whether a directed domain-to-domain
+neighborhood association is stronger in one biological condition than another.
+This vignette uses the completed full mouse-spleen analysis with the
+independently selected **K = 4** solution. It demonstrates visualization only:
+the graph, clustering, neighborhood statistics, and permutations are not
+recomputed while building this vignette.
+
+The stored contrast is BALBc minus MRL. Rows of each matrix represent the
+source or central domain, columns represent the surrounding or neighboring
+domain, and arrows therefore point **source -> neighbor**. Positive effects are
+shown in the BALBc panel; negative effects are displayed by absolute magnitude
+in the MRL panel. Both panels reuse the same permutation p-values.
+
+# Load the completed result
+
+```{r load-result}
+library(CellCharterR)
+
+k4_result <- readRDS(system.file(
+  "extdata",
+  "mouse_spleen_k4_diff_nhood.rds",
+  package = "CellCharterR"
+))
+
+k4_result$params[c(
+  "contrast_definition", "library_unit", "library_counts",
+  "n_perms", "permutation_mode", "empirical_tail"
+)]
+```
+
+This result compares three BALBc libraries with six MRL libraries, uses the
+sample as the permutation unit, and contains 100 permutations with the pinned
+CellCharter 0.2.0 compatibility mode. Its SHA-256 checksum is
+`ae65446954faeb1b15aa53bcf5f1ec45e2ebd09d553a61a12c59c28029c3f6d7`.
+
+# Plot both favored-condition networks
+
+Black arrows are the default. Solid arrows pass the displayed statistical
+threshold; dashed arrows are retained effects that are not statistically
+supported at that threshold. Arrow width is intentionally constant, so it does
+not create an additional visual claim about magnitude.
+
+```{r default-network, fig.cap="Full mouse-spleen K=4 differential neighborhood-enrichment network. The two panels share identical node coordinates."}
+cellcharter_plot_graph_diff(k4_result)
+```
+
+The graph is asymmetric: domain 0 -> domain 2 and domain 2 -> domain 0 are
+different directed hypotheses. Their effects and p-values must not be combined
+or interpreted as an undirected connection.
+
+# Apply user-defined condition colors
+
+Colors are presentation choices, not part of the statistical test. A single
+color applies to both panels; a named vector can assign one color per condition.
+
+```{r custom-colours, fig.cap="The same result with user-supplied condition colors and the strongest four arrows retained independently per panel."}
+cellcharter_plot_graph_diff(
+  k4_result,
+  edge_colours = c(BALBc = "#2166AC", MRL = "#B2182B"),
+  top_n = 4
+)
+```
+
+`top_n` is a display filter. It is applied independently in each panel after
+p-values have been evaluated and therefore does not alter the p-values or their
+multiple-testing adjustment.
+
+# Focus on statistically supported arrows
+
+The reference-compatible default uses raw directional empirical p-values.
+For exploratory multiplicity control, select a method supported by
+`stats::p.adjust()`; adjustment is performed across every eligible directed
+off-diagonal hypothesis before display filtering.
+
+```{r supported-only, fig.cap="Edges supported by the raw directional empirical p-value threshold of 0.05."}
+cellcharter_plot_graph_diff(
+  k4_result,
+  significant_only = TRUE,
+  alpha = 0.05
+)
+```
+
+# Illustrative interpretation
+
+In this K = 4 result, the largest positive displayed effect is the directed
+association from domain 1 to domain 2, favoring BALBc. At the raw threshold of
+0.05, three BALBc-favored arrows are retained and no MRL-favored arrow passes
+the same threshold. A recorded p-value of zero means that none of the 100
+reference-compatible permutation draws was as extreme; it does **not** mean
+that the probability is literally zero.
+
+These domain numbers do not themselves identify cell types or mechanisms.
+Biological interpretation should combine this network with the corresponding
+spatial maps, cell-type enrichment results, sample-level consistency, and the
+known limitations of the K = 4 domain resolution. The figure is therefore a
+diagnostic summary of the computed differential neighborhood result, not proof
+of a causal interaction.
+
+# Reproduce the expensive analysis
+
+The following code documents where the plotted result originates, but it is not
+run when the vignette is built.
+
+```{r reproduce-result, eval=FALSE}
+full_spe <- cellcharter_diff_nhood_enrichment(
+  full_spe,
+  graph_name = "cellcharter_graph",
+  domain_col = "cellcharter_domain_k4",
+  condition_col = "condition",
+  sample_col = "sample",
+  condition_groups = c("BALBc", "MRL"),
+  n_perms = 100L,
+  seed = 0L,
+  permutation_mode = "cellcharter_v0.2.0"
+)
+
+cellcharter_plot_graph_diff(full_spe)
+```
+
+# Session information
+
+```{r session-info}
+sessionInfo()
+```

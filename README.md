@@ -70,6 +70,9 @@ CellCharter method. Copy-ready text and BibTeX are provided in
 - [Full CODEX mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html)
   is the preserved, precomputed full-data report. It is not rerun during build,
   check, examples, or CI.
+- [Differential neighborhood-enrichment networks](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-differential-neighborhood-networks.html)
+  uses the computed full mouse-spleen K=4 result to demonstrate directed
+  two-condition network plots without rerunning the full analysis.
 
 ## Installation
 
