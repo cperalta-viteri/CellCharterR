@@ -2,6 +2,7 @@
 
 [![Linux CPU package check](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-CMD-check.yaml)
 [![R Torch CPU](https://img.shields.io/github/actions/workflow/status/cperalta-viteri/CellCharterR/R-CMD-check.yaml?branch=master&label=R%20Torch%20CPU)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-CMD-check.yaml)
+[![Torch CUDA locally validated](https://img.shields.io/badge/Torch%20CUDA-locally%20validated%20%7C%20RTX%20A4000-76B900?logo=nvidia&logoColor=white)](tests/testthat/test-torch-kmeans-initializer.R)
 [![R 4.5 compatibility](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.5-compat.yaml/badge.svg)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.5-compat.yaml)
 [![R 4.4 compatibility](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.4-compat.yaml/badge.svg)](https://github.com/cperalta-viteri/CellCharterR/actions/workflows/R-4.4-compat.yaml)
 

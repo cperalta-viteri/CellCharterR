@@ -28,7 +28,7 @@ jobs:
           Rscript -e 'BiocManager::install(c("remotes", "rcmdcheck"), ask = FALSE, update = FALSE)'
           Rscript -e 'BiocManager::install(c("zlibbioc", "DelayedArray", "HDF5Array", "IRanges", "rhdf5", "S4Arrays", "S4Vectors", "SingleCellExperiment", "SpatialExperiment", "SummarizedExperiment"), dependencies = c("Depends", "Imports", "LinkingTo"), ask = FALSE, update = FALSE)'
           Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = c("Depends", "Imports", "LinkingTo"), upgrade = "never", repos = BiocManager::repositories())'
-          Rscript -e 'BiocManager::install(c("BiocStyle", "ggplot2", "ggspavis", "jsonlite", "knitr", "MASS", "mclust", "rmarkdown", "testthat"), ask = FALSE, update = FALSE)'
+          Rscript -e 'BiocManager::install(c("BiocStyle", "ggplot2", "ggspavis", "jsonlite", "knitr", "MASS", "rmarkdown", "testthat"), ask = FALSE, update = FALSE)'
           Rscript -e 'torch::install_torch(type = "cpu")'
 
       - name: Verify the Bioconductor 3.20 dependency closure

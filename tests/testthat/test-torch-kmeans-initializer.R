@@ -124,3 +124,22 @@ test_that("torch_gmm_fit integrates the Torch initializer and auto batch", {
   expect_true(is.finite(fit$nll))
   expect_identical(fit$runtime$batch_size, 90L)
 })
+
+test_that("Torch initializer preserves matrix dimensions for the K=1 AutoK boundary", {
+  skip_if_not_installed("torch")
+  x <- torch_kmeans_fixture()[seq_len(90L), , drop = FALSE]
+  devices <- "cpu"
+  if (!identical(Sys.getenv("CELLCHARTERR_CPU_ONLY"), "true") &&
+      isTRUE(torch::cuda_is_available())) devices <- c(devices, "cuda")
+
+  for (device in devices) {
+    fit <- torch_gmm_fit(
+      x, n_clusters = 1L, batch_size = 37L, max_iter = 2L,
+      device = device, seed = 19L, num_threads = 1L,
+      initialization_method = "torch"
+    )
+    expect_identical(dim(fit$initialization$centers), c(1L, ncol(x)))
+    expect_identical(dim(fit$means), c(1L, ncol(x)))
+    expect_true(is.finite(fit$nll))
+  }
+})

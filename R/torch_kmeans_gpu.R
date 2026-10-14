@@ -155,7 +155,12 @@
     counts_cpu <- as.numeric(torch::as_array(counts$to(device = "cpu")))
     updated <- centers$clone()
     nonempty <- which(counts_cpu > 0)
-    if (length(nonempty)) updated[nonempty, ] <- sums[nonempty, ] / counts[nonempty]$unsqueeze(2)
+    if (length(nonempty)) {
+      # Torch drops the indexed count to a scalar when K = 1. Reshape
+      # explicitly so the singleton AutoK boundary retains a K x 1 divisor.
+      divisor <- counts[nonempty]$reshape(c(length(nonempty), 1L))
+      updated[nonempty, ] <- sums[nonempty, ] / divisor
+    }
     empty <- which(counts_cpu == 0)
     if (length(empty)) {
       replacements <- farthest_rows[seq_len(length(empty)), , drop = FALSE]
