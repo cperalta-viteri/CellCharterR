@@ -37,13 +37,14 @@ jobs:
           R CMD build . 2>&1 | tee R-CMD-build-bioc-3.19.log
           R CMD check --no-manual CellCharterR_*.tar.gz
 
-      - name: Exercise movable bundle reconstruction in a fresh R process
+      - name: Exercise movable analysis-bundle reconstruction
         shell: bash
         run: |
           mkdir -p /tmp/CellCharterR-bioc319-library
           R CMD INSTALL --library=/tmp/CellCharterR-bioc319-library CellCharterR_*.tar.gz
           R_LIBS_USER=/tmp/CellCharterR-bioc319-library Rscript -e 'library(CellCharterR); spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE); stopifnot(inherits(spe, "SpatialExperiment"), methods::validObject(spe)); print(spe)'
-          if test -f tests/testthat/test-analysis-bundle.R; then R_LIBS_USER=/tmp/CellCharterR-bioc319-library Rscript -e 'testthat::test_file("tests/testthat/test-analysis-bundle.R", package = "CellCharterR", reporter = "summary")'; else echo 'Portable completed-analysis bundle test is pending implementation.'; fi
+          test -f tests/testthat/test-analysis-bundle.R
+          R_LIBS_USER=/tmp/CellCharterR-bioc319-library Rscript -e 'library(CellCharterR); testthat::test_file("tests/testthat/test-analysis-bundle.R", package = "CellCharterR", reporter = "summary", stop_on_failure = TRUE, stop_on_warning = TRUE)'
 
       - name: Retain compatibility evidence
         if: always()

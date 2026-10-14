@@ -127,8 +127,10 @@ free disk space; interrupted copies resume from `arrays.h5.partial`.
 
 ### Saving a completed large analysis
 
-After graph construction, aggregation, clustering, and enrichment, save the
-completed `SpatialExperiment` as an RDS inside its bundle directory:
+After graph construction, aggregation, clustering, and enrichment, export a
+self-contained completed-analysis directory. Large assays and embeddings are
+written blockwise to bundle-owned HDF5 files; graphs, models, results,
+parameters, and other lightweight state are stored separately:
 
 ```r
 # With filepath = NULL, the aggregated representation is stored in the SPE.
@@ -140,35 +142,41 @@ spe <- cellcharter_aggregate(
   output = "X_cellcharter"
 )
 
-# Run clustering and downstream analyses, then checkpoint the complete state.
-analysis_rds <- file.path(bundle, "cellcharter_complete.rds")
-saveRDS(spe, analysis_rds, compress = FALSE)
+# Run clustering and downstream analyses, then export the complete state.
+cellcharter_save_analysis_bundle(
+  spe,
+  output_dir = "oscc_complete_analysis",
+  progress = TRUE
+)
 ```
 
-The RDS contains the graph, in-memory aggregated representation, domain labels,
-models, analysis results, parameters, and provenance, so these stages do not
-need to be recomputed. Imported assays and reduced dimensions remain lazily
-backed by `arrays.h5`; consequently, keep the RDS and the complete bundle
-together:
+The export validates file sizes, SHA-256 checksums, dimensions, ordering, and
+object validity before atomically publishing the directory. It also copies and
+rebases CellCharterR-owned AutoK checkpoints, so the exported analysis no
+longer depends on the original H5AD, conversion bundle, or checkpoint path.
 
 ```text
-TCGA_OSCC_DeepSpotM_FFPE_merged_spe/
-├── arrays.h5
+oscc_complete_analysis/
 ├── manifest.rds
-└── cellcharter_complete.rds
+├── manifest.sha256
+└── object/
+    ├── structure.rds
+    └── *.h5
 ```
 
-When the bundle remains at the same path, reopen the completed analysis with:
+The directory can be moved, renamed, or archived with an external tool. Load it
+from its new location with:
 
 ```r
-spe <- readRDS(file.path(bundle, "cellcharter_complete.rds"))
+spe <- cellcharter_load_analysis_bundle("oscc_complete_analysis")
 methods::validObject(spe)
 ```
 
-Place the bundle at its intended permanent location before a long analysis.
-A plain RDS records the current HDF5 backing path, so moving only the RDS will
-not move its large arrays. The analysis is independent of the original H5AD,
-but not of the bundle-local `arrays.h5`; copy or archive the entire directory.
+Copy or archive the entire directory, not individual files. The loader rejects
+missing or modified payloads before returning an incomplete object. Unsupported
+opaque third-party metadata references and externally backed spatial images
+are rejected during saving with an actionable location rather than silently
+producing a non-portable analysis.
 
 ## Why the GMM uses Torch directly
 

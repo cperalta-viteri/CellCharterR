@@ -21,9 +21,11 @@ LazyData: false
 Depends:
     R (>= 4.4.0)
 Imports:
+    BiocGenerics,
     DelayedArray,
     digest,
     geometry,
+    GenomicRanges,
     HDF5Array,
     IRanges,
     Matrix,
