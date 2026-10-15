@@ -447,6 +447,7 @@ cellcharter_nhood_enrichment <- function(
 #' @param n_perms Number of library-level permutations.
 #' @param seed Permutation seed.
 #' @param permutation_mode CellCharter parity or conventional shuffle mode.
+#' @param progress Whether to display progress through the permutations.
 #' @return The updated `SingleCellExperiment`.
 #' @examples
 #' example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
@@ -461,15 +462,27 @@ cellcharter_diff_nhood_enrichment <- function(
     condition_col = "condition", sample_col = "sample",
     result_name = "diff_nhood_enrichment", condition_groups = NULL,
     n_perms = 100L, seed = 0L, log2_fold_change = FALSE, only_inter = TRUE,
-    permutation_mode = c("cellcharter_v0.2.0", "shuffle")) {
+    permutation_mode = c("cellcharter_v0.2.0", "shuffle"),
+    progress = interactive()) {
+  if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
+    stop("`progress` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (progress) {
+    message("CellCharterR differential neighborhoods: preparing imported graph and library statistics.")
+  }
   graph <- .cc_sce_graph_matrix(sce, graph_name)
   domain <- .cc_sce_domain(sce, domain_col)
   condition <- .cc_sce_coldata(sce, condition_col, "condition column")
   sample <- .cc_sce_coldata(sce, sample_col, "sample column")
+  if (progress) {
+    message("CellCharterR differential neighborhoods: running ",
+            format(n_perms, big.mark = ","), " library-level permutations.")
+  }
   result <- .cc_diff_nhood_enrichment(
     graph, domain, condition, sample, condition_groups = condition_groups,
     n_perms = n_perms, seed = seed, log2_fold_change = log2_fold_change,
-    only_inter = only_inter, permutation_mode = match.arg(permutation_mode)
+    only_inter = only_inter, permutation_mode = match.arg(permutation_mode),
+    progress = progress
   )
   .cc_sce_store_result(
     sce, result_name, result,
@@ -477,7 +490,7 @@ cellcharter_diff_nhood_enrichment <- function(
          condition_col = condition_col, sample_col = sample_col,
          condition_groups = condition_groups, n_perms = n_perms, seed = seed,
          log2_fold_change = log2_fold_change, only_inter = only_inter,
-         permutation_mode = match.arg(permutation_mode))
+         permutation_mode = match.arg(permutation_mode), progress = progress)
   )
 }
 

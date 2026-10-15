@@ -14,7 +14,8 @@
   seed = 0L,
   log2_fold_change = FALSE,
   only_inter = TRUE,
-  permutation_mode = c("cellcharter_v0.2.0", "shuffle")
+  permutation_mode = c("cellcharter_v0.2.0", "shuffle"),
+  progress = FALSE
 )
 }
 \arguments{
@@ -41,6 +42,8 @@ order, not the order supplied here, determines numerator and denominator.}
 
 \item{permutation_mode}{Pinned CellCharter parity mode or a conventional
 without-replacement shuffle.}
+
+\item{progress}{Whether to display permutation progress.}
 }
 \value{
 A list with condition-specific \code{observed}, \code{expected}, and

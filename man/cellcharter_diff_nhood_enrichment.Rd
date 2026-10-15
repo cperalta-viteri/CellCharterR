@@ -16,7 +16,8 @@ cellcharter_diff_nhood_enrichment(
   seed = 0L,
   log2_fold_change = FALSE,
   only_inter = TRUE,
-  permutation_mode = c("cellcharter_v0.2.0", "shuffle")
+  permutation_mode = c("cellcharter_v0.2.0", "shuffle"),
+  progress = interactive()
 )
 }
 \arguments{
@@ -44,6 +45,8 @@ one-column reducedDim, or an unambiguous column name inside a reducedDim.}
 \item{only_inter}{Exclude within-domain edges.}
 
 \item{permutation_mode}{CellCharter parity or conventional shuffle mode.}
+
+\item{progress}{Whether to display progress through the permutations.}
 }
 \value{
 The updated \code{SingleCellExperiment}.

@@ -53,6 +53,27 @@ test_that("colData domain labels need no CellCharterR clustering stage", {
   expect_true("enrichment" %in% names(S4Vectors::metadata(enriched)$CellCharterR$results))
 })
 
+test_that("imported colPair graphs need no CellCharterR graph stage", {
+  sce <- .tiny_sce_fixture()
+  sce$python_domain <- factor(rep(c("domain_a", "domain_b"), 8L))
+  from <- unlist(lapply(seq(1L, ncol(sce), by = 4L), function(i) {
+    c(i, i + 1L, i + 1L, i + 2L, i + 2L, i + 3L)
+  }), use.names = FALSE)
+  to <- unlist(lapply(seq(1L, ncol(sce), by = 4L), function(i) {
+    c(i + 1L, i, i + 2L, i + 1L, i + 3L, i + 2L)
+  }), use.names = FALSE)
+  SingleCellExperiment::colPair(sce, "spatial_connectivities") <-
+    S4Vectors::SelfHits(from, to, nnode = ncol(sce), value = 1)
+  observed <- cellcharter_diff_nhood_enrichment(
+    sce, graph_name = "spatial_connectivities",
+    domain_col = "python_domain", condition_col = "condition",
+    sample_col = "sample", condition_groups = c("healthy", "lupus"),
+    n_perms = 3L, permutation_mode = "shuffle", progress = FALSE
+  )
+  expect_true("diff_nhood_enrichment" %in%
+                names(S4Vectors::metadata(observed)$CellCharterR$results))
+})
+
 test_that("domain labels can be read from reducedDims", {
   sce <- .tiny_sce_fixture()
   labels <- matrix(rep(0:1, 8L), ncol = 1L,

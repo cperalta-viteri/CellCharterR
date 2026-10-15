@@ -148,6 +148,7 @@
 #'   order, not the order supplied here, determines numerator and denominator.
 #' @param n_perms Positive number of library-label permutations.
 #' @param seed Deterministic R random seed.
+#' @param progress Whether to display permutation progress.
 #' @param log2_fold_change Forwarded to neighborhood enrichment.
 #' @param only_inter Remove same-domain links before analysis.
 #' @param permutation_mode Pinned CellCharter parity mode or a conventional
@@ -160,7 +161,8 @@
     adjacency, cluster, condition, library, condition_groups = NULL,
     n_perms = 100L, seed = 0L, log2_fold_change = FALSE,
     only_inter = TRUE,
-    permutation_mode = c("cellcharter_v0.2.0", "shuffle")) {
+    permutation_mode = c("cellcharter_v0.2.0", "shuffle"),
+    progress = FALSE) {
   permutation_mode <- match.arg(permutation_mode)
   checked <- .cc_nhood_inputs(adjacency, cluster)
   cluster <- checked$cluster
@@ -175,6 +177,9 @@
     stop("`n_perms` must be one positive whole number.", call. = FALSE)
   }
   n_perms <- as.integer(n_perms)
+  if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
+    stop("`progress` must be TRUE or FALSE.", call. = FALSE)
+  }
   if (!is.numeric(seed) || length(seed) != 1L || is.na(seed) ||
       !is.finite(seed) || seed != floor(seed)) {
     stop("`seed` must be one finite whole number.", call. = FALSE)
@@ -254,6 +259,9 @@
   permutation_counts <- matrix(
     0L, nrow = nrow(effect), ncol = ncol(effect), dimnames = dimnames(effect)
   )
+  bar <- if (progress) utils::txtProgressBar(0L, n_perms, style = 3L) else NULL
+  if (!is.null(bar)) on.exit(close(bar), add = TRUE)
+  progress_every <- max(1L, n_perms %/% 100L)
 
   withr::with_seed(seed, for (permutation in seq_len(n_perms)) {
     if (identical(permutation_mode, "cellcharter_v0.2.0")) {
@@ -287,6 +295,10 @@
         is.na(permuted_effect[negative]) |
           permuted_effect[negative] <= effect[negative]
       )
+    if (!is.null(bar) &&
+        (permutation %% progress_every == 0L || permutation == n_perms)) {
+      utils::setTxtProgressBar(bar, permutation)
+    }
   })
 
   # This is the directional empirical tail definition in v0.2.0: no +1
