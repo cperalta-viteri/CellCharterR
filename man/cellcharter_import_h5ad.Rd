@@ -2,7 +2,7 @@
 % Please edit documentation in R/h5ad_bundle.R
 \name{cellcharter_import_h5ad}
 \alias{cellcharter_import_h5ad}
-\title{Import an H5AD as an independent disk-backed SpatialExperiment bundle}
+\title{Import an H5AD as an independent disk-backed SpatialExperiment}
 \usage{
 cellcharter_import_h5ad(h5ad_file, output_dir, ...)
 }
@@ -19,7 +19,7 @@ conversion manifest. Move these files together.}
 A disk-backed \code{SpatialExperiment}.
 }
 \description{
-The complete H5AD is cloned byte-for-byte into a resumable bundle before a
+The complete H5AD is cloned byte-for-byte into a resumable directory before a
 \code{\link[SpatialExperiment:SpatialExperiment]{SpatialExperiment::SpatialExperiment()}} is constructed. Large arrays remain
 on disk. Python, reticulate, anndataR, and zellkonverter are not required.
 }

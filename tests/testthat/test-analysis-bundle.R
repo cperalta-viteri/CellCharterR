@@ -132,13 +132,13 @@ test_that("analysis bundle is independent, relocatable, and complete", {
                  force = TRUE), add = TRUE)
   fixture <- .analysis_bundle_fixture(source_dir)
 
-  cellcharter_save_analysis_bundle(fixture$spe, bundle)
+  cellcharter_save_analysis(fixture$spe, bundle)
   expect_true(dir.exists(bundle))
   dir.create(moved_parent)
   expect_true(file.rename(bundle, moved))
   unlink(source_dir, recursive = TRUE, force = TRUE)
 
-  restored <- cellcharter_load_analysis_bundle(moved)
+  restored <- cellcharter_load_analysis(moved)
   .expect_analysis_bundle_contents(restored, fixture)
   expect_true(DelayedArray::is_sparse(SummarizedExperiment::assay(restored)) ||
                 inherits(SummarizedExperiment::assay(restored), "DelayedArray"))
@@ -162,13 +162,13 @@ test_that("analysis bundle loads in a fresh R process after relocation", {
   on.exit(unlink(c(source_dir, original, relocated, script), recursive = TRUE,
                  force = TRUE), add = TRUE)
   fixture <- .analysis_bundle_fixture(source_dir)
-  cellcharter_save_analysis_bundle(fixture$spe, original)
+  cellcharter_save_analysis(fixture$spe, original)
   expect_true(file.rename(original, relocated))
   unlink(source_dir, recursive = TRUE, force = TRUE)
 
   writeLines(c(
     "suppressPackageStartupMessages(library(CellCharterR))",
-    "x <- cellcharter_load_analysis_bundle(commandArgs(TRUE)[1])",
+    "x <- cellcharter_load_analysis(commandArgs(TRUE)[1])",
     "stopifnot(methods::validObject(x, test = TRUE))",
     "stopifnot(identical(dim(x), c(5L, 6L)))",
     "stopifnot(identical(as.numeric(SummarizedExperiment::assay(x, 'counts')), as.numeric(matrix(1:30, 5))))",
@@ -214,14 +214,14 @@ test_that("analysis bundle relocates real AutoK checkpoint references", {
   S4Vectors::metadata(alt)$CellCharterR <- list(cache_path = normalizePath(fit_path))
   SingleCellExperiment::altExp(fixture$spe, "path_reuse") <- alt
 
-  cellcharter_save_analysis_bundle(fixture$spe, bundle, progress = FALSE)
+  cellcharter_save_analysis(fixture$spe, bundle, progress = FALSE)
   expect_length(
     list.files(bundle, pattern = "^run_001[.]rds$", recursive = TRUE),
     1L
   )
   expect_true(file.rename(bundle, moved))
   unlink(source_dir, recursive = TRUE, force = TRUE)
-  restored <- cellcharter_load_analysis_bundle(moved)
+  restored <- cellcharter_load_analysis(moved)
   restored_fit <- S4Vectors::metadata(restored)$CellCharterR$autok$cellcharter
 
   expect_true(dir.exists(restored_fit$checkpoint_dir))
@@ -269,10 +269,10 @@ test_that("analysis bundle preserves rowRanges and recursive alternative experim
   SingleCellExperiment::altExp(fixture$spe, "AUCell") <- alt
   SingleCellExperiment::mainExpName(fixture$spe) <- "protein"
 
-  cellcharter_save_analysis_bundle(fixture$spe, bundle, progress = FALSE)
+  cellcharter_save_analysis(fixture$spe, bundle, progress = FALSE)
   expect_true(file.rename(bundle, moved))
   unlink(source_dir, recursive = TRUE, force = TRUE)
-  restored <- cellcharter_load_analysis_bundle(moved)
+  restored <- cellcharter_load_analysis(moved)
 
   expect_identical(SingleCellExperiment::altExpNames(restored), "AUCell")
   expect_identical(
@@ -302,14 +302,14 @@ test_that("analysis bundle validates missing and modified payloads", {
   on.exit(unlink(c(source_dir, bundle, missing, modified), recursive = TRUE,
                  force = TRUE), add = TRUE)
   fixture <- .analysis_bundle_fixture(source_dir)
-  cellcharter_save_analysis_bundle(fixture$spe, bundle)
+  cellcharter_save_analysis(fixture$spe, bundle)
 
   expect_true(.copy_analysis_bundle(bundle, missing))
   missing_payload <- list.files(missing, pattern = "\\.(h5|hdf5)$",
                                 recursive = TRUE, full.names = TRUE)[1]
   expect_false(is.na(missing_payload))
   unlink(missing_payload)
-  expect_error(cellcharter_load_analysis_bundle(missing),
+  expect_error(cellcharter_load_analysis(missing),
                "missing|required|payload|manifest|checksum", ignore.case = TRUE)
 
   expect_true(.copy_analysis_bundle(bundle, modified))
@@ -317,7 +317,7 @@ test_that("analysis bundle validates missing and modified payloads", {
                                  recursive = TRUE, full.names = TRUE)[1]
   expect_false(is.na(modified_payload))
   writeBin(as.raw(c(1L, 2L, 3L, 4L)), modified_payload, useBytes = TRUE)
-  expect_error(cellcharter_load_analysis_bundle(modified),
+  expect_error(cellcharter_load_analysis(modified),
                "checksum|modified|corrupt|size", ignore.case = TRUE)
 })
 
@@ -329,13 +329,13 @@ test_that("analysis bundle refuses unsafe overwrite and opaque external paths", 
                  force = TRUE), add = TRUE)
   writeLines("external", external)
   fixture <- .analysis_bundle_fixture(source_dir)
-  cellcharter_save_analysis_bundle(fixture$spe, bundle)
-  expect_error(cellcharter_save_analysis_bundle(fixture$spe, bundle),
+  cellcharter_save_analysis(fixture$spe, bundle)
+  expect_error(cellcharter_save_analysis(fixture$spe, bundle),
                "exist|overwrite", ignore.case = TRUE)
 
   S4Vectors::metadata(fixture$spe)$third_party <- list(cache_file = external)
   expect_error(
-    cellcharter_save_analysis_bundle(fixture$spe, tempfile("unsafe-bundle-")),
+    cellcharter_save_analysis(fixture$spe, tempfile("unsafe-bundle-")),
     "external|absolute|portable|metadata|path", ignore.case = TRUE
   )
 
@@ -348,7 +348,7 @@ test_that("analysis bundle refuses unsafe overwrite and opaque external paths", 
     destination <- tempfile("unsafe-bundle-")
     on.exit(unlink(destination, recursive = TRUE, force = TRUE), add = TRUE)
     expect_error(
-      cellcharter_save_analysis_bundle(candidate, destination),
+      cellcharter_save_analysis(candidate, destination),
       "external|portable|metadata|path", ignore.case = TRUE,
       info = paste("unsafe path was accepted:", unsafe)
     )

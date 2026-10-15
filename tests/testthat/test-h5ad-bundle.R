@@ -40,7 +40,7 @@ test_that("H5AD import creates an independent movable SPE bundle", {
 
   unlink(source_file)
   expect_true(file.rename(bundle, moved))
-  reloaded <- cellcharter_load_spe_bundle(moved)
+  reloaded <- cellcharter_load_spe(moved)
   expect_identical(as.numeric(SummarizedExperiment::assay(reloaded)),
                    as.numeric(matrix(seq_len(15), nrow = 3)))
   expect_identical(dim(SingleCellExperiment::reducedDim(reloaded, "PCA")), c(5L, 2L))

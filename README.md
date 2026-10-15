@@ -76,7 +76,7 @@ CellCharter method. Copy-ready text and BibTeX are provided in
    differential analysis, and directed graph visualization from preserved K=4
    results.
 2. [Loading large H5AD datasets](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-h5ad-to-sce.html)
-   covers independent disk-backed SPE bundles and the checksum-verified CODEX
+   covers independent disk-backed SPE directories and the checksum-verified CODEX
    conversion without downloading large inputs during package builds.
 3. [Experimental full mouse-spleen workflow](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html)
    preserves the complete graph, aggregation, R Torch GMM/AutoK, K=4 primary,
@@ -120,28 +120,28 @@ zellkonverter. It makes a resumable byte-for-byte clone so the resulting SPE is
 independent of the source H5AD while its large arrays remain on disk:
 
 ```r
-bundle <- "TCGA_OSCC_DeepSpotM_FFPE_merged_spe"
+spe_dir <- "TCGA_OSCC_DeepSpotM_FFPE_merged_spe"
 spe <- cellcharter_import_h5ad(
   "TCGA_OSCC_DeepSpotM_FFPE_merged.h5ad",
-  output_dir = bundle
+  output_dir = spe_dir
 )
 ```
 
-The complete bundle directory is the portable object. After moving it, reload
+The complete saved directory is the portable object. After moving it, reload
 and automatically rebase its HDF5 paths with:
 
 ```r
-spe <- cellcharter_load_spe_bundle(bundle)
+spe <- cellcharter_load_spe(spe_dir)
 ```
 
-The source H5AD is never deleted. A full independent bundle requires equivalent
+The source H5AD is never deleted. A full independent copy requires equivalent
 free disk space; interrupted copies resume from `arrays.h5.partial`.
 
 ### Saving a completed large analysis
 
 After graph construction, aggregation, clustering, and enrichment, export a
 self-contained completed-analysis directory. Large assays and embeddings are
-written blockwise to bundle-owned HDF5 files; graphs, models, results,
+written blockwise to analysis-owned HDF5 files; graphs, models, results,
 parameters, and other lightweight state are stored separately:
 
 ```r
@@ -155,7 +155,7 @@ spe <- cellcharter_aggregate(
 )
 
 # Run clustering and downstream analyses, then export the complete state.
-cellcharter_save_analysis_bundle(
+cellcharter_save_analysis(
   spe,
   output_dir = "oscc_complete_analysis",
   progress = TRUE
@@ -165,7 +165,7 @@ cellcharter_save_analysis_bundle(
 The export validates file sizes, SHA-256 checksums, dimensions, ordering, and
 object validity before atomically publishing the directory. It also copies and
 rebases CellCharterR-owned AutoK checkpoints, so the exported analysis no
-longer depends on the original H5AD, conversion bundle, or checkpoint path.
+longer depends on the original H5AD, conversion directory, or checkpoint path.
 
 ```text
 oscc_complete_analysis/
@@ -180,7 +180,7 @@ The directory can be moved, renamed, or archived with an external tool. Load it
 from its new location with:
 
 ```r
-spe <- cellcharter_load_analysis_bundle("oscc_complete_analysis")
+spe <- cellcharter_load_analysis("oscc_complete_analysis")
 methods::validObject(spe)
 ```
 
@@ -329,7 +329,7 @@ Rscript -e 'rmarkdown::render("reports/CellCharterR_mouse_spleen_AutoK_K11.Rmd",
 
 They are stored under `results/CellCharterR_mouse_spleen/`. The original
 `results/codex_mouse_spleen/` tree is retained as the immutable first-round
-checkpoint bundle on which these recomputed downstream analyses depend.
+checkpoint directory on which these recomputed downstream analyses depend.
 
 The permanent K=11 prediction fixture in `inst/extdata/` was generated from
 the pinned PyCave model and exact published aggregate with:

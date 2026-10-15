@@ -12,7 +12,7 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, purl=FALSE}
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>",
@@ -59,24 +59,40 @@ in the MRL panel. Both panels reuse the same permutation p-values.
 
 # Import the mouse-spleen data as a SpatialExperiment
 
-The official example consists of a raw CODEX H5AD and a clustered H5AD. The
-download and conversion are shown but not executed during package builds. The
-second vignette gives the full checksum-verified download workflow.
+Start from the completed AnnData/H5AD object. CellCharterR's migration tool
+copies its contents into an independent, resumable, disk-backed directory and
+returns a native `SpatialExperiment`. It does not require Python, `anndataR`,
+`zellkonverter`, or R 4.5. The source H5AD remains untouched and is no longer
+needed after the directory has been validated.
+
+The code is not executed while building this vignette because the official
+mouse-spleen H5AD is hundreds of MiB. The second tutorial gives the complete
+download, checksum, and large-data storage details.
 
 ```{r import-full-spe, eval=FALSE}
 library(CellCharterR)
 
-spe <- read_codex_spe(
-  raw_h5ad = "data-raw/codex-mouse-spleen/codex_mouse_spleen.h5ad",
-  clustered_h5ad = "data-raw/codex-mouse-spleen/codex_mouse_spleen_clustered.h5ad",
-  representation_dataset = "obsm/X_trVAE",
-  spatial_dataset = "obsm/spatial"
+spe_dir <- "data/codex_mouse_spleen_spe"
+
+spe <- cellcharter_import_h5ad(
+  h5ad_file = "data-raw/codex_mouse_spleen_clustered.h5ad",
+  output_dir = spe_dir
 )
+
+# `cellcharter_import_h5ad()` has now saved the independent SPE to
+# `spe_dir` and returned its live SPE. The whole directory is the object.
+stopifnot(dir.exists(spe_dir))
+
+# In a later R session, or after moving the complete directory:
+rm(spe)
+spe <- cellcharter_load_spe(spe_dir)
+methods::validObject(spe)
 ```
 
-The converted full object contains 707,474 segmented cells. Protein expression
-and the supplied trVAE representation can remain disk-backed, whereas spatial
-coordinates use the native `spatialCoords()` slot.
+The migrated full object contains 707,474 segmented cells. Protein expression,
+AUCell-like score matrices, and supplied embeddings can remain disk-backed.
+AnnData `obs` variables become `colData`, `obsm` matrices become reduced
+dimensions, and spatial coordinates use the native `spatialCoords()` slot.
 
 ```{r inspect-full-spe, eval=FALSE}
 spe
@@ -86,6 +102,9 @@ colnames(SummarizedExperiment::colData(spe))
 SingleCellExperiment::reducedDimNames(spe)
 SpatialExperiment::spatialCoordsNames(spe)
 SingleCellExperiment::colPairNames(spe)
+
+# Labels saved in AnnData.obs are immediately ordinary SPE variables.
+table(spe$cellcharter_domain_k4)
 ```
 
 After the graph and precomputed domain labels are added, the recommended object
@@ -103,9 +122,10 @@ colPairs: cellcharter_graph
 metadata: CellCharterR results and provenance
 ```
 
-The domain labels do not require a special registration function. Downstream
-functions read `domain_col` directly from `colData`, a one-column `reducedDim`,
-or an unambiguous named column inside a `reducedDim`.
+The domain labels do not require a special registration function. When the
+completed AnnData stores them in `obs`, migration places them directly in
+`colData(spe)`. Downstream functions read `domain_col` from there, from a
+one-column `reducedDim`, or from an unambiguous named reducedDim column.
 
 # Assign a dominant cell type
 
@@ -157,27 +177,18 @@ SingleCellExperiment::colPairNames(spe)
 SingleCellExperiment::colPair(spe, "cellcharter_graph")
 ```
 
-# Load the preserved downstream results
-
-```{r load-result}
+```{r load-result, include=FALSE, purl=FALSE}
 library(CellCharterR)
 
 k4_result <- readRDS(extdata_file("mouse_spleen_k4_diff_nhood.rds"))
 
 k4_enrichment <- readRDS(extdata_file("mouse_spleen_k4_enrichment.rds"))
 
-k4_result$params[c(
-  "contrast_definition", "library_unit", "library_counts",
-  "n_perms", "permutation_mode", "empirical_tail"
-)]
 ```
 
-This result compares three BALBc libraries with six MRL libraries, uses the
-sample as the permutation unit, and contains 100 permutations with the pinned
-CellCharter 0.2.0 compatibility mode. Its SHA-256 checksum is
-`ae65446954faeb1b15aa53bcf5f1ec45e2ebd09d553a61a12c59c28029c3f6d7`.
-The matching cell-type enrichment artifact has SHA-256 checksum
-`be78548f33e16fd2f668c79cd7aa539a97df95f4a9a7ccdd0ab1b00665c0d261`.
+The illustrative result compares three BALBc libraries with six MRL libraries,
+uses sample as the permutation unit, and contains 100 permutations under the
+pinned CellCharter 0.2.0 compatibility mode.
 
 # Compute cell-type enrichment
 
@@ -419,6 +430,29 @@ spe <- cellcharter_diff_nhood_enrichment(
 
 cellcharter_plot_graph_diff(spe, result_name = "BALBc_vs_MRL")
 ```
+
+# Save the completed downstream analysis
+
+The import directory is the independent starting SPE. After adding the graph,
+domain labels, annotations, and downstream results, save a separate completed
+analysis directory. This preserves the updated SPE and every CellCharterR result:
+
+```{r save-completed-analysis, eval=FALSE}
+cellcharter_save_analysis(
+  spe,
+  output_dir = "results/codex_mouse_spleen_completed",
+  progress = TRUE
+)
+
+# Reload it in a later session or from its new location.
+spe <- cellcharter_load_analysis(
+  "results/codex_mouse_spleen_completed"
+)
+methods::validObject(spe)
+```
+
+Copy or archive the complete analysis directory, not only its `structure.rds` or
+individual HDF5 files.
 
 # Session information
 

@@ -47,13 +47,13 @@
     invisible(path)
 }
 
-.transition_clone_file <- function(source, bundle_dir, chunk_mib = 128L) {
-    final <- file.path(bundle_dir, "arrays.h5")
+.transition_clone_file <- function(source, storage_dir, chunk_mib = 128L) {
+    final <- file.path(storage_dir, "arrays.h5")
     partial <- paste0(final, ".partial")
-    state_path <- file.path(bundle_dir, "copy-state.rds")
+    state_path <- file.path(storage_dir, "copy-state.rds")
     source_identity <- .transition_source_identity(source)
     if (file.exists(final)) {
-        manifest_path <- file.path(bundle_dir, "manifest.rds")
+        manifest_path <- file.path(storage_dir, "manifest.rds")
         if (!file.exists(manifest_path)) stop("arrays.h5 exists without a manifest; use a new output directory.", call. = FALSE)
         manifest <- readRDS(manifest_path)
         if (!.transition_identity_equal(manifest$source, source_identity)) {
@@ -104,7 +104,7 @@
     if (!file.rename(partial, final)) stop("Could not atomically publish arrays.h5.", call. = FALSE)
     manifest <- list(format_version = 1L, source = source_identity, completed = Sys.time(),
                      copy_seconds = proc.time()[["elapsed"]] - started, arrays_file = "arrays.h5")
-    .transition_atomic_save_rds(manifest, file.path(bundle_dir, "manifest.rds"))
+    .transition_atomic_save_rds(manifest, file.path(storage_dir, "manifest.rds"))
     unlink(state_path)
     normalizePath(final, mustWork = TRUE)
 }
@@ -239,10 +239,10 @@ read_transition_h5ad_spe <- function(
 }
 
 # Load a moved SPE bundle by rebuilding its S4 shell against local packages.
-load_transition_spe <- function(bundle_dir) {
-    bundle_dir <- normalizePath(bundle_dir, mustWork = TRUE)
-    arrays_file <- normalizePath(file.path(bundle_dir, "arrays.h5"), mustWork = TRUE)
-    manifest_path <- file.path(bundle_dir, "manifest.rds")
+load_transition_spe <- function(storage_dir) {
+    storage_dir <- normalizePath(storage_dir, mustWork = TRUE)
+    arrays_file <- normalizePath(file.path(storage_dir, "arrays.h5"), mustWork = TRUE)
+    manifest_path <- file.path(storage_dir, "manifest.rds")
     if (!file.exists(manifest_path)) {
         stop("Bundle lacks manifest.rds and cannot be reconstructed portably.", call. = FALSE)
     }
@@ -265,7 +265,7 @@ load_transition_spe <- function(bundle_dir) {
         c(list(arrays_file = arrays_file), spec)
     )
     S4Vectors::metadata(spe)$transitionR$arrays_file <- arrays_file
-    S4Vectors::metadata(spe)$transitionR$bundle_dir <- bundle_dir
+    S4Vectors::metadata(spe)$transitionR$bundle_dir <- storage_dir
     S4Vectors::metadata(spe)$transitionR$manifest_format_version <-
         manifest$format_version
     S4Vectors::metadata(spe)$transitionR$reconstructed_locally <- TRUE
@@ -274,9 +274,9 @@ load_transition_spe <- function(bundle_dir) {
     spe
 }
 
-#' Import an H5AD as an independent disk-backed SpatialExperiment bundle
+#' Import an H5AD as an independent disk-backed SpatialExperiment
 #'
-#' The complete H5AD is cloned byte-for-byte into a resumable bundle before a
+#' The complete H5AD is cloned byte-for-byte into a resumable directory before a
 #' [SpatialExperiment::SpatialExperiment()] is constructed. Large arrays remain
 #' on disk. Python, reticulate, anndataR, and zellkonverter are not required.
 #'
@@ -295,20 +295,20 @@ cellcharter_import_h5ad <- function(h5ad_file, output_dir, ...) {
     read_transition_h5ad_spe(h5ad_file = h5ad_file, output_dir = output_dir, ...)
 }
 
-#' Load a movable disk-backed SpatialExperiment bundle
+#' Load a movable disk-backed SpatialExperiment
 #'
 #' Reconstructs the S4 experiment shell with the locally installed
-#' Bioconductor classes and attaches it to the bundle-local `arrays.h5`. This
+#' Bioconductor classes and attaches it to the saved `arrays.h5`. This
 #' avoids cross-release serialization dependencies such as `Seqinfo`. Use this
 #' function after moving the complete directory.
 #'
-#' @param bundle_dir Directory created by [cellcharter_import_h5ad()].
+#' @param path Directory created by [cellcharter_import_h5ad()].
 #' @return A valid disk-backed `SpatialExperiment`.
 #' @export
 #' @examples
 #' \dontrun{
-#' spe <- cellcharter_load_spe_bundle("large-spe")
+#' spe <- cellcharter_load_spe("large-spe")
 #' }
-cellcharter_load_spe_bundle <- function(bundle_dir) {
-    load_transition_spe(bundle_dir)
+cellcharter_load_spe <- function(path) {
+    load_transition_spe(path)
 }

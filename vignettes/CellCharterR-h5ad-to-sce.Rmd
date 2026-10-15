@@ -26,7 +26,7 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 This is the second CellCharterR tutorial. It covers the disk-backed import and
 portable storage patterns needed for large H5AD spatial datasets. For a general
-large H5AD, `cellcharter_import_h5ad()` creates an independent, resumable bundle
+large H5AD, `cellcharter_import_h5ad()` creates an independent, resumable directory
 without requiring Python, `anndataR`, `zellkonverter`, or R 4.5:
 
 ```{r general-large-import, eval=FALSE}
@@ -37,15 +37,15 @@ spe <- cellcharter_import_h5ad(
   output_dir = "large_spatial_dataset_spe"
 )
 
-# The entire bundle is portable; move the directory as one unit.
-spe <- cellcharter_load_spe_bundle("large_spatial_dataset_spe")
+# The entire directory is portable; move the directory as one unit.
+spe <- cellcharter_load_spe("large_spatial_dataset_spe")
 spe
 SpatialExperiment::spatialCoordsNames(spe)
 SingleCellExperiment::reducedDimNames(spe)
 ```
 
 Large arrays stay on disk, while the returned SPE is independent of the source
-H5AD because the bundle owns its copied HDF5 payload. The remaining sections
+H5AD because the directory owns its copied HDF5 payload. The remaining sections
 document the stricter two-file CODEX conversion used by the mouse-spleen
 reproduction.
 

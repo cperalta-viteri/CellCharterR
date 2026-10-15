@@ -732,7 +732,7 @@ not to the upstream CellCharter project.</p>
 <h2><span class="header-section-number">1</span> Scope</h2>
 <p>This is the second CellCharterR tutorial. It covers the disk-backed import and
 portable storage patterns needed for large H5AD spatial datasets. For a general
-large H5AD, <code>cellcharter_import_h5ad()</code> creates an independent, resumable bundle
+large H5AD, <code>cellcharter_import_h5ad()</code> creates an independent, resumable directory
 without requiring Python, <code>anndataR</code>, <code>zellkonverter</code>, or R 4.5:</p>
 <pre class="r"><code>library(CellCharterR)
 
@@ -741,13 +741,13 @@ spe &lt;- cellcharter_import_h5ad(
   output_dir = &quot;large_spatial_dataset_spe&quot;
 )
 
-# The entire bundle is portable; move the directory as one unit.
-spe &lt;- cellcharter_load_spe_bundle(&quot;large_spatial_dataset_spe&quot;)
+# The entire directory is portable; move the directory as one unit.
+spe &lt;- cellcharter_load_spe(&quot;large_spatial_dataset_spe&quot;)
 spe
 SpatialExperiment::spatialCoordsNames(spe)
 SingleCellExperiment::reducedDimNames(spe)</code></pre>
 <p>Large arrays stay on disk, while the returned SPE is independent of the source
-H5AD because the bundle owns its copied HDF5 payload. The remaining sections
+H5AD because the directory owns its copied HDF5 payload. The remaining sections
 document the stricter two-file CODEX conversion used by the mouse-spleen
 reproduction.</p>
 <p>This vignette documents the exact conversion used for the CellCharterR CODEX
@@ -969,40 +969,47 @@ the package’s current, version-aware citation and copyable BibTeX with:</p>
 #&gt; [1] BiocStyle_2.38.0    CellCharterR_0.99.0 testthat_3.3.2     
 #&gt; 
 #&gt; loaded via a namespace (and not attached):
-#&gt;  [1] SummarizedExperiment_1.40.0 rjson_0.2.23               
-#&gt;  [3] xfun_0.57                   bslib_0.10.0               
-#&gt;  [5] processx_3.9.0              rhdf5_2.54.1               
-#&gt;  [7] Biobase_2.70.0              lattice_0.22-9             
-#&gt;  [9] callr_3.7.6                 rhdf5filters_1.22.0        
-#&gt; [11] tools_4.5.3                 ps_1.9.3                   
-#&gt; [13] generics_0.1.4              stats4_4.5.3               
-#&gt; [15] torch_0.17.0                Matrix_1.7-4               
-#&gt; [17] desc_1.4.3                  S4Vectors_0.48.1           
-#&gt; [19] lifecycle_1.0.5             compiler_4.5.3             
-#&gt; [21] brio_1.1.5                  Seqinfo_1.0.0              
-#&gt; [23] sass_0.4.10                 htmltools_0.5.9            
-#&gt; [25] yaml_2.3.12                 jquerylib_0.1.4            
-#&gt; [27] SingleCellExperiment_1.32.0 cachem_1.1.0               
-#&gt; [29] DelayedArray_0.36.1         magick_2.9.1               
-#&gt; [31] abind_1.4-8                 digest_0.6.39              
-#&gt; [33] bookdown_0.46               magic_1.6-1-1              
-#&gt; [35] rprojroot_2.1.1             fastmap_1.2.0              
-#&gt; [37] grid_4.5.3                  cli_3.6.6                  
-#&gt; [39] SparseArray_1.10.10         magrittr_2.0.5             
-#&gt; [41] S4Arrays_1.10.1             pkgbuild_1.4.8             
-#&gt; [43] h5mread_1.2.1               withr_3.0.2                
-#&gt; [45] bit64_4.8.0                 rmarkdown_2.31             
-#&gt; [47] XVector_0.50.0              matrixStats_1.5.0          
-#&gt; [49] bit_4.6.0                   otel_0.2.0                 
-#&gt; [51] SpatialExperiment_1.20.0    HDF5Array_1.38.0           
-#&gt; [53] evaluate_1.0.5              knitr_1.51                 
-#&gt; [55] GenomicRanges_1.62.1        IRanges_2.44.0             
-#&gt; [57] geometry_0.5.2              rlang_1.2.0                
-#&gt; [59] Rcpp_1.1.1-1                BiocManager_1.30.27        
-#&gt; [61] BiocGenerics_0.56.0         coro_1.1.0                 
-#&gt; [63] pkgload_1.5.2               jsonlite_2.0.0             
-#&gt; [65] R6_2.6.1                    Rhdf5lib_1.32.0            
-#&gt; [67] MatrixGenerics_1.22.0</code></pre>
+#&gt;  [1] tidyselect_1.2.1            dplyr_1.2.1                
+#&gt;  [3] farver_2.1.2                S7_0.2.2                   
+#&gt;  [5] fastmap_1.2.0               SingleCellExperiment_1.32.0
+#&gt;  [7] digest_0.6.39               lifecycle_1.0.5            
+#&gt;  [9] processx_3.9.0              magrittr_2.0.5             
+#&gt; [11] compiler_4.5.3              rlang_1.2.0                
+#&gt; [13] sass_0.4.10                 tools_4.5.3                
+#&gt; [15] yaml_2.3.12                 geometry_0.5.2             
+#&gt; [17] knitr_1.51                  labeling_0.4.3             
+#&gt; [19] S4Arrays_1.10.1             bit_4.6.0                  
+#&gt; [21] pkgbuild_1.4.8              DelayedArray_0.36.1        
+#&gt; [23] RColorBrewer_1.1-3          pkgload_1.5.2              
+#&gt; [25] abind_1.4-8                 HDF5Array_1.38.0           
+#&gt; [27] withr_3.0.2                 BiocGenerics_0.56.0        
+#&gt; [29] desc_1.4.3                  grid_4.5.3                 
+#&gt; [31] stats4_4.5.3                Rhdf5lib_1.32.0            
+#&gt; [33] ggplot2_4.0.3               scales_1.4.0               
+#&gt; [35] tinytex_0.59                SummarizedExperiment_1.40.0
+#&gt; [37] cli_3.6.6                   rmarkdown_2.31             
+#&gt; [39] generics_0.1.4              otel_0.2.0                 
+#&gt; [41] rjson_0.2.23                magic_1.6-1-1              
+#&gt; [43] cachem_1.1.0                rhdf5_2.54.1               
+#&gt; [45] BiocManager_1.30.27         XVector_0.50.0             
+#&gt; [47] coro_1.1.0                  matrixStats_1.5.0          
+#&gt; [49] vctrs_0.7.3                 Matrix_1.7-4               
+#&gt; [51] jsonlite_2.0.0              bookdown_0.46              
+#&gt; [53] callr_3.7.6                 IRanges_2.44.0             
+#&gt; [55] S4Vectors_0.48.1            bit64_4.8.0                
+#&gt; [57] magick_2.9.1                h5mread_1.2.1              
+#&gt; [59] jquerylib_0.1.4             glue_1.8.1                 
+#&gt; [61] ps_1.9.3                    gtable_0.3.6               
+#&gt; [63] GenomicRanges_1.62.1        tibble_3.3.1               
+#&gt; [65] pillar_1.11.1               htmltools_0.5.9            
+#&gt; [67] Seqinfo_1.0.0               brio_1.1.5                 
+#&gt; [69] rhdf5filters_1.22.0         torch_0.17.0               
+#&gt; [71] R6_2.6.1                    rprojroot_2.1.1            
+#&gt; [73] evaluate_1.0.5              lattice_0.22-9             
+#&gt; [75] Biobase_2.70.0              SpatialExperiment_1.20.0   
+#&gt; [77] bslib_0.10.0                Rcpp_1.1.1-1               
+#&gt; [79] SparseArray_1.10.10         xfun_0.57                  
+#&gt; [81] pkgconfig_2.0.3             MatrixGenerics_1.22.0</code></pre>
 </div>
 
 
