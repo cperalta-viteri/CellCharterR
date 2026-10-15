@@ -1,6 +1,7 @@
 #' Construct the portable mouse-spleen teaching SpatialExperiment
 #'
-#' Reconstructs the 1,000-cell teaching object from version-neutral matrices
+#' Reconstructs the 1,000-segmented-cell CODEX teaching object from
+#' version-neutral matrices
 #' and data frames. This avoids serialized Bioconductor class incompatibilities
 #' between R 4.4/Bioconductor 3.20 and newer Bioconductor releases.
 #' The subset retains the protein assay, fixed trVAE representation, spatial
@@ -10,7 +11,7 @@
 #' @param with_results If `TRUE`, also restore the validated teaching workflow's
 #'   graph, AutoK summary, labels, and downstream statistical results. The
 #'   default returns the clean input object used to demonstrate the workflow.
-#' @return A 29-feature by 1,000-cell `SpatialExperiment`.
+#' @return A 29-feature by 1,000-segmented-cell `SpatialExperiment`.
 #' @source CODEX mouse-spleen data, dataset DOI
 #'   \doi{10.17632/zjnpwh8m5b.1}; original CODEX publication
 #'   \doi{10.1016/j.cell.2018.07.010}.

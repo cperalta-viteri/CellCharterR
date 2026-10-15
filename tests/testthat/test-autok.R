@@ -93,7 +93,7 @@ test_that("AutoK fit identity includes implementation and fit/predict parameters
   )
 })
 
-test_that("default AutoK identity hashes transitive Torch helpers", {
+test_that("default AutoK checkpoints survive compatible implementation upgrades", {
   skip_if_not_installed("torch")
   checkpoint_dir <- tempfile("autok-transitive-")
   x <- matrix(c(-2, -2, -1.8, -2.1, 2, 2, 2.1, 1.8), ncol = 2, byrow = TRUE)
@@ -112,17 +112,52 @@ test_that("default AutoK identity hashes transitive Torch helpers", {
     },
     .package = "CellCharterR"
   )
-  expect_error(
-    cellcharter_autok_fit(
+  resumed <- cellcharter_autok_fit(
       x, c(2L, 3L), checkpoint_dir, max_runs = 1L, seed = 9L,
       fit_args = list(batch_size = 4L, max_iter = 2L, device = "cpu",
                       num_threads = 1L),
       predict_args = list(batch_size = 4L, device = "cpu"),
       data_id = "same-input"
-    ),
-    "does not match current `data_id`"
   )
+  expect_true(all(resumed$fit_index$resumed))
+  expect_identical(resumed$data_id, first$data_id)
   expect_match(first$implementation_digest, "^[0-9a-f]{64}$")
+})
+
+test_that("default AutoK resume identity ignores runtime-only controls", {
+  first <- .autok_resume_contract(
+    "input", list(max_iter = 10L, batch_size = 4096L, device = "cuda", num_threads = 2L),
+    list(batch_size = 4096L, device = "cuda"), TRUE, "old"
+  )
+  second <- .autok_resume_contract(
+    "input", list(max_iter = 10L, batch_size = 32768L, device = "cpu", num_threads = 8L),
+    list(batch_size = 65536L, device = "cpu"), TRUE, "new"
+  )
+  expect_identical(first, second)
+  changed <- second
+  changed$fit_args$max_iter <- 11L
+  expect_false(identical(first, changed))
+})
+
+test_that("AutoK duration formatter is readable", {
+  expect_identical(.autok_format_duration(9), "9s")
+  expect_identical(.autok_format_duration(125), "2m 05s")
+  expect_identical(.autok_format_duration(9000), "2h 30m")
+})
+
+test_that("AutoK retries CUDA OOM with a smaller batch", {
+  observed <- integer()
+  result <- .autok_oom_retry(
+    function(args) {
+      observed <<- c(observed, args$batch_size)
+      if (args$batch_size > 1024L) stop("CUDA out of memory")
+      "ok"
+    },
+    list(batch_size = 4096L), stage = "test"
+  )
+  expect_identical(observed, c(4096L, 2048L, 1024L))
+  expect_identical(result$value, "ok")
+  expect_identical(result$args$batch_size, 1024L)
 })
 
 test_that("AutoK rejects a checkpoint from another representation", {

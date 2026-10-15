@@ -9,8 +9,8 @@ torch_gmm_autotune_batch_size(
   n_clusters,
   n_obs = NULL,
   device = c("auto", "cuda", "cpu"),
-  cap = 131072L,
-  safety_fraction = 0.5,
+  cap = 32768L,
+  safety_fraction = 0.35,
   free_memory_bytes = NULL,
   cpu_batch_size = 8192L
 )

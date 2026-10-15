@@ -16,6 +16,6 @@
 - CellCharter method: Varrone et al. (2024), DOI
   `10.1038/s41588-023-01588-4`.
 
-`codex_mouse_spleen_tiny` is a deterministic 1,000-cell derivative distributed
+`codex_mouse_spleen_tiny` is a deterministic 1,000-segmented-cell CODEX derivative distributed
 under the same CC BY 4.0 attribution terms. It is intended for teaching and
 software validation, not biological inference.

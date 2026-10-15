@@ -77,7 +77,7 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   invisible(path)
 }
 
-.autok_read_checkpoint <- function(path, expected, n_obs) {
+.autok_read_checkpoint <- function(path, expected, n_obs, compatible_data_ids = character()) {
   artifact <- tryCatch(
     readRDS(path),
     error = function(e) stop("Cannot read AutoK checkpoint `", path, "`: ", conditionMessage(e))
@@ -90,18 +90,137 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   if (length(missing_fields)) {
     stop("AutoK checkpoint `", path, "` is missing: ", paste(missing_fields, collapse = ", "))
   }
-  for (field in c("k", "run", "seed", "n_obs", "n_features", "data_id")) {
+  for (field in c("k", "run", "seed", "n_obs", "n_features")) {
     if (!identical(artifact[[field]], expected[[field]])) {
       stop("AutoK checkpoint `", path, "` does not match current `", field, "`.")
     }
   }
-  if (artifact$format_version != 1L || length(artifact$labels) != n_obs || anyNA(artifact$labels)) {
+  accepted_ids <- unique(c(expected$data_id, compatible_data_ids))
+  if (!artifact$data_id %in% accepted_ids) {
+    stop("AutoK checkpoint `", path, "` does not match current `data_id`.")
+  }
+  if (!artifact$format_version %in% c(1L, 2L) ||
+      length(artifact$labels) != n_obs || anyNA(artifact$labels)) {
     stop("AutoK checkpoint `", path, "` has invalid version or labels.")
   }
   if (length(artifact$nll) != 1L || !is.numeric(artifact$nll) || !is.finite(artifact$nll)) {
     stop("AutoK checkpoint `", path, "` has an invalid negative log-likelihood.")
   }
   artifact
+}
+
+.autok_runtime_args <- function(args) {
+  args[setdiff(names(args), c("batch_size", "device", "num_threads", "validate_input"))]
+}
+
+.autok_resume_contract <- function(input_data_id, fit_args, predict_args,
+                                    default_torch, implementation_digest) {
+  list(
+    schema = "CellCharterR_autok_resume_identity",
+    schema_version = 2L,
+    input_data_id = input_data_id,
+    algorithm = if (default_torch) {
+      # Increment only for a change that makes fitted models scientifically
+      # incompatible. Package releases and performance-only changes do not.
+      "torch-full-covariance-em-v1"
+    } else {
+      implementation_digest
+    },
+    fit_args = if (default_torch) .autok_runtime_args(fit_args) else fit_args,
+    predict_args = if (default_torch) .autok_runtime_args(predict_args) else predict_args
+  )
+}
+
+.autok_legacy_data_id <- function(checkpoint_dir, current) {
+  path <- file.path(checkpoint_dir, "autok_state.rds")
+  if (!file.exists(path)) {
+    # Version-1 fit files did not store their input checksum separately and
+    # state was written only after a complete K round. Permit a one-time,
+    # clearly warned migration of an interrupted partial round after checking
+    # that every artifact has one consistent legacy identity. K/run/seed and
+    # dimensions are still checked individually when each file is opened.
+    files <- list.files(file.path(checkpoint_dir, "fits"), pattern = "^run_[0-9]+[.]rds$",
+                        recursive = TRUE, full.names = TRUE)
+    ids <- unique(unlist(lapply(files, function(file) {
+      value <- tryCatch(readRDS(file), error = function(e) NULL)
+      if (is.null(value) || !identical(value$format_version, 1L)) character()
+      else as.character(value$data_id)
+    }), use.names = FALSE))
+    if (length(ids) == 1L) {
+      warning(
+        "Migrating a partial version-1 AutoK run without `autok_state.rds`. ",
+        "The legacy format cannot re-verify the input checksum; only continue ",
+        "if this checkpoint directory belongs to the same representation and parameters.",
+        call. = FALSE
+      )
+      return(ids)
+    }
+    return(character())
+  }
+  old <- tryCatch(readRDS(path), error = function(e) NULL)
+  required <- c("data_id", "input_data_id", "fit_args", "predict_args", "fit_k",
+                "candidate_k", "seed", "n_obs", "n_features")
+  if (is.null(old) || !all(required %in% names(old))) return(character())
+  equal <- identical(old$input_data_id, current$input_data_id) &&
+    identical(as.integer(old$fit_k), as.integer(current$fit_k)) &&
+    identical(as.integer(old$candidate_k), as.integer(current$candidate_k)) &&
+    identical(as.integer(old$seed), as.integer(current$seed)) &&
+    identical(as.integer(old$n_obs), as.integer(current$n_obs)) &&
+    identical(as.integer(old$n_features), as.integer(current$n_features)) &&
+    identical(.cc_contract_canonical(.autok_runtime_args(old$fit_args)),
+              .cc_contract_canonical(.autok_runtime_args(current$fit_args))) &&
+    identical(.cc_contract_canonical(.autok_runtime_args(old$predict_args)),
+              .cc_contract_canonical(.autok_runtime_args(current$predict_args)))
+  if (isTRUE(equal)) unique(c(as.character(old$data_id), old$compatible_data_ids))
+  else character()
+}
+
+.autok_cuda_cleanup <- function() {
+  invisible(gc(verbose = FALSE))
+  if (!requireNamespace("torch", quietly = TRUE)) return(invisible(NULL))
+  ns <- asNamespace("torch")
+  if (exists("cuda_empty_cache", envir = ns, inherits = FALSE)) {
+    try(get("cuda_empty_cache", envir = ns)(), silent = TRUE)
+  }
+  invisible(NULL)
+}
+
+.autok_is_cuda_oom <- function(condition) {
+  text <- conditionMessage(condition)
+  grepl("CUDA out of memory|CUDACachingAllocator|cuda.*alloc", text,
+        ignore.case = TRUE)
+}
+
+.autok_oom_retry <- function(call, args, stage, minimum_batch_size = 256L) {
+  repeat {
+    outcome <- tryCatch(list(value = call(args), error = NULL),
+                        error = function(e) list(value = NULL, error = e))
+    if (is.null(outcome$error)) return(list(value = outcome$value, args = args))
+    batch <- args$batch_size
+    can_retry <- .autok_is_cuda_oom(outcome$error) && is.numeric(batch) &&
+      length(batch) == 1L && is.finite(batch) && batch > minimum_batch_size
+    if (!can_retry) stop(outcome$error)
+    next_batch <- as.integer(max(minimum_batch_size, floor(batch / 2)))
+    message(sprintf(
+      "CellCharterR AutoK: CUDA OOM during %s at batch_size=%d; clearing cache and retrying with %d.",
+      stage, as.integer(batch), next_batch
+    ))
+    args$batch_size <- next_batch
+    .autok_cuda_cleanup()
+  }
+}
+
+.autok_format_duration <- function(seconds) {
+  if (!is.finite(seconds) || seconds < 0) return("unknown")
+  seconds <- as.integer(round(seconds))
+  days <- seconds %/% 86400L
+  hours <- (seconds %% 86400L) %/% 3600L
+  minutes <- (seconds %% 3600L) %/% 60L
+  secs <- seconds %% 60L
+  if (days > 0L) sprintf("%dd %02dh %02dm", days, hours, minutes)
+  else if (hours > 0L) sprintf("%dh %02dm", hours, minutes)
+  else if (minutes > 0L) sprintf("%dm %02ds", minutes, secs)
+  else sprintf("%ds", secs)
 }
 
 .autok_read_labels <- function(path, n_obs) {
@@ -197,9 +316,11 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #'   Fowlkes--Mallows score.
 #' @param fit_args,predict_args Additional named arguments for the hooks.
 #' @param data_id Optional immutable representation checksum or provenance ID.
-#'   It is combined with the fit/predict implementation digests and every
-#'   material fit/predict argument to form the effective per-fit `data_id`.
-#'   This prevents reuse after either data or fitting semantics change.
+#'   It is combined with scientifically material fit/predict arguments and an
+#'   explicit algorithm-compatibility version. Runtime-only controls (device,
+#'   batch size, and thread count) and package upgrades do not invalidate a
+#'   compatible completed fit; the exact implementation digest is retained as
+#'   provenance.
 #' @param resume Reuse matching completed fit checkpoints.
 #' @return A `cellcharter_autok` object containing stability, convergence
 #'   history, and paths to the lowest-NLL model checkpoint for every K. Label
@@ -325,14 +446,14 @@ cellcharter_autok_fit <- function(
   implementation_digest <- cellcharter_implementation_digest(
     functions = implementation_functions
   )
-  data_id <- digest::digest(.cc_contract_canonical(list(
-    schema = "CellCharterR_autok_fit_identity",
-    schema_version = 1L,
-    input_data_id = input_data_id,
-    implementation_digest = implementation_digest,
-    fit_args = fit_args,
-    predict_args = predict_args
-  )), algo = "sha256", serialize = TRUE)
+  default_torch <- identical(fit_fun, .autok_default_fit) &&
+    identical(predict_fun, .autok_default_predict) && identical(nll_fun, .autok_default_nll)
+  resume_contract <- .autok_resume_contract(
+    input_data_id, fit_args, predict_args, default_torch, implementation_digest
+  )
+  data_id <- digest::digest(
+    .cc_contract_canonical(resume_contract), algo = "sha256", serialize = TRUE
+  )
 
   n_obs <- nrow(x)
   n_features <- ncol(x)
@@ -342,6 +463,20 @@ cellcharter_autok_fit <- function(
   }
   checkpoint_dir <- normalizePath(checkpoint_dir, winslash = "/", mustWork = FALSE)
   dir.create(file.path(checkpoint_dir, "fits"), recursive = TRUE, showWarnings = FALSE)
+  legacy_state_exists <- file.exists(file.path(checkpoint_dir, "autok_state.rds"))
+  legacy_data_ids <- if (resume && default_torch) .autok_legacy_data_id(
+    checkpoint_dir,
+    list(input_data_id = input_data_id, fit_args = fit_args, predict_args = predict_args,
+         fit_k = fit_k, candidate_k = candidate_k, seed = seed,
+         n_obs = n_obs, n_features = n_features)
+  ) else character()
+  if (length(legacy_data_ids)) {
+    message(if (legacy_state_exists) {
+      "Validated legacy AutoK state; completed fits will be resumed across the package upgrade."
+    } else {
+      "Recognized a partial legacy AutoK run; completed fits will be resumed across the package upgrade."
+    })
+  }
 
   edge_stability <- data.frame(
     run = integer(), previous_run = integer(), lower_k = integer(),
@@ -355,6 +490,9 @@ cellcharter_autok_fit <- function(
   previous_stability <- NULL
   converged <- FALSE
   runs_completed <- 0L
+  campaign_total <- length(fit_k) * max_runs
+  campaign_completed <- 0L
+  new_fit_seconds <- numeric()
 
   for (run in seq_len(max_runs)) {
     run_seed <- as.integer(seed + run - 1L)
@@ -373,19 +511,34 @@ cellcharter_autok_fit <- function(
       )
       reused <- resume && file.exists(path)
       if (reused) {
-        artifact <- .autok_read_checkpoint(path, expected, n_obs)
+        artifact <- .autok_read_checkpoint(
+          path, expected, n_obs, compatible_data_ids = legacy_data_ids
+        )
       } else {
-        model <- withr::with_seed(
-          run_seed,
-          do.call(
-            fit_fun,
-            c(list(x = x, n_clusters = as.integer(k), seed = run_seed), fit_args)
-          )
+        fit_started <- proc.time()[["elapsed"]]
+        fit_attempt <- .autok_oom_retry(
+          function(args) withr::with_seed(
+            run_seed,
+            do.call(
+              fit_fun,
+              c(list(x = x, n_clusters = as.integer(k), seed = run_seed), args)
+            )
+          ),
+          fit_args, stage = sprintf("K=%d run=%d fitting", k, run)
         )
-        labels <- do.call(
-          predict_fun,
-          c(list(model = model, newdata = x), predict_args)
+        model <- fit_attempt$value
+        # Retain a successful reduced batch for later fits in this campaign so
+        # the same known-too-large allocation is not retried for every K.
+        fit_args$batch_size <- fit_attempt$args$batch_size %||% fit_args$batch_size
+        predict_attempt <- .autok_oom_retry(
+          function(args) do.call(
+            predict_fun,
+            c(list(model = model, newdata = x), args)
+          ),
+          predict_args, stage = sprintf("K=%d run=%d prediction", k, run)
         )
+        labels <- predict_attempt$value
+        predict_args$batch_size <- predict_attempt$args$batch_size %||% predict_args$batch_size
         if (length(labels) != n_obs || anyNA(labels)) {
           stop("`predict_fun` must return one non-missing label per observation.")
         }
@@ -394,12 +547,17 @@ cellcharter_autok_fit <- function(
           stop("`nll_fun` must return one finite numeric negative log-likelihood.")
         }
         artifact <- list(
-          format_version = 1L, k = as.integer(k), run = as.integer(run),
+          format_version = 2L, k = as.integer(k), run = as.integer(run),
           seed = run_seed, n_obs = as.integer(n_obs), n_features = as.integer(n_features),
-          data_id = data_id, nll = as.numeric(nll), model = model, labels = labels
+          data_id = data_id, nll = as.numeric(nll), model = model, labels = labels,
+          effective_fit_batch_size = fit_attempt$args$batch_size %||% NA_integer_,
+          effective_predict_batch_size = predict_attempt$args$batch_size %||% NA_integer_
         )
         .autok_atomic_save_rds(artifact, path)
+        fit_elapsed <- proc.time()[["elapsed"]] - fit_started
+        new_fit_seconds <- c(new_fit_seconds, fit_elapsed)
       }
+      campaign_completed <- campaign_completed + 1L
       fit_index <- rbind(
         fit_index,
         data.frame(k = k, run = run, seed = run_seed, nll = artifact$nll,
@@ -409,6 +567,16 @@ cellcharter_autok_fit <- function(
         current_round_labels[[as.character(k)]] <- artifact$labels
       }
       rm(artifact)
+      if (!reused) {
+        .autok_cuda_cleanup()
+        mean_fit_seconds <- mean(new_fit_seconds)
+        eta_seconds <- mean_fit_seconds * (campaign_total - campaign_completed)
+        message(sprintf(
+          "CellCharterR AutoK: %d/%d fits complete; last=%s; ETA through max_runs=%s.",
+          campaign_completed, campaign_total, .autok_format_duration(fit_elapsed),
+          .autok_format_duration(eta_seconds)
+        ))
+      }
     }
 
     if (run > 1L) {
@@ -457,9 +625,11 @@ cellcharter_autok_fit <- function(
 
     runs_completed <- run
     partial <- list(
-      format_version = 1L, fit_k = fit_k, candidate_k = candidate_k,
+      format_version = 2L, fit_k = fit_k, candidate_k = candidate_k,
       max_runs = max_runs, convergence_tol = convergence_tol, seed = seed,
       fit_args = fit_args, predict_args = predict_args,
+      resume_contract = resume_contract,
+      compatible_data_ids = legacy_data_ids,
       input_data_id = input_data_id, implementation_digest = implementation_digest,
       data_id = data_id, n_obs = n_obs, n_features = n_features,
       runs_completed = runs_completed, converged = converged,
@@ -492,6 +662,8 @@ cellcharter_autok_fit <- function(
       requested_k = grid$requested_k,
       max_runs = max_runs, convergence_tol = convergence_tol, seed = seed,
       fit_args = fit_args, predict_args = predict_args,
+      resume_contract = resume_contract,
+      compatible_data_ids = legacy_data_ids,
       input_data_id = input_data_id, implementation_digest = implementation_digest,
       data_id = data_id, n_obs = n_obs, n_features = n_features,
       runs_completed = runs_completed, converged = converged,

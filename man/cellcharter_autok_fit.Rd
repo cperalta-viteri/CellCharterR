@@ -50,9 +50,11 @@ Fowlkes--Mallows score.}
 \item{fit_args, predict_args}{Additional named arguments for the hooks.}
 
 \item{data_id}{Optional immutable representation checksum or provenance ID.
-It is combined with the fit/predict implementation digests and every
-material fit/predict argument to form the effective per-fit \code{data_id}.
-This prevents reuse after either data or fitting semantics change.}
+It is combined with scientifically material fit/predict arguments and an
+explicit algorithm-compatibility version. Runtime-only controls (device,
+batch size, and thread count) and package upgrades do not invalidate a
+compatible completed fit; the exact implementation digest is retained as
+provenance.}
 
 \item{resume}{Reuse matching completed fit checkpoints.}
 }

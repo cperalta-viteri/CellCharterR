@@ -63,7 +63,8 @@ CellCharter method. Copy-ready text and BibTeX are provided in
 ## Vignettes and reports
 
 - [Beginner SPE-first workflow](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-beginner-workflow.html)
-  runs K=2 through K=10 on the packaged 1,000-cell teaching object, on CPU.
+  runs K=2 through K=10 on the packaged 1,000-segmented-cell CODEX teaching
+  object, on CPU. These observations are cells, not transcriptomic capture spots.
 - [H5AD download and SPE conversion](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-h5ad-to-sce.html)
   shows checksum-verified download and conversion code without executing the
   full download during package builds.

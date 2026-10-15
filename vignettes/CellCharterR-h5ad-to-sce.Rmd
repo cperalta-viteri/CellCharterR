@@ -113,7 +113,7 @@ SpatialExperiment::spatialCoordsNames(spe)
 
 The protein assay and trVAE representation remain HDF5-backed. The canonical
 two-column `spatialCoords()` matrix is realized in memory (about 10.8 MiB for
-707,474 cells), as required by `SpatialExperiment`; the large assay and
+707,474 segmented cells), as required by `SpatialExperiment`; the large assay and
 representation are not materialized. The reader validates global or
 sample-scoped cell identities and will not accept positional coincidence as
 proof of alignment.
@@ -177,7 +177,7 @@ cell identities and stores coordinates canonically in `spatialCoords()`.
 The repository's
 `inst/scripts/make-codex-portable-and-tiny.R` additionally attaches the already
 checkpointed aggregate representation, K=4 primary labels, K=11 sensitivity
-labels, checksums, and a deterministic 1,000-cell subset. It does not recompute
+labels, checksums, and a deterministic 1,000-segmented-cell subset. It does not recompute
 the full analysis.
 
 ## Full-dataset workflow template

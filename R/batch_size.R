@@ -70,8 +70,8 @@
 #' @export
 torch_gmm_autotune_batch_size <- function(
     n_features, n_clusters, n_obs = NULL,
-    device = c("auto", "cuda", "cpu"), cap = 131072L,
-    safety_fraction = 0.5, free_memory_bytes = NULL,
+    device = c("auto", "cuda", "cpu"), cap = 32768L,
+    safety_fraction = 0.35, free_memory_bytes = NULL,
     cpu_batch_size = 8192L) {
   positive_integer <- function(x, name, allow_null = FALSE) {
     if (allow_null && is.null(x)) return(NULL)

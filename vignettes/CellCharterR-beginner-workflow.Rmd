@@ -34,7 +34,8 @@ Spatial assays measure many cells while retaining each cell's position in a
 tissue. CellCharterR groups cells into **spatial domains**: regions whose cells
 have similar molecular measurements and similar neighborhoods.
 
-This vignette uses a portable 1,000-cell teaching subset. It is an exact seeded
+This vignette uses a portable 1,000-segmented-cell CODEX teaching subset. Its
+observations are individual segmented cells, not transcriptomic capture spots. It is an exact seeded
 random subset of the canonical mouse-spleen object, but it is deliberately too
 small to reproduce or interpret the full biological result. Its purpose is to
 show the complete interface safely, offline, and on a CPU.
@@ -74,7 +75,7 @@ spe <- cellcharter_mouse_spleen_tiny()
 spe
 ```
 
-Each column is a cell. The `protein` assay contains marker intensities,
+Each column is a segmented cell. The `protein` assay contains marker intensities,
 `spatialCoords(spe)` contains canonical x/y positions, and `X_trVAE` is the
 fixed representation used by the published CellCharter tutorial.
 

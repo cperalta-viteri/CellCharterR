@@ -6,7 +6,7 @@
   neighborhood enrichment.
 - Added strict ordered-cell identity checks, `colPairs()` graph storage,
   synchronized subsetting tests, and stale-stage detection.
-- Added a portable 1,000-cell CODEX teaching SPE and exact miniature H5AD import
+- Added a portable 1,000-segmented-cell CODEX teaching SPE and exact miniature H5AD import
   fixtures under CC BY 4.0 attribution.
 - Added a CPU-only beginner vignette over K=2 through K=10, an H5AD-to-SCE
   conversion vignette, and the preserved full mouse-spleen reproducibility

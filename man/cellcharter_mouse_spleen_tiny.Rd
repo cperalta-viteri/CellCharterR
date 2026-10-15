@@ -17,10 +17,11 @@ graph, AutoK summary, labels, and downstream statistical results. The
 default returns the clean input object used to demonstrate the workflow.}
 }
 \value{
-A 29-feature by 1,000-cell \code{SpatialExperiment}.
+A 29-feature by 1,000-segmented-cell \code{SpatialExperiment}.
 }
 \description{
-Reconstructs the 1,000-cell teaching object from version-neutral matrices
+Reconstructs the 1,000-segmented-cell CODEX teaching object from
+version-neutral matrices
 and data frames. This avoids serialized Bioconductor class incompatibilities
 between R 4.4/Bioconductor 3.20 and newer Bioconductor releases.
 The subset retains the protein assay, fixed trVAE representation, spatial
