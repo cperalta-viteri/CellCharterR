@@ -31,7 +31,7 @@
       total <- 0
       for (start in .rc_chunk_starts(reader$n, batch_size)) {
         idx <- .rc_chunk_index(start, reader$n, batch_size)
-        xb <- .rc_tensor(.rc_get(reader, idx), device)
+        xb <- .rc_device_block(reader, idx, device)
         total <- total + .rc_torch_nearest(xb, centers)$distance$sum()$item()
       }
 
@@ -48,15 +48,16 @@
       cumulative <- 0
       for (start in .rc_chunk_starts(reader$n, batch_size)) {
         idx <- .rc_chunk_index(start, reader$n, batch_size)
-        block <- .rc_get(reader, idx)
-        xb <- .rc_tensor(block, device)
+        xb <- .rc_device_block(reader, idx, device)
         nearest <- as.numeric(torch::as_array(
           .rc_torch_nearest(xb, centers)$distance$to(device = "cpu")
         ))
         within <- cumulative + cumsum(nearest)
         for (candidate in which(vapply(candidates, is.null, logical(1L)))) {
           location <- which(within >= thresholds[[candidate]])[1L]
-          if (!is.na(location)) candidates[[candidate]] <- block[location, , drop = FALSE]
+          if (!is.na(location)) {
+            candidates[[candidate]] <- .rc_get(reader, idx[[location]])
+          }
         }
         cumulative <- cumulative + sum(nearest)
         if (all(!vapply(candidates, is.null, logical(1L)))) break
@@ -73,7 +74,7 @@
       )
       for (start in .rc_chunk_starts(reader$n, batch_size)) {
         idx <- .rc_chunk_index(start, reader$n, batch_size)
-        xb <- .rc_tensor(.rc_get(reader, idx), device)
+        xb <- .rc_device_block(reader, idx, device)
         nearest <- .rc_torch_nearest(xb, centers)$distance$unsqueeze(2)
         trial_distances <- .rc_torch_squared_distances(xb, candidate_tensor)
         potentials$add_(torch::torch_minimum(trial_distances, nearest)$sum(dim = 1))
@@ -93,7 +94,7 @@
   total_sq <- torch::torch_zeros(reader$p, dtype = torch::torch_float32(), device = device)
   for (start in .rc_chunk_starts(reader$n, batch_size)) {
     idx <- .rc_chunk_index(start, reader$n, batch_size)
-    xb <- .rc_tensor(.rc_get(reader, idx), device)
+    xb <- .rc_device_block(reader, idx, device)
     total$add_(xb$sum(dim = 1))
     total_sq$add_(xb$pow(2)$sum(dim = 1))
   }
@@ -131,8 +132,7 @@
 
     for (start in .rc_chunk_starts(reader$n, batch_size)) {
       idx <- .rc_chunk_index(start, reader$n, batch_size)
-      block <- .rc_get(reader, idx)
-      xb <- .rc_tensor(block, device)
+      xb <- .rc_device_block(reader, idx, device)
       nearest <- .rc_torch_nearest(xb, centers)
       membership <- torch::nnf_one_hot(nearest$label, num_classes = k)$to(
         dtype = torch::torch_float32()
@@ -146,7 +146,7 @@
       ))
       keep <- order(nearest_cpu, decreasing = TRUE)[seq_len(min(k, length(nearest_cpu)))]
       farthest_d2 <- c(farthest_d2, nearest_cpu[keep])
-      farthest_rows <- rbind(farthest_rows, block[keep, , drop = FALSE])
+      farthest_rows <- rbind(farthest_rows, .rc_get(reader, idx[keep]))
       retain <- order(farthest_d2, decreasing = TRUE)[seq_len(min(k, length(farthest_d2)))]
       farthest_d2 <- farthest_d2[retain]
       farthest_rows <- farthest_rows[retain, , drop = FALSE]

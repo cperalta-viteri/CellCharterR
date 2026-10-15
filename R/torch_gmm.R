@@ -18,12 +18,28 @@ torch_gmm_device <- function(device = c("auto", "cuda", "cpu")) {
 }
 
 .rc_reader <- function(x) {
+  if (inherits(x, "cellcharter_torch_cache")) {
+    valid <- is.list(x) && identical(x$format_version, 2L) &&
+      isTRUE(x$validated) && inherits(x$tensor, "torch_tensor") &&
+      identical(as.integer(dim(x$tensor)), c(as.integer(x$n), as.integer(x$p))) &&
+      identical(x$tensor$device$type, "cpu") &&
+      identical(as.character(x$tensor$dtype), "Float")
+    if (!isTRUE(valid)) {
+      stop("Malformed CellCharterR representation cache; rebuild it from the source representation.",
+           call. = FALSE)
+    }
+    return(list(
+      n = x$n, p = x$p, trusted = TRUE, tensor = x$tensor,
+      get = function(i) torch::as_array(x$tensor[i, , drop = FALSE])
+    ))
+  }
   if (!is.matrix(x) && !inherits(x, "DelayedMatrix"))
     stop("`x` must be a matrix or DelayedMatrix with observations in rows.")
   n <- nrow(x); p <- ncol(x)
   if (length(n) != 1L || length(p) != 1L || n < 1L || p < 1L)
     stop("`x` must have at least one observation and one feature.")
-  list(n = n, p = p, get = function(i) as.matrix(x[i, , drop = FALSE]))
+  list(n = n, p = p, trusted = FALSE,
+       get = function(i) as.matrix(x[i, , drop = FALSE]))
 }
 
 .rc_positive_integer <- function(x, name, allow_null = FALSE, allow_zero = FALSE) {
@@ -50,9 +66,41 @@ torch_gmm_device <- function(device = c("auto", "cuda", "cpu")) {
   value <- reader$get(idx)
   if (!is.numeric(value) || ncol(value) != reader$p)
     stop("Every block of `x` must be a numeric matrix with a stable feature dimension.", call. = FALSE)
-  if (any(!is.finite(value)))
+  if (!isTRUE(reader$trusted) && any(!is.finite(value)))
     stop("`x` contains non-finite values; impute or remove them before fitting the GMM.", call. = FALSE)
   value
+}
+
+.rc_ram_cache <- function(x, batch_size = 8192L) {
+  source <- .rc_reader(x)
+  batch_size <- .rc_positive_integer(batch_size, "batch_size")
+  cached <- torch::torch_empty(
+    c(source$n, source$p), dtype = torch::torch_float32(), device = "cpu"
+  )
+  for (start in .rc_chunk_starts(source$n, batch_size)) {
+    idx <- .rc_chunk_index(start, source$n, batch_size)
+    block <- .rc_get(source, idx)
+    block_tensor <- torch::torch_tensor(block, dtype = torch::torch_float32())
+    if (!isTRUE(torch::torch_isfinite(block_tensor)$all()$item())) {
+      stop("`x` contains values outside the finite float32 range required by the GMM.",
+           call. = FALSE)
+    }
+    # Integer-vector indexing creates an advanced-indexing copy in R torch.
+    # narrow() is a writable contiguous view and also preserves a 1 x p tail.
+    cached$narrow(1L, start, length(idx))$copy_(block_tensor)
+  }
+  structure(
+    list(format_version = 2L, validated = TRUE,
+         n = source$n, p = source$p, tensor = cached),
+    class = "cellcharter_torch_cache"
+  )
+}
+
+.rc_device_block <- function(reader, idx, device) {
+  if (!is.null(reader$tensor)) {
+    return(reader$tensor[idx, , drop = FALSE]$to(device = device))
+  }
+  .rc_tensor(.rc_get(reader, idx), device)
 }
 
 #' Sample rows from a disk-backed feature matrix
@@ -277,18 +325,22 @@ torch_gmm_sample_rows <- function(x, n = 10000L, seed = 1L) {
   k <- dim(means)[1]; p <- dim(means)[2]
   nk <- torch::torch_zeros(k, dtype = torch::torch_float32(), device = device)
   sx <- torch::torch_zeros(c(k, p), dtype = torch::torch_float32(), device = device)
-  nll <- 0
+  # Keep the historical semantics: each batch is reduced in float32, while
+  # batch totals accumulate in float64. Keeping the accumulator on-device
+  # removes per-batch synchronization without changing that precision split.
+  nll <- torch::torch_zeros(1L, dtype = torch::torch_float64(), device = device)
   for (start in .rc_chunk_starts(reader$n, batch_size)) {
     idx <- .rc_chunk_index(start, reader$n, batch_size)
-    xb <- .rc_tensor(.rc_get(reader, idx), device)
+    xb <- .rc_device_block(reader, idx, device)
     lp <- .rc_logprob(xb, means, chol, weights)
     lse <- torch::torch_logsumexp(lp, dim = 2)
     resp <- torch::torch_exp(lp - lse$unsqueeze(2))
     nk <- nk + resp$sum(dim = 1)
     sx <- sx + resp$t()$matmul(xb)
-    nll <- nll - lse$sum()$item()
+    nll$sub_(lse$sum()$to(dtype = torch::torch_float64()))
   }
-  list(nk = nk, sx = sx, nll = nll)
+  # Synchronize CUDA only once per complete data pass, not once per batch.
+  list(nk = nk, sx = sx, nll = nll$item())
 }
 
 .rc_mstep_means_weights <- function(nk, sx, nk_cpu, collapsed,
@@ -313,7 +365,9 @@ torch_gmm_sample_rows <- function(x, n = 10000L, seed = 1L) {
   nk <- torch::torch_zeros(k, dtype = torch::torch_float32(), device = device)
   sx <- torch::torch_zeros(c(k, p), dtype = torch::torch_float32(), device = device)
   for (start in .rc_chunk_starts(reader$n, batch_size)) {
-    block <- .rc_tensor(.rc_get(reader, .rc_chunk_index(start, reader$n, batch_size)), device)
+    block <- .rc_device_block(
+      reader, .rc_chunk_index(start, reader$n, batch_size), device
+    )
     distances <- torch::torch_stack(lapply(seq_len(k), function(component) {
       torch::torch_sum((block - centroids[component, ])$pow(2), dim = 2)
     }), dim = 2)
@@ -343,7 +397,9 @@ torch_gmm_sample_rows <- function(x, n = 10000L, seed = 1L) {
   })
   active <- setdiff(seq_len(k), collapsed)
   for (start in .rc_chunk_starts(reader$n, batch_size)) {
-    block <- .rc_tensor(.rc_get(reader, .rc_chunk_index(start, reader$n, batch_size)), device)
+    block <- .rc_device_block(
+      reader, .rc_chunk_index(start, reader$n, batch_size), device
+    )
     distances <- torch::torch_stack(lapply(seq_len(k), function(component) {
       torch::torch_sum((block - centroids[component, ])$pow(2), dim = 2)
     }), dim = 2)
@@ -376,7 +432,7 @@ torch_gmm_sample_rows <- function(x, n = 10000L, seed = 1L) {
   active <- setdiff(seq_len(k), collapsed)
   for (start in .rc_chunk_starts(reader$n, batch_size)) {
     idx <- .rc_chunk_index(start, reader$n, batch_size)
-    xb <- .rc_tensor(.rc_get(reader, idx), device)
+    xb <- .rc_device_block(reader, idx, device)
     # Replay the pre-update model so both M-step passes use identical
     # responsibilities, matching PyCave's batched full-covariance update.
     lp <- .rc_logprob(xb, old_means, old_chol, old_weights)
@@ -724,7 +780,7 @@ torch_gmm_predict_proba <- function(model, newdata, batch_size = 8192L, device =
   pars <- .rc_model_device(model, device); out <- vector("list", ceiling(reader$n / batch_size)); b <- 0L
   for (start in .rc_chunk_starts(reader$n, batch_size)) {
     idx <- .rc_chunk_index(start, reader$n, batch_size)
-    b <- b + 1L; xb <- .rc_tensor(.rc_get(reader, idx), pars$device)
+    b <- b + 1L; xb <- .rc_device_block(reader, idx, pars$device)
     lp <- .rc_logprob(xb, pars$means, pars$chol, pars$weights)
     out[[b]] <- torch::as_array(torch::torch_exp(lp - torch::torch_logsumexp(lp, dim = 2)$unsqueeze(2))$to(device = "cpu"))
   }
@@ -755,7 +811,7 @@ torch_gmm_predict <- function(model, newdata, batch_size = 8192L, device = "auto
   labels <- integer(reader$n)
   for (start in .rc_chunk_starts(reader$n, batch_size)) {
     idx <- .rc_chunk_index(start, reader$n, batch_size)
-    lp <- .rc_logprob(.rc_tensor(.rc_get(reader, idx), pars$device),
+    lp <- .rc_logprob(.rc_device_block(reader, idx, pars$device),
                       pars$means, pars$chol, pars$weights)
     # Only this batch's K scores exist at once; the complete N-by-K posterior is
     # never collected just to obtain labels.
@@ -791,7 +847,7 @@ torch_gmm_log_likelihood <- function(model, newdata, batch_size = 8192L, device 
   pars <- .rc_model_device(model, device); value <- 0
   for (start in .rc_chunk_starts(reader$n, batch_size)) {
     idx <- .rc_chunk_index(start, reader$n, batch_size)
-    lp <- .rc_logprob(.rc_tensor(.rc_get(reader, idx), pars$device), pars$means, pars$chol, pars$weights)
+    lp <- .rc_logprob(.rc_device_block(reader, idx, pars$device), pars$means, pars$chol, pars$weights)
     value <- value + torch::torch_logsumexp(lp, dim = 2)$sum()$item()
   }
   value / reader$n

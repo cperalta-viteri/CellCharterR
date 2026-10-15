@@ -175,9 +175,9 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   else character()
 }
 
-.autok_cuda_cleanup <- function() {
+.autok_cuda_cleanup <- function(empty_cache = TRUE) {
   invisible(gc(verbose = FALSE))
-  if (!requireNamespace("torch", quietly = TRUE)) return(invisible(NULL))
+  if (!empty_cache || !requireNamespace("torch", quietly = TRUE)) return(invisible(NULL))
   ns <- asNamespace("torch")
   if (exists("cuda_empty_cache", envir = ns, inherits = FALSE)) {
     try(get("cuda_empty_cache", envir = ns)(), silent = TRUE)
@@ -322,6 +322,10 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #'   compatible completed fit; the exact implementation digest is retained as
 #'   provenance.
 #' @param resume Reuse matching completed fit checkpoints.
+#' @param cache_representation Either `"none"` for the bounded-memory reader or
+#'   `"ram"` to materialise only the observation-by-feature representation once
+#'   as a CPU float32 Torch tensor and reuse it throughout AutoK. The latter can
+#'   substantially accelerate repeated GPU fits and never materialises assays.
 #' @return A `cellcharter_autok` object containing stability, convergence
 #'   history, and paths to the lowest-NLL model checkpoint for every K. Label
 #'   vectors remain in the per-fit RDS files rather than being duplicated in RAM.
@@ -350,7 +354,8 @@ cellcharter_autok_fit <- function(
     x, n_clusters, checkpoint_dir, max_runs = 10L, convergence_tol = 0.01,
     seed = 1L, fit_fun = NULL, predict_fun = NULL, nll_fun = NULL,
     similarity_fun = cellcharter_fowlkes_mallows,
-    fit_args = list(), predict_args = list(), data_id = NULL, resume = TRUE) {
+    fit_args = list(), predict_args = list(), data_id = NULL, resume = TRUE,
+    cache_representation = c("none", "ram")) {
   grid <- .autok_k_grid(n_clusters)
   fit_k <- grid$fit_k
   candidate_k <- fit_k[-c(1L, length(fit_k))]
@@ -370,6 +375,7 @@ cellcharter_autok_fit <- function(
   if (!is.logical(resume) || length(resume) != 1L || is.na(resume)) {
     stop("`resume` must be TRUE or FALSE.")
   }
+  cache_representation <- match.arg(cache_representation)
   fit_args <- .autok_validate_hook_args(fit_args, c("x", "n_clusters", "seed"), "fit_args")
   predict_args <- .autok_validate_hook_args(predict_args, c("model", "newdata"), "predict_args")
   fit_fun <- fit_fun %||% .autok_default_fit
@@ -398,14 +404,28 @@ cellcharter_autok_fit <- function(
     validation_batch_size <- .rc_positive_integer(
       validation_batch_size, "fit_args$batch_size"
     )
-    validation_reader <- .rc_reader(x)
-    for (start in .rc_chunk_starts(validation_reader$n, validation_batch_size)) {
-      .rc_get(
-        validation_reader,
-        .rc_chunk_index(start, validation_reader$n, validation_batch_size)
-      )
+    if (identical(cache_representation, "ram")) {
+      message(sprintf(
+        "CellCharterR AutoK: caching %d x %d representation in CPU RAM as float32 (about %.2f GiB).",
+        nrow(x), ncol(x), as.double(nrow(x)) * ncol(x) * 4 / 1024^3
+      ))
+      fit_x <- .rc_ram_cache(x, validation_batch_size)
+    } else {
+      validation_reader <- .rc_reader(x)
+      for (start in .rc_chunk_starts(validation_reader$n, validation_batch_size)) {
+        .rc_get(
+          validation_reader,
+          .rc_chunk_index(start, validation_reader$n, validation_batch_size)
+        )
+      }
+      fit_x <- x
     }
     fit_args$validate_input <- FALSE
+  } else {
+    if (!identical(cache_representation, "none")) {
+      stop("`cache_representation = \"ram\"` is supported only by the default Torch fit/predict hooks.")
+    }
+    fit_x <- x
   }
   implementation_functions <- list(
     fit = fit_fun, predict = predict_fun, nll = nll_fun
@@ -423,6 +443,8 @@ cellcharter_autok_fit <- function(
         torch_gmm_predict = torch_gmm_predict,
         torch_gmm_predict_proba = torch_gmm_predict_proba,
         reader = .rc_reader,
+        ram_cache = .rc_ram_cache,
+        device_block = .rc_device_block,
         tensor = .rc_tensor,
         kmeans_distances = .rc_kmeans_distances,
         kmeans_tolerance = .rc_kmeans_tolerance,
@@ -521,7 +543,7 @@ cellcharter_autok_fit <- function(
             run_seed,
             do.call(
               fit_fun,
-              c(list(x = x, n_clusters = as.integer(k), seed = run_seed), args)
+              c(list(x = fit_x, n_clusters = as.integer(k), seed = run_seed), args)
             )
           ),
           fit_args, stage = sprintf("K=%d run=%d fitting", k, run)
@@ -533,7 +555,7 @@ cellcharter_autok_fit <- function(
         predict_attempt <- .autok_oom_retry(
           function(args) do.call(
             predict_fun,
-            c(list(model = model, newdata = x), args)
+            c(list(model = model, newdata = fit_x), args)
           ),
           predict_args, stage = sprintf("K=%d run=%d prediction", k, run)
         )
@@ -551,7 +573,8 @@ cellcharter_autok_fit <- function(
           seed = run_seed, n_obs = as.integer(n_obs), n_features = as.integer(n_features),
           data_id = data_id, nll = as.numeric(nll), model = model, labels = labels,
           effective_fit_batch_size = fit_attempt$args$batch_size %||% NA_integer_,
-          effective_predict_batch_size = predict_attempt$args$batch_size %||% NA_integer_
+          effective_predict_batch_size = predict_attempt$args$batch_size %||% NA_integer_,
+          representation_cache = list(mode = cache_representation, format_version = 2L)
         )
         .autok_atomic_save_rds(artifact, path)
         fit_elapsed <- proc.time()[["elapsed"]] - fit_started
@@ -568,7 +591,9 @@ cellcharter_autok_fit <- function(
       }
       rm(artifact)
       if (!reused) {
-        .autok_cuda_cleanup()
+        # Reclaim unreachable R/Torch objects but retain the CUDA caching
+        # allocator between successful fits. OOM recovery empties it explicitly.
+        .autok_cuda_cleanup(empty_cache = FALSE)
         mean_fit_seconds <- mean(new_fit_seconds)
         eta_seconds <- mean_fit_seconds * (campaign_total - campaign_completed)
         message(sprintf(
@@ -630,6 +655,8 @@ cellcharter_autok_fit <- function(
       fit_args = fit_args, predict_args = predict_args,
       resume_contract = resume_contract,
       compatible_data_ids = legacy_data_ids,
+      cache_representation = cache_representation,
+      cache_format_version = 2L,
       input_data_id = input_data_id, implementation_digest = implementation_digest,
       data_id = data_id, n_obs = n_obs, n_features = n_features,
       runs_completed = runs_completed, converged = converged,
@@ -664,6 +691,8 @@ cellcharter_autok_fit <- function(
       fit_args = fit_args, predict_args = predict_args,
       resume_contract = resume_contract,
       compatible_data_ids = legacy_data_ids,
+      cache_representation = cache_representation,
+      cache_format_version = 2L,
       input_data_id = input_data_id, implementation_digest = implementation_digest,
       data_id = data_id, n_obs = n_obs, n_features = n_features,
       runs_completed = runs_completed, converged = converged,

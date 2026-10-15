@@ -18,7 +18,8 @@ cellcharter_autok_fit(
   fit_args = list(),
   predict_args = list(),
   data_id = NULL,
-  resume = TRUE
+  resume = TRUE,
+  cache_representation = c("none", "ram")
 )
 }
 \arguments{
@@ -57,6 +58,12 @@ compatible completed fit; the exact implementation digest is retained as
 provenance.}
 
 \item{resume}{Reuse matching completed fit checkpoints.}
+
+\item{cache_representation}{Either \code{"none"} for the bounded-memory
+reader or \code{"ram"} to materialise only the observation-by-feature
+representation once as a CPU float32 Torch tensor and reuse it throughout
+AutoK. The latter can substantially accelerate repeated GPU fits and never
+materialises assays.}
 }
 \value{
 A \code{cellcharter_autok} object containing stability, convergence
