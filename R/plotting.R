@@ -18,6 +18,8 @@
 #'   is capped. The CellCharter CODEX tutorial uses `0.58`.
 #' @param cluster_domains Whether to order domains by complete-linkage
 #'   clustering of the thresholded enrichment profiles, as in CellCharter.
+#' @param cluster_programs Whether to order programs by complete-linkage
+#'   clustering of their thresholded enrichment profiles.
 #' @return A `ggplot` object.
 #' @examples
 #' spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
@@ -26,7 +28,7 @@
 cellcharter_plot_enrichment <- function(
     x, result_name = "enrichment", title = NULL, point_range = c(1, 8),
     size_threshold = 0.58, colour_threshold = 0.58,
-    cluster_domains = TRUE) {
+    cluster_domains = TRUE, cluster_programs = FALSE) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     stop("Install `ggplot2` to plot CellCharter enrichment.", call. = FALSE)
   }
@@ -65,32 +67,43 @@ cellcharter_plot_enrichment <- function(
       is.na(cluster_domains)) {
     stop("`cluster_domains` must be `TRUE` or `FALSE`.", call. = FALSE)
   }
+  if (!is.logical(cluster_programs) || length(cluster_programs) != 1L ||
+      is.na(cluster_programs)) {
+    stop("`cluster_programs` must be `TRUE` or `FALSE`.", call. = FALSE)
+  }
 
   finite <- values[is.finite(values)]
   if (!length(finite)) {
     stop("The enrichment matrix has no finite values.", call. = FALSE)
   }
 
+  # Match CellCharter's ordering states: depleted, weakly positive, and
+  # enriched rather than allowing unbounded fold changes to dominate distance.
+  colour_states <- ifelse(
+    values < 0, -1,
+    ifelse(values < colour_threshold, 0, 1)
+  )
+  nonfinite <- !is.finite(colour_states)
+  colour_states[nonfinite] <- ifelse(
+    is.infinite(values[nonfinite]) & values[nonfinite] > 0, 1, -1
+  )
+
   domain_order <- colnames(values)
   if (cluster_domains && ncol(values) > 1L) {
-    # Match CellCharter's ordering: cluster domains using depleted, weakly
-    # positive, and enriched states rather than unbounded raw fold changes.
-    colour_states <- ifelse(
-      values < 0, -1,
-      ifelse(values < colour_threshold, 0, 1)
-    )
-    nonfinite <- !is.finite(colour_states)
-    colour_states[nonfinite] <- ifelse(
-      is.infinite(values[nonfinite]) & values[nonfinite] > 0, 1, -1
-    )
     domain_order <- domain_order[stats::hclust(
       stats::dist(t(colour_states)), method = "complete"
+    )$order]
+  }
+  program_order <- rownames(values)
+  if (cluster_programs && nrow(values) > 1L) {
+    program_order <- program_order[stats::hclust(
+      stats::dist(colour_states), method = "complete"
     )$order]
   }
 
   data <- as.data.frame(as.table(values), stringsAsFactors = FALSE)
   names(data) <- c("group", "domain", "enrichment")
-  data$group <- factor(data$group, levels = rownames(values))
+  data$group <- factor(data$group, levels = program_order)
   data$domain <- factor(data$domain, levels = rev(domain_order))
   # CellCharter's signed size normalization is clipped at zero by Scanpy.
   # Keeping only positive finite values makes that behavior explicit and also

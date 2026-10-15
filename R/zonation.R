@@ -83,6 +83,93 @@
   list(value = answer, depth = depth)
 }
 
+#' Assign a block-wise dominant program
+#'
+#' Standardizes every selected score program independently within each
+#' patient/block and assigns each spot to the program with the largest scaled
+#' score. Processing occurs one block at a time, so a disk-backed score matrix
+#' is never realized in full.
+#'
+#' @param sce A `SpatialExperiment` or compatible `SingleCellExperiment`.
+#' @param scores Name of an AUCell `altExp` (programs by spots) or `reducedDim`
+#'   (spots by programs).
+#' @param assay_name Assay used when `scores` identifies an `altExp`.
+#' @param block Patient/subject column in `colData(sce)`.
+#' @param programs Programs allowed to compete for the assignment. `NULL` uses
+#'   every program in `scores`.
+#' @param output Name of the `colData` column receiving the assignment.
+#' @param require_positive If `TRUE`, leave a spot unassigned when its largest
+#'   block-standardized score is not positive. This matches zonation assignment.
+#' @param overwrite Whether an existing `output` column may be replaced.
+#' @param progress Whether to display a block progress bar.
+#' @return The updated experiment with a factor in `colData(sce)[[output]]` and
+#'   provenance recorded under `metadata(sce)$CellCharterR$stages`.
+#' @export
+cellcharter_assign_dominant_program <- function(
+    sce, scores = "AUCell", assay_name = "score", block,
+    programs = NULL, output = "dominant_program", require_positive = FALSE,
+    overwrite = FALSE, progress = interactive()) {
+  block_values <- as.character(.cc_sce_coldata(sce, block, "block column"))
+  source <- .cc_zonation_scores(sce, scores, assay_name)
+  if (is.null(programs)) programs <- source$programs
+  if (!is.character(programs) || !length(programs) || anyNA(programs) ||
+      any(!nzchar(programs)) || anyDuplicated(programs) ||
+      !all(programs %in% source$programs)) {
+    stop("`programs` must be unique names present in the score source.",
+         call. = FALSE)
+  }
+  if (!is.character(output) || length(output) != 1L || is.na(output) ||
+      !nzchar(output)) {
+    stop("`output` must be one non-empty column name.", call. = FALSE)
+  }
+  if (!is.logical(require_positive) || length(require_positive) != 1L ||
+      is.na(require_positive) || !is.logical(overwrite) ||
+      length(overwrite) != 1L || is.na(overwrite) || !is.logical(progress) ||
+      length(progress) != 1L || is.na(progress)) {
+    stop("`require_positive`, `overwrite`, and `progress` must be TRUE or FALSE.",
+         call. = FALSE)
+  }
+  if (output %in% colnames(SummarizedExperiment::colData(sce)) && !overwrite) {
+    stop("colData already contains `", output,
+         "`; set `overwrite = TRUE` to replace it.", call. = FALSE)
+  }
+
+  blocks <- unique(block_values)
+  assigned <- rep.int(NA_character_, ncol(sce))
+  bar <- if (progress) utils::txtProgressBar(0L, length(blocks), style = 3L) else NULL
+  if (!is.null(bar)) on.exit(close(bar), add = TRUE)
+  for (i in seq_along(blocks)) {
+    rows <- which(block_values == blocks[[i]])
+    raw <- source$subset(rows, programs)
+    if (any(!is.finite(raw))) {
+      stop("Scores contain non-finite values in block `", blocks[[i]], "`.",
+           call. = FALSE)
+    }
+    centers <- colMeans(raw)
+    spreads <- apply(raw, 2L, stats::sd)
+    spreads[!is.finite(spreads) | spreads == 0] <- 1
+    scaled <- sweep(sweep(raw, 2L, centers, "-"), 2L, spreads, "/")
+    winner <- max.col(scaled, ties.method = "first")
+    if (require_positive) {
+      maximum <- scaled[cbind(seq_len(nrow(scaled)), winner)]
+      winner[maximum <= 0] <- NA_integer_
+    }
+    assigned[rows] <- ifelse(is.na(winner), NA_character_, programs[winner])
+    if (!is.null(bar)) utils::setTxtProgressBar(bar, i)
+  }
+
+  SummarizedExperiment::colData(sce)[[output]] <- factor(
+    assigned, levels = programs
+  )
+  .cc_sce_record_stage(
+    sce, paste0("dominant_program:", output),
+    list(scores = scores, score_source = source$source,
+         score_orientation = source$orientation, assay_name = assay_name,
+         block = block, programs = programs, output = output,
+         require_positive = require_positive)
+  )
+}
+
 #' Compute authors-style score-defined zonation
 #'
 #' Adapts the equal-depth zonal enrichment mechanics used by Simkin et al. to

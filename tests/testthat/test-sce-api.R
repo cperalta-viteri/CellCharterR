@@ -191,6 +191,27 @@ test_that("enrichment plotting suppresses depletion and caps positive display va
   expect_identical(levels(plotted$data$domain), rev(colnames(values)))
 })
 
+test_that("enrichment plotting clusters program profiles with hclust", {
+  skip_if_not_installed("ggplot2")
+  values <- matrix(
+    c(2, -1, 0.2, -2, 1.5, 0.1, 0.1, 0.2, 2),
+    nrow = 3L, byrow = TRUE,
+    dimnames = list(c("A", "B", "C"), c("D1", "D2", "D3"))
+  )
+  states <- ifelse(values < 0, -1, ifelse(values < 0.58, 0, 1))
+  expected <- rownames(values)[stats::hclust(
+    stats::dist(states), method = "complete"
+  )$order]
+  plotted <- cellcharter_plot_enrichment(
+    values, cluster_domains = FALSE, cluster_programs = TRUE
+  )
+  expect_identical(levels(plotted$data$group), expected)
+  expect_error(
+    cellcharter_plot_enrichment(values, cluster_programs = NA),
+    "cluster_programs"
+  )
+})
+
 test_that("object API rejects positional identity and stale subset metadata", {
   skip_if_not_installed("geometry")
   sce <- .tiny_sce_fixture()

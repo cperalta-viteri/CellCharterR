@@ -11,7 +11,8 @@ cellcharter_plot_enrichment(
   point_range = c(1, 8),
   size_threshold = 0.58,
   colour_threshold = 0.58,
-  cluster_domains = TRUE
+  cluster_domains = TRUE,
+  cluster_programs = FALSE
 )
 }
 \arguments{
@@ -33,6 +34,9 @@ is capped. The CellCharter CODEX tutorial uses \code{0.58}.}
 
 \item{cluster_domains}{Whether to order domains by complete-linkage
 clustering of the thresholded enrichment profiles, as in CellCharter.}
+
+\item{cluster_programs}{Whether to order programs by complete-linkage
+clustering of their thresholded enrichment profiles.}
 }
 \value{
 A \code{ggplot} object.

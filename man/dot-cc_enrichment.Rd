@@ -4,7 +4,13 @@
 \alias{.cc_enrichment}
 \title{CellCharter observed-versus-expected group enrichment}
 \usage{
-.cc_enrichment(group, label, log2_fold_change = TRUE)
+.cc_enrichment(
+  group,
+  label,
+  log2_fold_change = TRUE,
+  progress = FALSE,
+  chunk_size = 1000000L
+)
 }
 \arguments{
 \item{group}{Group annotation, typically cell type.}
@@ -13,6 +19,10 @@
 
 \item{log2_fold_change}{Return log2 fold changes when \code{TRUE}; otherwise
 return fold changes.}
+
+\item{progress}{Whether to display progress while accumulating counts.}
+
+\item{chunk_size}{Maximum number of observations counted per chunk.}
 }
 \value{
 A list containing \code{observed}, \code{expected}, \code{enrichment}, and \code{params}.

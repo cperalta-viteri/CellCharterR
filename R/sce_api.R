@@ -386,6 +386,9 @@ cellcharter_cluster <- function(
 #'   one-column reducedDim, or an unambiguous column name inside a reducedDim.
 #' @param result_name Name under `metadata(sce)$CellCharterR$results`.
 #' @param log2_fold_change Return log2 fold change.
+#' @param progress Whether to display progress while counting observations.
+#' @param chunk_size Maximum number of observations processed per counting
+#'   chunk. This bounds temporary memory for very large experiments.
 #' @return The updated `SingleCellExperiment`.
 #' @examples
 #' example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
@@ -396,12 +399,18 @@ cellcharter_cluster <- function(
 #' @export
 cellcharter_enrichment <- function(
     sce, group_col, domain_col = "cellcharter_domain",
-    result_name = "enrichment", log2_fold_change = TRUE) {
+    result_name = "enrichment", log2_fold_change = TRUE,
+    progress = interactive(), chunk_size = 1000000L) {
   group <- .cc_sce_coldata(sce, group_col, "group column")
   domain <- .cc_sce_domain(sce, domain_col)
-  result <- .cc_enrichment(group, domain, log2_fold_change)
+  result <- .cc_enrichment(
+    group, domain, log2_fold_change,
+    progress = progress, chunk_size = chunk_size
+  )
   .cc_sce_store_result(sce, result_name, result,
-                       list(group_col = group_col, domain_col = domain_col))
+                       list(group_col = group_col, domain_col = domain_col,
+                            progress = progress,
+                            chunk_size = as.integer(chunk_size)))
 }
 
 #' Attach CellCharter neighborhood enrichment to an SCE

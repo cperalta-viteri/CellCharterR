@@ -9,7 +9,9 @@ cellcharter_enrichment(
   group_col,
   domain_col = "cellcharter_domain",
   result_name = "enrichment",
-  log2_fold_change = TRUE
+  log2_fold_change = TRUE,
+  progress = interactive(),
+  chunk_size = 1000000L
 )
 }
 \arguments{
@@ -23,6 +25,11 @@ one-column reducedDim, or an unambiguous column name inside a reducedDim.}
 \item{result_name}{Name under \code{metadata(sce)$CellCharterR$results}.}
 
 \item{log2_fold_change}{Return log2 fold change.}
+
+\item{progress}{Whether to display progress while counting observations.}
+
+\item{chunk_size}{Maximum number of observations processed per counting
+chunk. This bounds temporary memory for very large experiments.}
 }
 \value{
 The updated \code{SingleCellExperiment}.

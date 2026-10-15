@@ -18,6 +18,20 @@ test_that("cell-type enrichment matches CellCharter v0.2.0 proportions", {
   expect_equal(result$params$reference, "CellCharter 0.2.0")
 })
 
+test_that("chunked enrichment is invariant to chunk size", {
+  cell_type <- factor(rep(c("A", "B", "C", "A"), 7L),
+                      levels = c("A", "B", "C"))
+  domain <- factor(rep(c("D1", "D2"), 14L), levels = c("D1", "D2"))
+  single <- .cc_enrichment(cell_type, domain, chunk_size = length(cell_type))
+  chunked <- .cc_enrichment(cell_type, domain, chunk_size = 3L)
+  expect_equal(chunked$observed, single$observed)
+  expect_equal(chunked$expected, single$expected)
+  expect_equal(chunked$enrichment, single$enrichment)
+  expect_identical(chunked$params$chunk_size, 3L)
+  expect_error(.cc_enrichment(cell_type, domain, chunk_size = 0L),
+               "positive integer")
+})
+
 test_that("asymmetric inter-domain expectation uses target cell fractions", {
   # Undirected edges: A1-B, A2-B, A2-C, and B-C.
   adjacency <- Matrix::sparseMatrix(

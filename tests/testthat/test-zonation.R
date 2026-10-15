@@ -30,6 +30,35 @@ make_zonation_spe <- function(use_alt_exp = FALSE) {
   spe
 }
 
+test_that("dominant programs are assigned block-wise without running zonation", {
+  spe <- make_zonation_spe()
+  observed <- cellcharter_assign_dominant_program(
+    spe, block = "patient", programs = c("Pre-EMT", "Early-EMT", "Late-EMT"),
+    output = "dominant_emt", progress = FALSE
+  )
+  expect_identical(
+    as.character(observed$dominant_emt[1:9]),
+    rep(c("Pre-EMT", "Early-EMT", "Late-EMT"), each = 3L)
+  )
+  record <- S4Vectors::metadata(observed)$CellCharterR$stages$
+    `dominant_program:dominant_emt`
+  expect_identical(record$parameters$block, "patient")
+  expect_identical(record$parameters$score_source, "reducedDim:AUCell")
+  expect_error(
+    cellcharter_assign_dominant_program(
+      observed, block = "patient", output = "dominant_emt", progress = FALSE
+    ),
+    "already contains"
+  )
+
+  alternative <- cellcharter_assign_dominant_program(
+    make_zonation_spe(TRUE), block = "patient",
+    programs = c("Pre-EMT", "Early-EMT", "Late-EMT"),
+    output = "dominant_emt", progress = FALSE
+  )
+  expect_identical(observed$dominant_emt, alternative$dominant_emt)
+})
+
 test_that("zonation is deterministic, block-aware, and stores audit data", {
   spe <- make_zonation_spe()
   set.seed(812L)

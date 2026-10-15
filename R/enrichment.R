@@ -9,9 +9,12 @@
 #' @param label Label annotation, typically spatial domain.
 #' @param log2_fold_change Return log2 fold changes when `TRUE`; otherwise
 #'   return fold changes.
+#' @param progress Whether to display progress while accumulating counts.
+#' @param chunk_size Maximum number of observations counted per chunk.
 #' @return A list containing `observed`, `expected`, `enrichment`, and `params`.
 #' @keywords internal
-.cc_enrichment <- function(group, label, log2_fold_change = TRUE) {
+.cc_enrichment <- function(group, label, log2_fold_change = TRUE,
+                           progress = FALSE, chunk_size = 1000000L) {
   group <- .cc_complete_factor(group, "group")
   label <- .cc_complete_factor(label, "label")
   if (length(group) != length(label)) {
@@ -24,14 +27,40 @@
       is.na(log2_fold_change)) {
     stop("`log2_fold_change` must be TRUE or FALSE.", call. = FALSE)
   }
+  if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
+    stop("`progress` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.numeric(chunk_size) || length(chunk_size) != 1L ||
+      !is.finite(chunk_size) || chunk_size < 1 ||
+      chunk_size != as.integer(chunk_size)) {
+    stop("`chunk_size` must be one positive integer.", call. = FALSE)
+  }
 
-  # CellCharter first calculates group proportions within every label and then
-  # transposes the table so groups are rows and labels are columns.
-  counts <- unclass(table(label, group))
+  # CellCharter first calculates group proportions within every label. Count
+  # joint factor codes in bounded chunks so multi-million-spot inputs expose
+  # genuine progress without changing the exact contingency table.
+  n_label <- nlevels(label)
+  n_group <- nlevels(group)
+  counts <- matrix(0, nrow = n_label, ncol = n_group,
+                   dimnames = list(levels(label), levels(group)))
+  starts <- seq.int(1L, length(group), by = as.integer(chunk_size))
+  bar <- if (progress) utils::txtProgressBar(0L, length(starts), style = 3L) else NULL
+  if (!is.null(bar)) on.exit(close(bar), add = TRUE)
+  group_code <- as.integer(group)
+  label_code <- as.integer(label)
+  for (i in seq_along(starts)) {
+    rows <- starts[[i]]:min(length(group), starts[[i]] + as.integer(chunk_size) - 1L)
+    joint <- label_code[rows] + (group_code[rows] - 1L) * n_label
+    counts <- counts + matrix(
+      tabulate(joint, nbins = n_label * n_group),
+      nrow = n_label, ncol = n_group
+    )
+    if (!is.null(bar)) utils::setTxtProgressBar(bar, i)
+  }
   label_totals <- rowSums(counts)
   observed <- t(sweep(counts, 1L, label_totals, FUN = "/"))
 
-  expected_proportion <- as.numeric(table(group)) / length(group)
+  expected_proportion <- colSums(counts) / length(group)
   names(expected_proportion) <- levels(group)
   expected <- matrix(
     expected_proportion,
@@ -59,6 +88,7 @@
     enrichment = enrichment,
     params = list(
       log2_fold_change = log2_fold_change,
+      chunk_size = as.integer(chunk_size),
       reference = "CellCharter 0.2.0"
     )
   )
