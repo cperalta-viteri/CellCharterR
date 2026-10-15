@@ -75,7 +75,7 @@ cell-type enrichment as log2 fold change. Darker and larger red points indicate
 stronger positive enrichment; non-positive values remain in the stored result
 but are omitted from this display, following the CellCharter presentation.
 
-```{r ecosystem-enrichment, fig.width=12, fig.height=8, fig.cap="Cell-type enrichment defining the four K=4 mouse-spleen spatial ecosystems."}
+```{r ecosystem-enrichment, fig.width=12, fig.height=8, fig.cap="Cell-type enrichment defining the four K=4 mouse-spleen spatial ecosystems.", fig.alt="Positive cell-type enrichment dot plot defining four K equals 4 mouse-spleen spatial ecosystems"}
 cellcharter_plot_enrichment(
   k4_enrichment,
   title = "Cell types defining the K=4 spatial ecosystems"
@@ -86,6 +86,62 @@ These enrichment profiles provide the biological context for the numbered
 nodes below: each network node is one of these four spatial ecosystems, not an
 individual cell type.
 
+# Inspect both differential contrasts
+
+Before reducing the result to arrows, inspect the complete directed effect
+matrices. The stored effect is BALBc minus MRL; the reciprocal display negates
+that effect while retaining the same directional empirical p-values. Rows are
+source ecosystems and columns are neighboring target ecosystems. A star marks
+an empirical `p <= 0.05` from the 100 sample-level permutations.
+
+```{r contrast-heatmaps, fig.width=12, fig.height=5.8, fig.cap="Full K=4 differential neighborhood-enrichment matrices in both display directions.", fig.alt="Side-by-side heatmaps of the BALBc minus MRL and MRL minus BALBc differential neighborhood enrichment matrices"}
+contrast_long <- function(effect, pvalue, contrast) {
+  value <- as.data.frame(as.table(effect), stringsAsFactors = FALSE)
+  names(value) <- c("source", "target", "effect")
+  value$pvalue <- as.vector(pvalue)
+  value$contrast <- contrast
+  value$label <- ifelse(
+    is.finite(value$effect),
+    paste0(sprintf("%.2f", value$effect), ifelse(value$pvalue <= 0.05, " *", "")),
+    ""
+  )
+  value
+}
+
+contrast_heatmaps <- rbind(
+  contrast_long(k4_result$effect, k4_result$pvalue, "BALBc minus MRL"),
+  contrast_long(-k4_result$effect, k4_result$pvalue, "MRL minus BALBc")
+)
+effect_limit <- max(abs(contrast_heatmaps$effect), na.rm = TRUE)
+
+ggplot2::ggplot(
+  contrast_heatmaps,
+  ggplot2::aes(x = target, y = source, fill = effect)
+) +
+  ggplot2::geom_tile(colour = "white", linewidth = 0.8) +
+  ggplot2::geom_text(ggplot2::aes(label = label), size = 5) +
+  ggplot2::facet_wrap(~contrast, nrow = 1) +
+  ggplot2::scale_fill_gradient2(
+    low = "#2166AC", mid = "white", high = "#8B0000",
+    midpoint = 0, limits = c(-effect_limit, effect_limit),
+    name = "Differential\nenrichment"
+  ) +
+  ggplot2::coord_fixed() +
+  ggplot2::labs(
+    x = "Neighboring ecosystem (target)",
+    y = "Central ecosystem (source)"
+  ) +
+  ggplot2::theme_bw(base_size = 16) +
+  ggplot2::theme(
+    panel.grid = ggplot2::element_blank(),
+    strip.text = ggplot2::element_text(face = "bold")
+  )
+```
+
+These heatmaps retain every directed off-diagonal comparison, including weak
+or unsupported effects. The network views below summarize the same matrices;
+they do not perform a second statistical test.
+
 # Plot both favored-condition networks
 
 Black arrows are the default. Solid arrows pass the displayed statistical
@@ -93,7 +149,7 @@ threshold; dashed arrows are retained effects that are not statistically
 supported at that threshold. Arrow width is intentionally constant, so it does
 not create an additional visual claim about magnitude.
 
-```{r default-network, fig.cap="Full mouse-spleen K=4 differential neighborhood-enrichment network. The two panels share identical node coordinates."}
+```{r default-network, fig.cap="Full mouse-spleen K=4 differential neighborhood-enrichment network. The two panels share identical node coordinates.", fig.alt="Two-panel K equals 4 differential neighborhood network showing both condition contrast directions with shared node positions"}
 cellcharter_plot_graph_diff(k4_result)
 ```
 
@@ -106,7 +162,7 @@ or interpreted as an undirected connection.
 Colors are presentation choices, not part of the statistical test. A single
 color applies to both panels; a named vector can assign one color per condition.
 
-```{r custom-colours, fig.cap="The same result with user-supplied condition colors and the strongest four arrows retained independently per panel."}
+```{r custom-colours, fig.cap="The same result with user-supplied condition colors and the strongest four arrows retained independently per panel.", fig.alt="Differential neighborhood network with dark blue and dark red condition colors and four strongest arrows per panel"}
 cellcharter_plot_graph_diff(
   k4_result,
   edge_colours = c(BALBc = "#2166AC", MRL = "#B2182B"),
@@ -125,7 +181,7 @@ For exploratory multiplicity control, select a method supported by
 `stats::p.adjust()`; adjustment is performed across every eligible directed
 off-diagonal hypothesis before display filtering.
 
-```{r supported-only, fig.cap="Edges supported by the raw directional empirical p-value threshold of 0.05."}
+```{r supported-only, fig.cap="Edges supported by the raw directional empirical p-value threshold of 0.05.", fig.alt="Differential neighborhood network restricted to edges with raw directional empirical p values no greater than 0.05"}
 cellcharter_plot_graph_diff(
   k4_result,
   significant_only = TRUE,

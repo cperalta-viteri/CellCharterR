@@ -19,6 +19,10 @@
 - Incorporated the second-round methodological corrections and tests for graph,
   aggregation, AutoK, full-covariance GMM, enrichment, differential inference,
   provenance, and bounded-memory behavior.
+- Made AutoK resume restore committed stability state without replaying every
+  historical Fowlkes--Mallows comparison. Representation caching now begins
+  only for genuinely unfinished work, and an interrupted final run is
+  recoverably quarantined and restarted from its first K.
 - Simplified the public workflow to neutral `cellcharter_*()` names. Numerical
   matrix kernels now use internal `.cc_*()` names; the former
   `cellcharter_sce_*()` entry points remain as deprecated compatibility wrappers.

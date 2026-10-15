@@ -77,6 +77,78 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   invisible(path)
 }
 
+.autok_quarantine_incomplete_runs <- function(checkpoint_dir, after_run) {
+  files <- list.files(file.path(checkpoint_dir, "fits"), pattern = "^run_[0-9]+[.]rds$",
+                      recursive = TRUE, full.names = TRUE)
+  if (!length(files)) return(character())
+  run_number <- suppressWarnings(as.integer(sub("^run_([0-9]+)[.]rds$", "\\1", basename(files))))
+  files <- files[!is.na(run_number) & run_number > after_run]
+  if (!length(files)) return(character())
+  stamp <- format(Sys.time(), "%Y%m%dT%H%M%S", tz = "UTC")
+  destination <- file.path(checkpoint_dir, "quarantine", paste0("incomplete-after-run-", after_run,
+                                                                  "-", stamp, "-", Sys.getpid()))
+  for (source in files) {
+    relative <- substring(source, nchar(file.path(checkpoint_dir, "fits")) + 2L)
+    target <- file.path(destination, relative)
+    dir.create(dirname(target), recursive = TRUE, showWarnings = FALSE)
+    if (!file.rename(source, target)) stop("Could not quarantine incomplete AutoK checkpoint `", source, "`.")
+  }
+  message(sprintf(
+    "CellCharterR AutoK resume: quarantined %d fit artifact(s) beyond the last reusable run in `%s`; the next run will restart from its first K.",
+    length(files), destination
+  ))
+  files
+}
+
+.autok_compatible_state <- function(state, current, accepted_data_ids,
+                                     similarity_digest, default_similarity) {
+  required <- c("fit_k", "candidate_k", "seed", "n_obs", "n_features", "data_id",
+                "runs_completed", "edge_stability", "convergence_history")
+  if (is.null(state) || !all(required %in% names(state))) return(FALSE)
+  similarity_matches <- if (!is.null(state$similarity_digest)) {
+    identical(state$similarity_digest, similarity_digest)
+  } else {
+    # Older states predate an explicit similarity identity and are safe to
+    # restore only for the package's pinned default FMI implementation.
+    default_similarity
+  }
+  identical(as.integer(state$fit_k), as.integer(current$fit_k)) &&
+    identical(as.integer(state$candidate_k), as.integer(current$candidate_k)) &&
+    identical(as.integer(state$seed), as.integer(current$seed)) &&
+    identical(as.integer(state$n_obs), as.integer(current$n_obs)) &&
+    identical(as.integer(state$n_features), as.integer(current$n_features)) &&
+    isTRUE(similarity_matches) && as.character(state$data_id) %in% accepted_data_ids
+}
+
+.autok_validate_state_tables <- function(state, fit_k, runs_completed) {
+  if (runs_completed < 0L || runs_completed != as.integer(runs_completed)) {
+    stop("Saved AutoK state has invalid `runs_completed`.")
+  }
+  edges <- state$edge_stability
+  required_edges <- c("run", "previous_run", "lower_k", "upper_k", "score")
+  if (!is.data.frame(edges) || !all(required_edges %in% names(edges)) ||
+      anyNA(edges[, required_edges, drop = FALSE]) || any(!is.finite(edges$score))) {
+    stop("Saved AutoK state has malformed stability comparisons.")
+  }
+  expected_edge_keys <- character()
+  if (runs_completed > 1L) {
+    expected_edge_keys <- unlist(lapply(seq.int(2L, runs_completed), function(run) {
+      unlist(lapply(seq_len(run - 1L), function(previous_run) {
+        sprintf("%d:%d:%d:%d", run, previous_run,
+                fit_k[-length(fit_k)], fit_k[-1L])
+      }), use.names = FALSE)
+    }), use.names = FALSE)
+  }
+  observed_edge_keys <- if (nrow(edges)) {
+    sprintf("%d:%d:%d:%d", edges$run, edges$previous_run,
+            edges$lower_k, edges$upper_k)
+  } else character()
+  if (!identical(observed_edge_keys, expected_edge_keys)) {
+    stop("Saved AutoK state has missing, duplicated, or reordered stability comparisons.")
+  }
+  invisible(TRUE)
+}
+
 .autok_read_checkpoint <- function(path, expected, n_obs, compatible_data_ids = character()) {
   artifact <- tryCatch(
     readRDS(path),
@@ -321,7 +393,10 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #'   batch size, and thread count) and package upgrades do not invalidate a
 #'   compatible completed fit; the exact implementation digest is retained as
 #'   provenance.
-#' @param resume Reuse matching completed fit checkpoints.
+#' @param resume Reuse matching fully committed runs. Historical stability is
+#'   restored without recomputation; artifacts from an interrupted final run
+#'   are moved to a recoverable `quarantine/` directory and that run restarts
+#'   from its first K.
 #' @param cache_representation Either `"none"` for the bounded-memory reader or
 #'   `"ram"` to materialise only the observation-by-feature representation once
 #'   as a CPU float32 Torch tensor and reuse it throughout AutoK. The latter can
@@ -384,10 +459,10 @@ cellcharter_autok_fit <- function(
   if (!is.function(fit_fun) || !is.function(predict_fun) || !is.function(nll_fun)) {
     stop("`fit_fun`, `predict_fun`, and `nll_fun` must be functions.")
   }
-  # The default Torch fitter otherwise performs the same complete finite-value
-  # scan for every K/run. Validate once for this immutable AutoK invocation and
-  # pass an explicit trusted flag to each fit. Custom fit hooks retain their own
-  # validation policy.
+  # Representation validation/materialisation is deliberately lazy. A resume
+  # with no new fit must not scan or copy a multi-million-row representation.
+  fit_x <- NULL
+  representation_prepared <- FALSE
   if (identical(fit_fun, .autok_default_fit)) {
     validation_batch_size <- fit_args$batch_size %||% 8192L
     if (is.character(validation_batch_size) &&
@@ -404,28 +479,38 @@ cellcharter_autok_fit <- function(
     validation_batch_size <- .rc_positive_integer(
       validation_batch_size, "fit_args$batch_size"
     )
-    if (identical(cache_representation, "ram")) {
-      message(sprintf(
-        "CellCharterR AutoK: caching %d x %d representation in CPU RAM as float32 (about %.2f GiB).",
-        nrow(x), ncol(x), as.double(nrow(x)) * ncol(x) * 4 / 1024^3
-      ))
-      fit_x <- .rc_ram_cache(x, validation_batch_size)
-    } else {
-      validation_reader <- .rc_reader(x)
-      for (start in .rc_chunk_starts(validation_reader$n, validation_batch_size)) {
-        .rc_get(
-          validation_reader,
-          .rc_chunk_index(start, validation_reader$n, validation_batch_size)
-        )
+    prepare_representation <- function() {
+      if (representation_prepared) return(invisible(NULL))
+      message("CellCharterR AutoK: preparing representation for the first unfinished fit.")
+      if (identical(cache_representation, "ram")) {
+        message(sprintf(
+          "CellCharterR AutoK: caching %d x %d representation in CPU RAM as float32 (about %.2f GiB).",
+          nrow(x), ncol(x), as.double(nrow(x)) * ncol(x) * 4 / 1024^3
+        ))
+        fit_x <<- .rc_ram_cache(x, validation_batch_size)
+      } else {
+        validation_reader <- .rc_reader(x)
+        for (start in .rc_chunk_starts(validation_reader$n, validation_batch_size)) {
+          .rc_get(validation_reader, .rc_chunk_index(start, validation_reader$n,
+                                                     validation_batch_size))
+        }
+        fit_x <<- x
       }
-      fit_x <- x
+      fit_args$validate_input <<- FALSE
+      representation_prepared <<- TRUE
+      invisible(NULL)
     }
-    fit_args$validate_input <- FALSE
   } else {
     if (!identical(cache_representation, "none")) {
       stop("`cache_representation = \"ram\"` is supported only by the default Torch fit/predict hooks.")
     }
-    fit_x <- x
+    prepare_representation <- function() {
+      if (!representation_prepared) {
+        fit_x <<- x
+        representation_prepared <<- TRUE
+      }
+      invisible(NULL)
+    }
   }
   implementation_functions <- list(
     fit = fit_fun, predict = predict_fun, nll = nll_fun
@@ -468,6 +553,7 @@ cellcharter_autok_fit <- function(
   implementation_digest <- cellcharter_implementation_digest(
     functions = implementation_functions
   )
+  similarity_digest <- cellcharter_implementation_digest(functions = list(similarity = similarity_fun))
   default_torch <- identical(fit_fun, .autok_default_fit) &&
     identical(predict_fun, .autok_default_predict) && identical(nll_fun, .autok_default_nll)
   resume_contract <- .autok_resume_contract(
@@ -500,13 +586,25 @@ cellcharter_autok_fit <- function(
     })
   }
 
+  state_path <- file.path(checkpoint_dir, "autok_state.rds")
+  saved_state <- if (resume && file.exists(state_path)) {
+    tryCatch(readRDS(state_path), error = function(e) NULL)
+  } else NULL
+  restore_state <- .autok_compatible_state(
+    saved_state,
+    list(fit_k = fit_k, candidate_k = candidate_k, seed = seed,
+         n_obs = n_obs, n_features = n_features, convergence_tol = convergence_tol),
+    unique(c(data_id, legacy_data_ids)), similarity_digest,
+    identical(similarity_fun, cellcharter_fowlkes_mallows)
+  )
+
   edge_stability <- data.frame(
     run = integer(), previous_run = integer(), lower_k = integer(),
     upper_k = integer(), score = numeric()
   )
   fit_index <- data.frame(
     k = integer(), run = integer(), seed = integer(), nll = numeric(),
-    path = character(), resumed = logical(), stringsAsFactors = FALSE
+    path = character(), bytes = numeric(), resumed = logical(), stringsAsFactors = FALSE
   )
   convergence_history <- data.frame(run = integer(), stability_change = numeric())
   previous_stability <- NULL
@@ -516,7 +614,157 @@ cellcharter_autok_fit <- function(
   campaign_completed <- 0L
   new_fit_seconds <- numeric()
 
-  for (run in seq_len(max_runs)) {
+  start_run <- 1L
+  if (restore_state) {
+    runs_completed <- min(as.integer(saved_state$runs_completed), max_runs)
+    if (runs_completed < 0L || is.na(runs_completed)) stop("Saved AutoK state has invalid `runs_completed`.")
+    edge_stability <- saved_state$edge_stability[
+      saved_state$edge_stability$run <= runs_completed &
+        saved_state$edge_stability$previous_run <= runs_completed, , drop = FALSE
+    ]
+    convergence_history <- saved_state$convergence_history[
+      saved_state$convergence_history$run <= runs_completed, , drop = FALSE
+    ]
+    # Runtime convergence policy may legitimately change between invocations;
+    # reuse the immutable FMI history and re-evaluate it under the current
+    # tolerance instead of trusting the old boolean or recomputing FMI. If the
+    # new policy would have stopped earlier, reproduce that clean-run boundary
+    # and quarantine later fits rather than allowing them to affect selection.
+    convergence_rows <- which(
+      convergence_history$stability_change < convergence_tol
+    )
+    if (length(convergence_rows)) {
+      runs_completed <- min(
+        runs_completed,
+        as.integer(convergence_history$run[[convergence_rows[[1L]]]])
+      )
+      edge_stability <- edge_stability[
+        edge_stability$run <= runs_completed &
+          edge_stability$previous_run <= runs_completed, , drop = FALSE
+      ]
+      convergence_history <- convergence_history[
+        convergence_history$run <= runs_completed, , drop = FALSE
+      ]
+      converged <- TRUE
+    } else {
+      converged <- FALSE
+    }
+    .autok_validate_state_tables(
+      list(edge_stability = edge_stability), fit_k, runs_completed
+    )
+    previous_stability <- if (runs_completed > 1L) {
+      .autok_mirror_stability(edge_stability, fit_k)
+    } else NULL
+
+    if (!is.null(saved_state$fit_index)) {
+      fit_index <- saved_state$fit_index[saved_state$fit_index$run <= runs_completed, , drop = FALSE]
+      expected_fit_keys <- expand.grid(
+        k = fit_k, run = seq_len(runs_completed), KEEP.OUT.ATTRS = FALSE
+      )
+      expected_fit_keys <- expected_fit_keys[order(expected_fit_keys$run, expected_fit_keys$k), ]
+      observed_order <- order(fit_index$run, fit_index$k)
+      fit_index <- fit_index[observed_order, , drop = FALSE]
+      if (nrow(fit_index) != nrow(expected_fit_keys) ||
+          anyDuplicated(fit_index[, c("k", "run")]) ||
+          !identical(as.integer(fit_index$k), as.integer(expected_fit_keys$k)) ||
+          !identical(as.integer(fit_index$run), as.integer(expected_fit_keys$run)) ||
+          anyNA(fit_index$nll) || any(!is.finite(fit_index$nll))) {
+        stop("Committed AutoK state has an incomplete or malformed fit index.")
+      }
+      fit_index$resumed <- TRUE
+      fit_index$path <- mapply(.autok_checkpoint_path, checkpoint_dir = checkpoint_dir,
+                               k = fit_index$k, run = fit_index$run, USE.NAMES = FALSE)
+      missing_fit <- !file.exists(fit_index$path)
+      if (any(missing_fit)) {
+        stop("Committed AutoK state references missing fit checkpoint `",
+             fit_index$path[[which(missing_fit)[[1L]]]], "`.")
+      }
+      observed_bytes <- as.numeric(file.info(fit_index$path)$size)
+      if ("bytes" %in% names(fit_index) && !anyNA(fit_index$bytes)) {
+        if (!identical(as.numeric(fit_index$bytes), observed_bytes)) {
+          stop("A committed AutoK fit checkpoint changed size after state publication.")
+        }
+      } else {
+        # One-time upgrade for early state files: fully validate every artifact
+        # before publishing lightweight byte-size guards for future resumes.
+        for (i in seq_len(nrow(fit_index))) {
+          expected <- list(
+            k = as.integer(fit_index$k[[i]]), run = as.integer(fit_index$run[[i]]),
+            seed = as.integer(seed + fit_index$run[[i]] - 1L),
+            n_obs = as.integer(n_obs), n_features = as.integer(n_features), data_id = data_id
+          )
+          artifact <- .autok_read_checkpoint(
+            fit_index$path[[i]], expected, n_obs, compatible_data_ids = legacy_data_ids
+          )
+          fit_index$nll[[i]] <- artifact$nll
+          rm(artifact)
+        }
+        fit_index$bytes <- observed_bytes
+      }
+    } else if (runs_completed > 0L) {
+      message(sprintf(
+        "CellCharterR AutoK resume: restoring checkpoint metadata for %d committed run(s) (one-time legacy migration).",
+        runs_completed
+      ))
+      rows <- vector("list", runs_completed * length(fit_k))
+      index <- 0L
+      for (committed_run in seq_len(runs_completed)) {
+        run_seed <- as.integer(seed + committed_run - 1L)
+        for (k in fit_k) {
+          path <- .autok_checkpoint_path(checkpoint_dir, k, committed_run)
+          expected <- list(k = as.integer(k), run = as.integer(committed_run), seed = run_seed,
+                           n_obs = as.integer(n_obs), n_features = as.integer(n_features), data_id = data_id)
+          artifact <- .autok_read_checkpoint(path, expected, n_obs, legacy_data_ids)
+          index <- index + 1L
+          rows[[index]] <- data.frame(k = k, run = committed_run, seed = run_seed,
+                                      nll = artifact$nll, path = path,
+                                      bytes = as.numeric(file.info(path)$size), resumed = TRUE,
+                                      stringsAsFactors = FALSE)
+          rm(artifact)
+        }
+        message(sprintf("CellCharterR AutoK resume: validated committed run %d/%d.",
+                        committed_run, runs_completed))
+      }
+      fit_index <- do.call(rbind, rows)
+    }
+    campaign_completed <- nrow(fit_index)
+    .autok_quarantine_incomplete_runs(checkpoint_dir, runs_completed)
+    start_run <- runs_completed + 1L
+    message(sprintf(
+      "CellCharterR AutoK resume: restored %d committed run(s), %d fit(s), and %d stability comparison(s) without recomputing FMI; next run=%d.",
+      runs_completed, nrow(fit_index), nrow(edge_stability), start_run
+    ))
+    # Publish the upgraded/restored state immediately. In particular, a
+    # completed legacy campaign may have no subsequent run in which to write
+    # `fit_index` and `similarity_digest`; without this write it would repeat
+    # the one-time metadata migration on every invocation.
+    restored_state <- list(
+      format_version = 2L, fit_k = fit_k, candidate_k = candidate_k,
+      max_runs = max_runs, convergence_tol = convergence_tol, seed = seed,
+      fit_args = fit_args, predict_args = predict_args,
+      resume_contract = resume_contract,
+      compatible_data_ids = legacy_data_ids,
+      cache_representation = cache_representation,
+      cache_format_version = 2L,
+      input_data_id = input_data_id, implementation_digest = implementation_digest,
+      similarity_digest = similarity_digest,
+      data_id = data_id, n_obs = n_obs, n_features = n_features,
+      runs_completed = runs_completed, converged = converged,
+      edge_stability = edge_stability, convergence_history = convergence_history,
+      fit_index = fit_index
+    )
+    .autok_atomic_save_rds(restored_state, state_path)
+  } else if (resume && file.exists(state_path)) {
+    # A committed but incompatible/corrupt state is not an interrupted final
+    # run. Preserve the historical fail-closed behavior and all artifacts.
+    if (is.null(saved_state)) stop("Cannot read committed AutoK state `", state_path, "`.")
+    message("CellCharterR AutoK resume: committed state is incompatible; validating fit checkpoints before refusing reuse.")
+  } else if (resume) {
+    .autok_quarantine_incomplete_runs(checkpoint_dir, 0L)
+  }
+
+  run_sequence <- if (start_run <= max_runs && !converged) seq.int(start_run, max_runs) else integer()
+  for (run in run_sequence) {
     run_seed <- as.integer(seed + run - 1L)
     if (is.na(run_seed)) stop("Run seed exceeds R's integer range.")
     current_round_labels <- if (run > 1L) {
@@ -537,6 +785,7 @@ cellcharter_autok_fit <- function(
           path, expected, n_obs, compatible_data_ids = legacy_data_ids
         )
       } else {
+        prepare_representation()
         fit_started <- proc.time()[["elapsed"]]
         fit_attempt <- .autok_oom_retry(
           function(args) withr::with_seed(
@@ -584,7 +833,8 @@ cellcharter_autok_fit <- function(
       fit_index <- rbind(
         fit_index,
         data.frame(k = k, run = run, seed = run_seed, nll = artifact$nll,
-                   path = path, resumed = reused, stringsAsFactors = FALSE)
+                   path = path, bytes = as.numeric(file.info(path)$size),
+                   resumed = reused, stringsAsFactors = FALSE)
       )
       if (run > 1L && k != fit_k[[length(fit_k)]]) {
         current_round_labels[[as.character(k)]] <- artifact$labels
@@ -658,9 +908,11 @@ cellcharter_autok_fit <- function(
       cache_representation = cache_representation,
       cache_format_version = 2L,
       input_data_id = input_data_id, implementation_digest = implementation_digest,
+      similarity_digest = similarity_digest,
       data_id = data_id, n_obs = n_obs, n_features = n_features,
       runs_completed = runs_completed, converged = converged,
-      edge_stability = edge_stability, convergence_history = convergence_history
+      edge_stability = edge_stability, convergence_history = convergence_history,
+      fit_index = fit_index
     )
     .autok_atomic_save_rds(partial, file.path(checkpoint_dir, "autok_state.rds"))
     if (converged) break
@@ -694,6 +946,7 @@ cellcharter_autok_fit <- function(
       cache_representation = cache_representation,
       cache_format_version = 2L,
       input_data_id = input_data_id, implementation_digest = implementation_digest,
+      similarity_digest = similarity_digest,
       data_id = data_id, n_obs = n_obs, n_features = n_features,
       runs_completed = runs_completed, converged = converged,
       stability = stability, stability_mean = stability_mean,

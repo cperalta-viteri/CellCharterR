@@ -341,7 +341,7 @@ K=4 is the independently selected global maximum. K=11 is annotated only as
 the predeclared tutorial-matched sensitivity and lies on the secondary K=10--11
 stability shoulder.
 
-```{r autok-stability, echo=TRUE, out.width="100%", fig.alt="Mouse-spleen neighboring-K Fowlkes-Mallows stability from K=1 through K=20; K=4 is selected and K=11 is highlighted"}
+```{r autok-stability, echo=TRUE, out.width="100%", fig.cap="Neighboring-K Fowlkes--Mallows stability for the full mouse-spleen analysis. K=4 is the independently selected primary resolution; K=11 is highlighted as the tutorial-matched sensitivity resolution.", fig.alt="Mouse-spleen neighboring-K Fowlkes-Mallows stability from K=1 through K=20; K=4 is selected and K=11 is highlighted"}
 knitr::include_graphics(manifest$autok_stability_plot)
 ```
 
@@ -359,7 +359,7 @@ primary_balbc_mrl <- readRDS(primary_paths[["differential_balbc_mrl"]])
 
 ## BALBc-1 and early MRL-4 domains
 
-```{r primary-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Primary K=4 spatial domains on BALBc-1 and early MRL-4"}
+```{r primary-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.cap="Primary K=4 spatial domains in the BALBc-1 and early MRL-4 slides.", fig.alt="Primary K=4 spatial domains on BALBc-1 and early MRL-4"}
 primary_spe <- map_to_spe(primary_map, primary_k)
 ggspavis::plotCoords(
   primary_spe,
@@ -385,7 +385,7 @@ knitr::kable(
 
 ## Cluster ~ full cell type dot plot (log2 observed/expected)
 
-```{r primary-dotplot, echo=TRUE, fig.width=18, fig.height=9, fig.alt="Positive cell-type enrichment by primary K=4 domain; darker and larger red points indicate stronger positive log2 fold change"}
+```{r primary-dotplot, echo=TRUE, fig.width=18, fig.height=9, fig.cap="Positive cell-type enrichment in the primary K=4 domains. Darker and larger red points indicate stronger positive log2 fold change.", fig.alt="Positive cell-type enrichment by primary K=4 domain; darker and larger red points indicate stronger positive log2 fold change"}
 graphics::par(mar = c(18, 6, 3, 1))
 CellCharterR::cellcharter_plot_enrichment(
   primary_enrichment,
@@ -404,7 +404,7 @@ knitr::kable(primary_enrichment_table,
 
 ## BALBc and MRL neighborhood enrichment
 
-```{r primary-nhood, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at primary K=4"}
+```{r primary-nhood, echo=TRUE, fig.width=12, fig.height=5.5, fig.cap="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at the primary K=4 resolution.", fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at primary K=4"}
 graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
 plot_heatmap(
   primary_nhood$BALBc$enrichment, "Healthy spleen — BALBc",
@@ -431,7 +431,7 @@ Both panels reuse one sample-level permutation result (`n_perms=100`). A star
 marks directional empirical `p <= 0.05`; reversing the display negates only the
 effect and reuses the same permutation counts and p-values.
 
-```{r primary-differential, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed BALBc minus MRL display"}
+```{r primary-differential, echo=TRUE, fig.width=12, fig.height=5.5, fig.cap="Primary K=4 differential directed neighborhood enrichment in both MRL-minus-BALBc and BALBc-minus-MRL display directions.", fig.alt="Differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed BALBc minus MRL display"}
 graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
 plot_heatmap(
   primary_mrl_balbc$effect, "MRL vs BALBc", annotate = TRUE,
@@ -463,7 +463,7 @@ k11_balbc_mrl <- readRDS(k11_paths[["differential_balbc_mrl"]])
 
 ## BALBc-1 and early MRL-4 domains
 
-```{r k11-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="K=11 sensitivity spatial domains on BALBc-1 and early MRL-4"}
+```{r k11-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.cap="Tutorial-matched K=11 sensitivity domains in the BALBc-1 and early MRL-4 slides.", fig.alt="K=11 sensitivity spatial domains on BALBc-1 and early MRL-4"}
 k11_spe <- map_to_spe(k11_map, 11L)
 ggspavis::plotCoords(
   k11_spe,
@@ -489,7 +489,7 @@ knitr::kable(
 
 ## Cluster ~ full cell type dot plot (log2 observed/expected)
 
-```{r k11-dotplot, echo=TRUE, fig.width=18, fig.height=10, fig.alt="Positive cell-type enrichment by K=11 sensitivity domain; darker and larger red points indicate stronger positive log2 fold change"}
+```{r k11-dotplot, echo=TRUE, fig.width=18, fig.height=10, fig.cap="Positive cell-type enrichment in the tutorial-matched K=11 sensitivity domains. Darker and larger red points indicate stronger positive log2 fold change.", fig.alt="Positive cell-type enrichment by K=11 sensitivity domain; darker and larger red points indicate stronger positive log2 fold change"}
 graphics::par(mar = c(18, 6, 3, 1))
 CellCharterR::cellcharter_plot_enrichment(
   k11_enrichment,
@@ -508,7 +508,7 @@ knitr::kable(k11_enrichment_table,
 
 ## BALBc and MRL neighborhood enrichment
 
-```{r k11-nhood, echo=TRUE, fig.width=14, fig.height=7, fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at K=11"}
+```{r k11-nhood, echo=TRUE, fig.width=14, fig.height=7, fig.cap="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at the K=11 sensitivity resolution.", fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at K=11"}
 graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
 plot_heatmap(
   k11_nhood$BALBc$enrichment, "Healthy spleen — BALBc (K=11)",
@@ -531,7 +531,7 @@ knitr::kable(k11_nhood_table,
 
 ## Differential neighborhood enrichment in both display directions
 
-```{r k11-differential, echo=TRUE, fig.width=15, fig.height=7.5, fig.alt="K=11 differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed display"}
+```{r k11-differential, echo=TRUE, fig.width=15, fig.height=7.5, fig.cap="K=11 sensitivity differential directed neighborhood enrichment in both MRL-minus-BALBc and BALBc-minus-MRL display directions.", fig.alt="K=11 differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed display"}
 graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
 plot_heatmap(
   k11_mrl_balbc$effect, "MRL vs BALBc (K=11)", annotate = TRUE,

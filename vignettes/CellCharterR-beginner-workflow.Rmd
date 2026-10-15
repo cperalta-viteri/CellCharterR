@@ -281,7 +281,7 @@ score. Peaks suggest comparatively stable resolutions; they are diagnostics,
 not biological proof. The selected K is the highest mean stability, with the
 first K used to break ties.
 
-```{r stability, fig.alt="AutoK stability from K 2 through K 10 on the tiny teaching data"}
+```{r stability, fig.cap="AutoK neighboring-K stability across the candidate range K=2 through K=10 for the tiny teaching data.", fig.alt="AutoK stability from K 2 through K 10 on the tiny teaching data"}
 autok <- S4Vectors::metadata(spe)$CellCharterR$autok$tiny_domain
 cellcharter_autok_best_k(autok)
 cellcharter_plot_autok_stability(autok, k_range = 2:10) +
@@ -296,7 +296,7 @@ releases. The small compatibility branch below supports both APIs. We subset
 the SPE itself, so its native coordinates, annotations, and sample identifiers
 remain aligned automatically.
 
-```{r spatial-map, fig.alt="Teaching domain labels plotted at spatial cell coordinates"}
+```{r spatial-map, fig.cap="Spatial distribution of the teaching domain labels in the BALBc-1 and early MRL-4 slides.", fig.alt="Teaching domain labels plotted at spatial cell coordinates"}
 display_spe <- spe[, spe$sample %in% c("BALBc-1", "MRL-4")]
 plot_function <- if ("plotCoords" %in% getNamespaceExports("ggspavis")) {
   getExportedValue("ggspavis", "plotCoords")
@@ -349,7 +349,7 @@ round(results$nhood_enrichment$value$enrichment, 2)
 round(results$diff_nhood_enrichment$value$effect, 2)
 ```
 
-```{r enrichment-plot, fig.alt="Positive cell-type enrichment by teaching domain; darker and larger red points indicate stronger positive log2 fold change"}
+```{r enrichment-plot, fig.cap="Positive cell-type enrichment in the teaching domains. Darker and larger red points indicate stronger positive log2 fold change.", fig.alt="Positive cell-type enrichment by teaching domain; darker and larger red points indicate stronger positive log2 fold change"}
 enrichment <- results$enrichment$value$enrichment
 cellcharter_plot_enrichment(
   spe,
@@ -382,7 +382,7 @@ An enrichment value of `-Inf` is not a numerical failure: it means the observed
 proportion is zero while the expected proportion is positive, so its log2 fold
 change is negative infinity. The table deliberately reports finite extremes.
 
-```{r neighborhood-heatmaps, fig.width=12, fig.height=5, fig.alt="Directed neighborhood enrichment heatmaps for healthy BALBc and lupus MRL teaching samples"}
+```{r neighborhood-heatmaps, fig.width=12, fig.height=5, fig.cap="Directed observed-minus-expected neighborhood enrichment for the healthy BALBc and lupus MRL teaching samples.", fig.alt="Directed neighborhood enrichment heatmaps for healthy BALBc and lupus MRL teaching samples"}
 condition_matrices <- results$diff_nhood_enrichment$value$enrichment
 condition_long <- do.call(rbind, lapply(names(condition_matrices), function(condition) {
   value <- as.data.frame(as.table(condition_matrices[[condition]]))
@@ -404,7 +404,7 @@ Here each condition panel shows CellCharter's directed neighborhood statistic,
 `observed - expected`; it is not a fold change. Rows are source domains and
 columns are target domains.
 
-```{r differential-heatmap, fig.alt="Differential directed neighborhood enrichment heatmap contrasting BALBc with MRL teaching samples"}
+```{r differential-heatmap, fig.cap="Differential directed neighborhood enrichment for the BALBc-minus-MRL contrast in the teaching data.", fig.alt="Differential directed neighborhood enrichment heatmap contrasting BALBc with MRL teaching samples"}
 effect <- results$diff_nhood_enrichment$value$effect
 effect_long <- as.data.frame(as.table(effect))
 names(effect_long) <- c("source", "target", "effect")

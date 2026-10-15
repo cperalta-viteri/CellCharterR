@@ -1494,7 +1494,67 @@ if (!identical(published_reference$role_id, "published_h5ad_reference") ||
 if ("autok" %in% requested_stages) {
   started <- Sys.time()
   runtime <- autok_runtime
-  fit_data_id <- autok_contract$contract_id
+  # AutoK already binds scientifically material fit arguments into its own
+  # resume contract. Keep the input identity tied only to the immutable
+  # aggregated representation so performance-only wrapper changes do not
+  # invalidate expensive fitted models.
+  fit_data_id <- digest::digest(list(
+    schema = "CellCharterR_autok_input_v1",
+    aggregation_data_id = aggregation_manifest$data_id,
+    aggregation_manifest_sha256 = cellcharter_file_sha256(aggregation_manifest_path),
+    cell_order_sha256 = cell_order_sha256,
+    dimensions = dim(x_cellcharter)
+  ), algo = "sha256", serialize = TRUE)
+  legacy_state_path <- file.path(autok_dir, "autok_state.rds")
+  if (file.exists(legacy_state_path)) {
+    legacy_state <- tryCatch(readRDS(legacy_state_path), error = function(e) NULL)
+    legacy_record_path <- .contract_path("autok")
+    legacy_record <- if (file.exists(legacy_record_path)) {
+      tryCatch(readRDS(legacy_record_path), error = function(e) NULL)
+    } else NULL
+    legacy_contract <- legacy_record$expected_contract
+    legacy_upstream_matches <-
+      is.list(legacy_contract) && .cc_contract_integral(legacy_contract) &&
+      identical(legacy_contract$stage, "autok") &&
+      identical(legacy_contract$cell_order_sha256, cell_order_sha256) &&
+      identical(legacy_contract$upstream$aggregation_data_id,
+                aggregation_manifest$data_id) &&
+      identical(legacy_contract$upstream$aggregation_manifest_sha256,
+                cellcharter_file_sha256(aggregation_manifest_path)) &&
+      identical(legacy_contract$upstream$aggregation_contract_id,
+                aggregation_contract$contract_id)
+    if (!is.null(legacy_state$input_data_id) &&
+        length(legacy_state$input_data_id) == 1L &&
+        !is.na(legacy_state$input_data_id) &&
+        isTRUE(legacy_upstream_matches) &&
+        identical(as.character(legacy_state$input_data_id),
+                  legacy_contract$contract_id)) {
+      # Earlier workflow releases used the complete stage-contract digest as
+      # input ID. Once its integral recorded contract proves that the same
+      # aggregation artifact and ordered observations produced it, transition
+      # the state to the stable representation identity. The old per-fit
+      # `data_id` remains in `compatible_data_ids`, allowing its immutable fit
+      # artifacts to survive this one-time identity migration and every later
+      # resume after the active workflow contract is updated.
+      historical_fit_data_id <- as.character(legacy_state$data_id)
+      legacy_state$legacy_input_data_ids <- unique(c(
+        legacy_state$legacy_input_data_ids,
+        as.character(legacy_state$input_data_id)
+      ))
+      legacy_state$compatible_data_ids <- unique(c(
+        legacy_state$compatible_data_ids,
+        historical_fit_data_id
+      ))
+      legacy_state$input_data_id <- fit_data_id
+      .atomic_save_rds(legacy_state, legacy_state_path)
+    } else if (!is.null(legacy_state$input_data_id) &&
+               !identical(as.character(legacy_state$input_data_id), fit_data_id)) {
+      stop(
+        "Legacy AutoK state cannot be bound to the current aggregation provenance; ",
+        "use a new CODEX_RESULTS_DIR rather than reusing unverified fits."
+      )
+    }
+  }
   autok <- cellcharter_autok_fit(
     x_cellcharter, n_clusters = autok_bounds, checkpoint_dir = autok_dir,
     max_runs = max_runs, convergence_tol = convergence_tol, seed = seed,
@@ -1510,7 +1570,8 @@ if ("autok" %in% requested_stages) {
   dir.create(selected_dir, recursive = TRUE, showWarnings = FALSE)
   best_row <- autok$best_index[autok$best_index$k == autok$best_k, , drop = FALSE]
   best_artifact <- readRDS(best_row$path[[1L]])
-  if (!identical(best_artifact$data_id, autok$data_id) ||
+  accepted_fit_data_ids <- unique(c(autok$data_id, autok$compatible_data_ids))
+  if (!best_artifact$data_id %in% accepted_fit_data_ids ||
       length(best_artifact$labels) != ncol(sce)) {
     stop("Selected AutoK fit does not match the immutable aggregation identity.")
   }
@@ -1525,6 +1586,7 @@ if ("autok" %in% requested_stages) {
     aggregation_contract_id = aggregation_contract$contract_id,
     autok_contract_id = autok_contract$contract_id,
     autok_fit_data_id = autok$data_id,
+    selected_artifact_data_id = best_artifact$data_id,
     seed = as.integer(best_artifact$seed),
     autok_base_seed = seed,
     role_id = "r_autok_primary",

@@ -57,7 +57,10 @@ batch size, and thread count) and package upgrades do not invalidate a
 compatible completed fit; the exact implementation digest is retained as
 provenance.}
 
-\item{resume}{Reuse matching completed fit checkpoints.}
+\item{resume}{Reuse matching fully committed runs. Historical stability is
+restored without recomputation; artifacts from an interrupted final run are
+moved to a recoverable \code{quarantine/} directory and that run restarts from
+its first K.}
 
 \item{cache_representation}{Either \code{"none"} for the bounded-memory
 reader or \code{"ram"} to materialise only the observation-by-feature
