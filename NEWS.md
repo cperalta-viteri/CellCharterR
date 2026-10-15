@@ -16,6 +16,10 @@
 - Added `cellcharter_plot_graph_diff()` for deterministic two-panel directed
   differential-neighborhood networks, together with a full mouse-spleen K=4
   illustrative vignette and rendered HTML.
+- Added block-aware authors-style AUCell zonation with disk-backed score
+  access, compact patient-level results, optional spot-level zone labels, and
+  plotting for group comparisons, metadata-stratified comparisons, individual
+  trajectories, group averages, and BH-adjusted significance annotations.
 - Incorporated the second-round methodological corrections and tests for graph,
   aggregation, AutoK, full-covariance GMM, enrichment, differential inference,
   provenance, and bounded-memory behavior.
