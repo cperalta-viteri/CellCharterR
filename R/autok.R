@@ -371,6 +371,13 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #' are checkpointed individually before stability is updated, so an interrupted
 #' analysis resumes without repeating completed fits.
 #'
+#' @section Experimental status:
+#' The R AutoK fitting path is experimental for multi-million-observation
+#' datasets because repeated R Torch GMM fits may be substantially slower than
+#' Python CellCharter. Its outputs and stability utilities remain available for
+#' validation and moderate-size analyses. External Python domain labels can be
+#' stored directly in `colData(sce)` for downstream R analysis.
+#'
 #' @param x Observation-by-feature matrix accepted by `fit_fun`.
 #' @param n_clusters Two integer bounds for selectable K. The fitted grid is
 #'   expanded by one at each boundary, as in a CellCharter Python tuple. An R

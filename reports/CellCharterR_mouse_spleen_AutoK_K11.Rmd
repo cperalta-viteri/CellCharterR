@@ -1,5 +1,5 @@
 ---
-title: "CellCharterR mouse-spleen analysis: AutoK primary and standalone K=11 sensitivity"
+title: "Experimental CellCharterR mouse-spleen analysis: AutoK primary and standalone K=11 sensitivity"
 author: "CellCharterR second-review revision"
 date: "`r format(Sys.time(), '%Y-%m-%d %H:%M UTC', tz = 'UTC')`"
 output:
@@ -174,6 +174,12 @@ plot_heatmap <- function(x, title, limits = NULL, annotate = FALSE,
   }
 }
 ```
+
+> **Experimental workflow.** This preserved report documents the complete R
+> Torch GMM/AutoK reproduction. That clustering path is experimental for very
+> large datasets because it can be substantially slower than Python
+> CellCharter. The main tutorial uses these precomputed domains for supported R
+> graph, enrichment, differential, and plotting workflows.
 
 # Scope and artifact roles
 

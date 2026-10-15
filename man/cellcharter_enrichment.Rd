@@ -17,7 +17,8 @@ cellcharter_enrichment(
 
 \item{group_col}{Cell-type or group field in \code{colData(sce)}.}
 
-\item{domain_col}{Domain field in \code{colData(sce)}.}
+\item{domain_col}{Cluster-label variable in \code{colData(sce)}, the name of a
+one-column reducedDim, or an unambiguous column name inside a reducedDim.}
 
 \item{result_name}{Name under \code{metadata(sce)$CellCharterR$results}.}
 

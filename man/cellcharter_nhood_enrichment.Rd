@@ -18,7 +18,8 @@ cellcharter_nhood_enrichment(
 
 \item{graph_name}{Graph name in \code{colPairs(sce)}.}
 
-\item{domain_col}{Domain field in \code{colData(sce)}.}
+\item{domain_col}{Cluster-label variable in \code{colData(sce)}, the name of a
+one-column reducedDim, or an unambiguous column name inside a reducedDim.}
 
 \item{result_name}{Name under \code{metadata(sce)$CellCharterR$results}.}
 

@@ -145,6 +145,11 @@ saveRDS(spe, "checkpoints/spe_after_aggregation.rds", compress = FALSE)
 
 ### 3. Run AutoK and attach the selected domains
 
+The R Torch GMM/AutoK path demonstrated on this 1,000-observation teaching
+object is experimental for multi-million-spot datasets. At that scale, domains
+may instead be fitted with Python CellCharter and stored directly in `colData`
+or a one-column `reducedDim`; all downstream R analyses remain available.
+
 ```{r staged-clustering, eval=FALSE}
 spe <- cellcharter_cluster(
   spe,

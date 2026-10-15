@@ -2,7 +2,7 @@
 % Please edit documentation in R/sce_api.R
 \name{cellcharter_cluster}
 \alias{cellcharter_cluster}
-\title{Run CellCharter AutoK and attach selected domains to an SCE}
+\title{Run experimental CellCharter AutoK and attach selected domains to an SCE}
 \usage{
 cellcharter_cluster(
   sce,
@@ -31,8 +31,18 @@ as accepted by \code{\link[=cellcharter_autok_fit]{cellcharter_autok_fit()}}.}
 The updated \code{SingleCellExperiment}.
 }
 \description{
-Run CellCharter AutoK and attach selected domains to an SCE
+Run experimental CellCharter AutoK and attach selected domains to an SCE
 }
+\section{Experimental status}{
+
+The R Torch GMM and AutoK fitting path is experimental. It is validated on
+small and tutorial-scale inputs, but can be substantially slower than the
+Python CellCharter implementation on multi-million-observation datasets.
+For such datasets, fit domains with the pinned Python implementation and
+store the resulting labels in \code{colData(sce)} (or a one-column reducedDim)
+before using CellCharterR's downstream analyses.
+}
+
 \examples{
 example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 demo_fit <- function(x, n_clusters, seed, ...) {

@@ -58,15 +58,14 @@ compatible completed fit; the exact implementation digest is retained as
 provenance.}
 
 \item{resume}{Reuse matching fully committed runs. Historical stability is
-restored without recomputation; artifacts from an interrupted final run are
-moved to a recoverable \code{quarantine/} directory and that run restarts from
-its first K.}
+restored without recomputation; artifacts from an interrupted final run
+are moved to a recoverable \verb{quarantine/} directory and that run restarts
+from its first K.}
 
-\item{cache_representation}{Either \code{"none"} for the bounded-memory
-reader or \code{"ram"} to materialise only the observation-by-feature
-representation once as a CPU float32 Torch tensor and reuse it throughout
-AutoK. The latter can substantially accelerate repeated GPU fits and never
-materialises assays.}
+\item{cache_representation}{Either \code{"none"} for the bounded-memory reader or
+\code{"ram"} to materialise only the observation-by-feature representation once
+as a CPU float32 Torch tensor and reuse it throughout AutoK. The latter can
+substantially accelerate repeated GPU fits and never materialises assays.}
 }
 \value{
 A \code{cellcharter_autok} object containing stability, convergence
@@ -80,6 +79,15 @@ two edges incident to each interior K are then mirrored and combined. Fits
 are checkpointed individually before stability is updated, so an interrupted
 analysis resumes without repeating completed fits.
 }
+\section{Experimental status}{
+
+The R AutoK fitting path is experimental for multi-million-observation
+datasets because repeated R Torch GMM fits may be substantially slower than
+Python CellCharter. Its outputs and stability utilities remain available for
+validation and moderate-size analyses. External Python domain labels can be
+stored directly in \code{colData(sce)} for downstream R analysis.
+}
+
 \examples{
 # Small deterministic hooks keep this example fast and independent of a GPU.
 toy <- rbind(c(-2, -2), c(-2, -1), c(-1, -2),

@@ -43,6 +43,14 @@ tools. CellCharterR therefore uses an SPE-first interface (while retaining SCE
 compatibility), sample-local graph processing, disk-backed checkpoints,
 bounded-memory prediction, and batched R Torch computation.
 
+> **Experimental clustering status:** the R Torch GMM and AutoK implementation
+> is retained for teaching, validation, and moderate-size analyses, but is
+> experimental for multi-million-spot datasets because it can be substantially
+> slower than Python CellCharter. Graph construction, neighborhood aggregation,
+> enrichment, differential neighborhood analysis, zonation, and plotting remain
+> supported. Large analyses may compute domains in Python and store the labels
+> directly in the SPE's `colData` or in a one-column `reducedDim`.
+
 Reference: [Amezquita et al., *Nature Methods* (2020)](https://doi.org/10.1038/s41592-019-0654-x).
 
 ### Full mouse-spleen K=11 sensitivity
@@ -62,18 +70,18 @@ CellCharter method. Copy-ready text and BibTeX are provided in
 
 ## Vignettes and reports
 
-- [Beginner SPE-first workflow](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-beginner-workflow.html)
-  runs K=2 through K=10 on the packaged 1,000-segmented-cell CODEX teaching
-  object, on CPU. These observations are cells, not transcriptomic capture spots.
-- [H5AD download and SPE conversion](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-h5ad-to-sce.html)
-  shows checksum-verified download and conversion code without executing the
-  full download during package builds.
-- [Full CODEX mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html)
-  is the preserved, precomputed full-data report. It is not rerun during build,
-  check, examples, or CI.
-- [Differential neighborhood-enrichment networks](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-differential-neighborhood-networks.html)
-  uses the computed full mouse-spleen K=4 result to demonstrate directed
-  two-condition network plots without rerunning the full analysis.
+1. [Main tutorial: full mouse-spleen downstream analysis](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-differential-neighborhood-networks.html)
+   shows H5AD-to-SPE import, object organization, dominant cell-type annotation,
+   cell-type enrichment, healthy and lupus spatial-neighborhood heatmaps,
+   differential analysis, and directed graph visualization from preserved K=4
+   results.
+2. [Loading large H5AD datasets](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-h5ad-to-sce.html)
+   covers independent disk-backed SPE bundles and the checksum-verified CODEX
+   conversion without downloading large inputs during package builds.
+3. [Experimental full mouse-spleen workflow](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html)
+   preserves the complete graph, aggregation, R Torch GMM/AutoK, K=4 primary,
+   and K=11 sensitivity analysis. The R clustering path is experimental for
+   very large datasets and this report is never recomputed during builds or CI.
 
 ## Installation
 
@@ -182,7 +190,7 @@ opaque third-party metadata references and externally backed spatial images
 are rejected during saving with an actionable location rather than silently
 producing a non-portable analysis.
 
-## Why the GMM uses Torch directly
+## Experimental R Torch clustering
 
 The GMM is an expectation-maximisation (EM) algorithm. Its E-step evaluates
 Gaussian probabilities and its M-step has closed-form weighted means and
@@ -223,6 +231,22 @@ spe <- cellcharter_cluster_fixed(
 The accelerated initializer uses the complete dataset; it is not mini-batch or
 sampled K-means. Use a new checkpoint directory when switching numerical
 engines. The original `initialization_method = "legacy"` path remains available.
+
+### Continue in R after clustering with Python
+
+Export Python CellCharter labels in the same observation order as the SPE and
+store them directly in `colData`:
+
+```r
+python_domains <- read.csv("python_cellcharter_domains.csv")
+stopifnot(identical(as.character(python_domains$spot_id), colnames(spe)))
+spe$cellcharter_domain <- factor(python_domains$domain)
+```
+
+The `domain_col` can then be passed unchanged to CellCharterR's enrichment,
+neighborhood-enrichment, differential, zonation, and plotting APIs. Those
+functions also accept a one-column reducedDim named by `domain_col`, or a named
+column inside any unambiguous reducedDim.
 
 ## Minimal example
 

@@ -44,6 +44,32 @@
 }
 .tiny_nll <- function(model) as.numeric(model$k)
 
+test_that("colData domain labels need no CellCharterR clustering stage", {
+  sce <- .tiny_sce_fixture()
+  sce$python_domain <- factor(rep(c("domain_b", "domain_a"), 8L))
+  enriched <- cellcharter_enrichment(
+    sce, group_col = "cell_type", domain_col = "python_domain"
+  )
+  expect_true("enrichment" %in% names(S4Vectors::metadata(enriched)$CellCharterR$results))
+})
+
+test_that("domain labels can be read from reducedDims", {
+  sce <- .tiny_sce_fixture()
+  labels <- matrix(rep(0:1, 8L), ncol = 1L,
+                   dimnames = list(colnames(sce), "python_domain"))
+  SingleCellExperiment::reducedDim(sce, "python_labels") <- labels
+
+  by_column <- cellcharter_enrichment(
+    sce, group_col = "cell_type", domain_col = "python_domain"
+  )
+  by_dimension <- cellcharter_enrichment(
+    sce, group_col = "cell_type", domain_col = "python_labels",
+    result_name = "from_dimension"
+  )
+  expect_true("enrichment" %in% names(S4Vectors::metadata(by_column)$CellCharterR$results))
+  expect_true("from_dimension" %in% names(S4Vectors::metadata(by_dimension)$CellCharterR$results))
+})
+
 test_that("public object API completes the tiny workflow without sample leakage", {
   skip_if_not_installed("geometry")
   checkpoint <- tempfile("sce-autok-")

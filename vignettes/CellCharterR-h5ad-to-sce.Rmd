@@ -1,11 +1,11 @@
 ---
-title: "Downloading H5AD data and creating a SpatialExperiment"
+title: "Loading large H5AD datasets as disk-backed SpatialExperiments"
 author: "Christian Peralta Viteri"
 output:
   BiocStyle::html_document:
     toc: true
 vignette: >
-  %\VignetteIndexEntry{Downloading H5AD data and creating a SpatialExperiment}
+  %\VignetteIndexEntry{Loading large H5AD datasets as disk-backed SpatialExperiments}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -23,6 +23,31 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ```
 
 ## Scope
+
+This is the second CellCharterR tutorial. It covers the disk-backed import and
+portable storage patterns needed for large H5AD spatial datasets. For a general
+large H5AD, `cellcharter_import_h5ad()` creates an independent, resumable bundle
+without requiring Python, `anndataR`, `zellkonverter`, or R 4.5:
+
+```{r general-large-import, eval=FALSE}
+library(CellCharterR)
+
+spe <- cellcharter_import_h5ad(
+  h5ad_file = "large_spatial_dataset.h5ad",
+  output_dir = "large_spatial_dataset_spe"
+)
+
+# The entire bundle is portable; move the directory as one unit.
+spe <- cellcharter_load_spe_bundle("large_spatial_dataset_spe")
+spe
+SpatialExperiment::spatialCoordsNames(spe)
+SingleCellExperiment::reducedDimNames(spe)
+```
+
+Large arrays stay on disk, while the returned SPE is independent of the source
+H5AD because the bundle owns its copied HDF5 payload. The remaining sections
+document the stricter two-file CODEX conversion used by the mouse-spleen
+reproduction.
 
 This vignette documents the exact conversion used for the CellCharterR CODEX
 reproduction. Its download and full conversion chunks deliberately have
@@ -179,67 +204,6 @@ The repository's
 checkpointed aggregate representation, K=4 primary labels, K=11 sensitivity
 labels, checksums, and a deterministic 1,000-segmented-cell subset. It does not recompute
 the full analysis.
-
-## Full-dataset workflow template
-
-The tiny SPE vignette is the executable validation. The following code shows
-how the same native `SpatialExperiment` interface scales to the complete CODEX
-dataset, but is deliberately **not run** while building this vignette. It keeps
-the aggregate representation on disk, declares K=2 through K=20 before fitting,
-uses the required ten AutoK repeats, and checkpoints every fitted model.
-
-```{r full-workflow-template, eval=FALSE}
-results_dir <- file.path("results", "CellCharterR_mouse_spleen")
-dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
-
-full_spe <- read_codex_spe(
-  raw_h5ad = file.path(destination, "codex_mouse_spleen.h5ad"),
-  clustered_h5ad = file.path(destination, "codex_mouse_spleen_clustered.h5ad")
-)
-
-full_spe <- cellcharter_graph(
-  full_spe,
-  spatial = "spatial",       # resolves to native spatialCoords(full_spe)
-  sample_col = "sample"
-)
-full_spe <- cellcharter_aggregate(
-  full_spe,
-  representation = "X_trVAE",
-  n_layers = 3L,
-  filepath = file.path(results_dir, "X_cellcharter.h5"),
-  block_rows = 8192L
-)
-full_spe <- cellcharter_cluster(
-  full_spe,
-  candidate_k = c(2L, 20L),
-  checkpoint_dir = file.path(results_dir, "AutoK"),
-  max_runs = 10L,
-  convergence_tol = 0.01,
-  seed = 1L,
-  fit_args = list(device = "auto"),
-  predict_args = list(device = "auto")
-)
-full_spe <- cellcharter_enrichment(
-  full_spe, group_col = "cell_type_reduced"
-)
-full_spe <- cellcharter_nhood_enrichment(full_spe)
-full_spe <- cellcharter_diff_nhood_enrichment(
-  full_spe,
-  condition_col = "condition",
-  sample_col = "sample",
-  condition_groups = c("BALBc", "MRL"),
-  n_perms = 100L,
-  seed = 1L
-)
-
-saveRDS(full_spe, file.path(results_dir, "CellCharterR_mouse_spleen_spe.rds"))
-```
-
-For the canonical reproduction, prefer the repository's checkpoint-aware
-`scripts/run_codex_mouse_spleen.R`, which additionally records timings,
-versions, checksums, memory measurements, K=11 sensitivity results, and all
-report inputs. The template above is instructional and is not evidence that a
-fresh full-data run occurred during package validation.
 
 ## Provenance and licenses
 

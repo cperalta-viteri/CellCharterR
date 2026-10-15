@@ -515,6 +515,13 @@ torch_gmm_runtime_info <- function(device = "auto", batch_size = 8192L,
 #' full-loader behavior. PyCave's opposite routing for an explicitly supplied
 #' batch size that creates multiple loader batches is not the parity target.
 #'
+#' @section Experimental status:
+#' R Torch GMM fitting is experimental. It is suitable for tests, teaching
+#' data, and controlled validation, but its runtime on multi-million-row
+#' datasets may be substantially longer than Python CellCharter. The graph,
+#' aggregation, downstream statistics, and plotting APIs are not affected by
+#' this status.
+#'
 #' @param x observation-by-feature matrix or DelayedMatrix. Rows are read in
 #'   chunks and never materialised jointly.
 #' @param n_clusters number of mixture components.

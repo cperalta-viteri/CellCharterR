@@ -71,6 +71,15 @@ only bounds storage and device transfers; streamed passes reproduce that
 full-loader behavior. PyCave's opposite routing for an explicitly supplied
 batch size that creates multiple loader batches is not the parity target.
 }
+\section{Experimental status}{
+
+R Torch GMM fitting is experimental. It is suitable for tests, teaching
+data, and controlled validation, but its runtime on multi-million-row
+datasets may be substantially longer than Python CellCharter. The graph,
+aggregation, downstream statistics, and plotting APIs are not affected by
+this status.
+}
+
 \examples{
 \dontshow{if (requireNamespace("torch", quietly = TRUE)) withAutoprint(\{ # examplesIf}
 # A tiny, deterministic, CPU-only fit.

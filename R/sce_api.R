@@ -18,6 +18,49 @@
   value
 }
 
+.cc_sce_domain <- function(sce, name) {
+  .cc_validate_sce_identity(sce)
+  if (!is.character(name) || length(name) != 1L || is.na(name) || !nzchar(name)) {
+    stop("`domain_col` must name one cluster-label variable.", call. = FALSE)
+  }
+
+  column_data <- SummarizedExperiment::colData(sce)
+  if (name %in% colnames(column_data)) {
+    value <- column_data[[name]]
+  } else {
+    reduced <- SingleCellExperiment::reducedDims(sce, withDimnames = FALSE)
+    reduced_names <- names(reduced)
+    if (name %in% reduced_names) {
+      candidate <- reduced[[name]]
+      if (length(dim(candidate)) != 2L || ncol(candidate) != 1L) {
+        stop("reducedDim `", name, "` must have exactly one cluster-label column.",
+             call. = FALSE)
+      }
+      value <- candidate[, 1L]
+    } else {
+      hits <- which(vapply(reduced, function(x) {
+        !is.null(colnames(x)) && name %in% colnames(x)
+      }, logical(1L)))
+      if (!length(hits)) {
+        stop("Cluster labels `", name,
+             "` were not found in `colData(sce)` or `reducedDims(sce)`.",
+             call. = FALSE)
+      }
+      if (length(hits) > 1L) {
+        stop("Cluster-label column `", name,
+             "` occurs in multiple reducedDims; use an unambiguous name.", call. = FALSE)
+      }
+      candidate <- reduced[[hits]]
+      value <- candidate[, match(name, colnames(candidate))]
+    }
+  }
+  if (length(value) != ncol(sce) || anyNA(value)) {
+    stop("Cluster labels `", name,
+         "` must contain one non-missing value per observation.", call. = FALSE)
+  }
+  value
+}
+
 .cc_sce_reduced_dim <- function(sce, name, context = "representation") {
   .cc_validate_sce_identity(sce, reduced_dims = name)
   value <- SingleCellExperiment::reducedDim(sce, name)
@@ -250,7 +293,15 @@ cellcharter_aggregate <- function(
   )
 }
 
-#' Run CellCharter AutoK and attach selected domains to an SCE
+#' Run experimental CellCharter AutoK and attach selected domains to an SCE
+#'
+#' @section Experimental status:
+#' The R Torch GMM and AutoK fitting path is experimental. It is validated on
+#' small and tutorial-scale inputs, but can be substantially slower than the
+#' Python CellCharter implementation on multi-million-observation datasets.
+#' For such datasets, fit domains with the pinned Python implementation and
+#' store the resulting labels in `colData(sce)` (or a one-column reducedDim)
+#' before using CellCharterR's downstream analyses.
 #'
 #' @param sce An aggregated `SingleCellExperiment`.
 #' @param representation Input name in `reducedDims(sce)`.
@@ -323,7 +374,8 @@ cellcharter_cluster <- function(
 #' Attach CellCharter cell-type enrichment to an SCE
 #' @param sce A clustered `SingleCellExperiment`.
 #' @param group_col Cell-type or group field in `colData(sce)`.
-#' @param domain_col Domain field in `colData(sce)`.
+#' @param domain_col Cluster-label variable in `colData(sce)`, the name of a
+#'   one-column reducedDim, or an unambiguous column name inside a reducedDim.
 #' @param result_name Name under `metadata(sce)$CellCharterR$results`.
 #' @param log2_fold_change Return log2 fold change.
 #' @return The updated `SingleCellExperiment`.
@@ -337,9 +389,8 @@ cellcharter_cluster <- function(
 cellcharter_enrichment <- function(
     sce, group_col, domain_col = "cellcharter_domain",
     result_name = "enrichment", log2_fold_change = TRUE) {
-  .cc_sce_require_stage(sce, paste0("clustering:", domain_col))
   group <- .cc_sce_coldata(sce, group_col, "group column")
-  domain <- .cc_sce_coldata(sce, domain_col, "domain column")
+  domain <- .cc_sce_domain(sce, domain_col)
   result <- .cc_enrichment(group, domain, log2_fold_change)
   .cc_sce_store_result(sce, result_name, result,
                        list(group_col = group_col, domain_col = domain_col))
@@ -361,9 +412,8 @@ cellcharter_nhood_enrichment <- function(
     sce, graph_name = "cellcharter_graph", domain_col = "cellcharter_domain",
     result_name = "nhood_enrichment", log2_fold_change = FALSE,
     only_inter = TRUE) {
-  .cc_sce_require_stage(sce, paste0("clustering:", domain_col))
   graph <- .cc_sce_graph_matrix(sce, graph_name)
-  domain <- .cc_sce_coldata(sce, domain_col, "domain column")
+  domain <- .cc_sce_domain(sce, domain_col)
   result <- .cc_nhood_enrichment(graph, domain, log2_fold_change, only_inter)
   .cc_sce_store_result(
     sce, result_name, result,
@@ -395,9 +445,8 @@ cellcharter_diff_nhood_enrichment <- function(
     result_name = "diff_nhood_enrichment", condition_groups = NULL,
     n_perms = 100L, seed = 0L, log2_fold_change = FALSE, only_inter = TRUE,
     permutation_mode = c("cellcharter_v0.2.0", "shuffle")) {
-  .cc_sce_require_stage(sce, paste0("clustering:", domain_col))
   graph <- .cc_sce_graph_matrix(sce, graph_name)
-  domain <- .cc_sce_coldata(sce, domain_col, "domain column")
+  domain <- .cc_sce_domain(sce, domain_col)
   condition <- .cc_sce_coldata(sce, condition_col, "condition column")
   sample <- .cc_sce_coldata(sce, sample_col, "sample column")
   result <- .cc_diff_nhood_enrichment(

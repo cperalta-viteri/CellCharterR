@@ -1,5 +1,5 @@
 ---
-title: "Visualizing differential neighborhood-enrichment networks"
+title: "Mouse-spleen downstream analysis with CellCharterR"
 author: "CellCharterR contributors"
 date: "`r format(Sys.Date(), '%Y-%m-%d')`"
 output:
@@ -7,7 +7,7 @@ output:
     toc: true
     toc_float: true
 vignette: >
-  %\VignetteIndexEntry{Visualizing differential neighborhood-enrichment networks}
+  %\VignetteIndexEntry{Mouse-spleen downstream analysis with CellCharterR}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -20,16 +20,36 @@ knitr::opts_chunk$set(
   fig.height = 6.5,
   dpi = 120
 )
+project_root <- if (file.exists("DESCRIPTION")) {
+  normalizePath(".")
+} else if (file.exists(file.path("..", "DESCRIPTION"))) {
+  normalizePath("..")
+} else {
+  NULL
+}
+extdata_file <- function(filename) {
+  installed <- system.file("extdata", filename, package = "CellCharterR")
+  if (nzchar(installed)) return(installed)
+  if (is.null(project_root)) stop("Cannot locate CellCharterR extdata.")
+  file.path(project_root, "inst", "extdata", filename)
+}
 ```
 
 # Purpose
 
-Differential neighborhood enrichment asks whether a directed domain-to-domain
-neighborhood association is stronger in one biological condition than another.
-This vignette uses the completed full mouse-spleen analysis with the
-independently selected **K = 4** solution. It demonstrates visualization only:
-the graph, clustering, neighborhood statistics, and permutations are not
-recomputed while building this vignette.
+This is the primary CellCharterR tutorial. It starts from the official CODEX
+mouse-spleen datasets, shows their `SpatialExperiment` representation, prepares
+a biologically useful dominant cell-type annotation, and demonstrates the
+supported downstream workflow using the independently selected **K = 4**
+domains. The expensive full-data results are loaded from preserved package
+artifacts, so installation and vignette rendering never rerun clustering or
+the 100 sample-level permutations.
+
+The R Torch GMM/AutoK implementation is experimental for very large datasets.
+This tutorial therefore assumes that domain labels have already been computed
+and stored in `colData(spe)` or a `reducedDim`. Graph construction, enrichment,
+neighborhood enrichment, differential testing, and plotting remain native R
+workflows.
 
 The stored contrast is BALBc minus MRL. Rows of each matrix represent the
 source or central domain, columns represent the surrounding or neighboring
@@ -37,22 +57,114 @@ domain, and arrows therefore point **source -> neighbor**. Positive effects are
 shown in the BALBc panel; negative effects are displayed by absolute magnitude
 in the MRL panel. Both panels reuse the same permutation p-values.
 
-# Load the completed result
+# Import the mouse-spleen data as a SpatialExperiment
+
+The official example consists of a raw CODEX H5AD and a clustered H5AD. The
+download and conversion are shown but not executed during package builds. The
+second vignette gives the full checksum-verified download workflow.
+
+```{r import-full-spe, eval=FALSE}
+library(CellCharterR)
+
+spe <- read_codex_spe(
+  raw_h5ad = "data-raw/codex-mouse-spleen/codex_mouse_spleen.h5ad",
+  clustered_h5ad = "data-raw/codex-mouse-spleen/codex_mouse_spleen_clustered.h5ad",
+  representation_dataset = "obsm/X_trVAE",
+  spatial_dataset = "obsm/spatial"
+)
+```
+
+The converted full object contains 707,474 segmented cells. Protein expression
+and the supplied trVAE representation can remain disk-backed, whereas spatial
+coordinates use the native `spatialCoords()` slot.
+
+```{r inspect-full-spe, eval=FALSE}
+spe
+dim(spe)
+SummarizedExperiment::assayNames(spe)
+colnames(SummarizedExperiment::colData(spe))
+SingleCellExperiment::reducedDimNames(spe)
+SpatialExperiment::spatialCoordsNames(spe)
+SingleCellExperiment::colPairNames(spe)
+```
+
+After the graph and precomputed domain labels are added, the recommended object
+organization is:
+
+```text
+class: SpatialExperiment
+dimensions: 29 proteins × 707,474 segmented cells
+assays: protein (disk-backed)
+spatialCoords: spatial (x, y)
+reducedDims: X_trVAE, X_cellcharter
+colData: sample, condition, cell_type, dominant_cell_type,
+         cellcharter_domain_k4
+colPairs: cellcharter_graph
+metadata: CellCharterR results and provenance
+```
+
+The domain labels do not require a special registration function. Downstream
+functions read `domain_col` directly from `colData`, a one-column `reducedDim`,
+or an unambiguous named column inside a `reducedDim`.
+
+# Assign a dominant cell type
+
+The CODEX H5AD already contains a detailed per-cell annotation. For readable
+domain enrichment, closely related dendritic, stromal, and residual labels are
+collapsed into a dominant cell-type variable. This is an annotation step, not
+a CellCharter clustering step.
+
+```{r dominant-cell-type, eval=FALSE}
+dominant_cell_type <- as.character(spe$cell_type)
+
+collapsed <- c(
+  "CD4(+)CD8(-)cDC" = "DCs",
+  "CD4(-)CD8(+)cDC" = "DCs",
+  "CD4(-)CD8(-) cDC" = "DCs",
+  "CD106(+)CD16/32(+)CD31(+) stroma" = "stroma",
+  "CD106(+)CD16/32(+)CD31(-)Ly6C(-) stroma" = "stroma",
+  "CD106(-)CD16/32(-)Ly6C(+)CD31(+) stroma" = "stroma",
+  "ERTR7(+) stroma" = "stroma",
+  "CD3(+) other markers (-)" = "other",
+  "CD106(+)CD16/32(-)Ly6C(+)CD31(+)" = "other",
+  "CD106(-)CD16/32(+)Ly6C(+)CD31(-)" = "other",
+  "noid" = "other",
+  "CD4(+)MHCII(+)" = "other",
+  "capsule" = "other"
+)
+
+replacement <- unname(collapsed[dominant_cell_type])
+dominant_cell_type[!is.na(replacement)] <- replacement[!is.na(replacement)]
+spe$dominant_cell_type <- factor(dominant_cell_type)
+table(spe$dominant_cell_type)
+```
+
+# Build or reuse the spatial graph
+
+If the SPE does not already contain the graph, build a sample-local Delaunay
+graph from native spatial coordinates. Long links are trimmed automatically;
+physical samples are never connected to one another.
+
+```{r build-graph, eval=FALSE}
+spe <- cellcharter_graph(
+  spe,
+  spatial = "spatial",
+  sample_col = "sample",
+  graph_name = "cellcharter_graph"
+)
+
+SingleCellExperiment::colPairNames(spe)
+SingleCellExperiment::colPair(spe, "cellcharter_graph")
+```
+
+# Load the preserved downstream results
 
 ```{r load-result}
 library(CellCharterR)
 
-k4_result <- readRDS(system.file(
-  "extdata",
-  "mouse_spleen_k4_diff_nhood.rds",
-  package = "CellCharterR"
-))
+k4_result <- readRDS(extdata_file("mouse_spleen_k4_diff_nhood.rds"))
 
-k4_enrichment <- readRDS(system.file(
-  "extdata",
-  "mouse_spleen_k4_enrichment.rds",
-  package = "CellCharterR"
-))
+k4_enrichment <- readRDS(extdata_file("mouse_spleen_k4_enrichment.rds"))
 
 k4_result$params[c(
   "contrast_definition", "library_unit", "library_counts",
@@ -67,7 +179,23 @@ CellCharter 0.2.0 compatibility mode. Its SHA-256 checksum is
 The matching cell-type enrichment artifact has SHA-256 checksum
 `be78548f33e16fd2f668c79cd7aa539a97df95f4a9a7ccdd0ab1b00665c0d261`.
 
-# Meet the ecosystems
+# Compute cell-type enrichment
+
+With dominant cell types and precomputed K=4 domains in the SPE, the complete
+computation is one call. This code is shown but not rerun here; the following
+figure loads its preserved result.
+
+```{r compute-enrichment, eval=FALSE}
+spe <- cellcharter_enrichment(
+  spe,
+  group_col = "dominant_cell_type",
+  domain_col = "cellcharter_domain_k4",
+  result_name = "cell_type_enrichment",
+  log2_fold_change = TRUE
+)
+```
+
+## Meet the spatial ecosystems
 
 Before interpreting connections between domains, first inspect which cell types
 characterize each domain. The dot plot shows positive observed-to-expected
@@ -85,6 +213,70 @@ cellcharter_plot_enrichment(
 These enrichment profiles provide the biological context for the numbered
 nodes below: each network node is one of these four spatial ecosystems, not an
 individual cell type.
+
+# Spatial-neighborhood enrichment in healthy and lupus spleen
+
+The differential result retains the complete observed, expected, and
+observed-minus-expected matrices for BALBc and MRL. The heatmaps below show the
+condition-specific directed neighborhood enrichment before taking their
+contrast. Rows are central ecosystems and columns are their neighbors.
+
+```{r condition-neighborhood-heatmaps, fig.width=12, fig.height=5.8, fig.cap="Directed K=4 spatial-neighborhood enrichment in healthy BALBc and lupus MRL mouse spleen.", fig.alt="Side-by-side heatmaps of directed spatial neighborhood enrichment in BALBc and MRL mouse spleen"}
+neighborhood_long <- function(x, condition) {
+  value <- as.data.frame(as.table(x), stringsAsFactors = FALSE)
+  names(value) <- c("source", "target", "enrichment")
+  value$condition <- condition
+  value$label <- ifelse(is.finite(value$enrichment), sprintf("%.2f", value$enrichment), "")
+  value
+}
+
+condition_neighborhood <- rbind(
+  neighborhood_long(k4_result$enrichment$BALBc, "Healthy — BALBc"),
+  neighborhood_long(k4_result$enrichment$MRL, "Lupus — MRL")
+)
+neighborhood_limit <- max(abs(condition_neighborhood$enrichment), na.rm = TRUE)
+
+ggplot2::ggplot(
+  condition_neighborhood,
+  ggplot2::aes(x = target, y = source, fill = enrichment)
+) +
+  ggplot2::geom_tile(colour = "white", linewidth = 0.8) +
+  ggplot2::geom_text(ggplot2::aes(label = label), size = 5) +
+  ggplot2::facet_wrap(~condition, nrow = 1) +
+  ggplot2::scale_fill_gradient2(
+    low = "#2166AC", mid = "white", high = "#8B0000",
+    midpoint = 0, limits = c(-neighborhood_limit, neighborhood_limit),
+    name = "Observed −\nexpected"
+  ) +
+  ggplot2::coord_fixed() +
+  ggplot2::labs(
+    x = "Neighboring ecosystem (target)",
+    y = "Central ecosystem (source)"
+  ) +
+  ggplot2::theme_bw(base_size = 16) +
+  ggplot2::theme(
+    panel.grid = ggplot2::element_blank(),
+    strip.text = ggplot2::element_text(face = "bold")
+  )
+```
+
+The corresponding full computation uses the graph, domain labels, biological
+condition, and sample/library identifiers. Sample is the permutation unit.
+
+```{r compute-differential, eval=FALSE}
+spe <- cellcharter_diff_nhood_enrichment(
+  spe,
+  graph_name = "cellcharter_graph",
+  domain_col = "cellcharter_domain_k4",
+  condition_col = "condition",
+  sample_col = "sample",
+  condition_groups = c("BALBc", "MRL"),
+  n_perms = 100L,
+  seed = 0L,
+  permutation_mode = "cellcharter_v0.2.0",
+  result_name = "BALBc_vs_MRL"
+)
+```
 
 # Inspect both differential contrasts
 
@@ -142,7 +334,7 @@ These heatmaps retain every directed off-diagonal comparison, including weak
 or unsupported effects. The network views below summarize the same matrices;
 they do not perform a second statistical test.
 
-# Plot both favored-condition networks
+# Plot the differential graph
 
 Black arrows are the default. Solid arrows pass the displayed statistical
 threshold; dashed arrows are retained effects that are not statistically
@@ -205,14 +397,15 @@ known limitations of the K = 4 domain resolution. The figure is therefore a
 diagnostic summary of the computed differential neighborhood result, not proof
 of a causal interaction.
 
-# Reproduce the expensive analysis
+# Reproduce the downstream analysis
 
-The following code documents where the plotted result originates, but it is not
-run when the vignette is built.
+The following code documents where the plotted differential result originates,
+but it is not run when the vignette is built. It starts from the full SPE with
+precomputed domains; it does not invoke R Torch GMM or AutoK.
 
 ```{r reproduce-result, eval=FALSE}
-full_spe <- cellcharter_diff_nhood_enrichment(
-  full_spe,
+spe <- cellcharter_diff_nhood_enrichment(
+  spe,
   graph_name = "cellcharter_graph",
   domain_col = "cellcharter_domain_k4",
   condition_col = "condition",
@@ -220,10 +413,11 @@ full_spe <- cellcharter_diff_nhood_enrichment(
   condition_groups = c("BALBc", "MRL"),
   n_perms = 100L,
   seed = 0L,
-  permutation_mode = "cellcharter_v0.2.0"
+  permutation_mode = "cellcharter_v0.2.0",
+  result_name = "BALBc_vs_MRL"
 )
 
-cellcharter_plot_graph_diff(full_spe)
+cellcharter_plot_graph_diff(spe, result_name = "BALBc_vs_MRL")
 ```
 
 # Session information

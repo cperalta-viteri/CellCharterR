@@ -30,6 +30,11 @@
 #' at the requested `n_clusters`; it does not fit neighbouring K values for
 #' AutoK stability. A completed checkpoint can be resumed after interruption.
 #'
+#' @section Experimental status:
+#' Fixed-K fitting uses the experimental R Torch GMM path by default. For
+#' multi-million-observation datasets, consider fitting with Python CellCharter
+#' and storing its labels directly in `colData(sce)`.
+#'
 #' @param sce An aggregated `SingleCellExperiment` or `SpatialExperiment`.
 #' @param representation Aggregated representation in `reducedDims(sce)`.
 #' @param n_clusters Exact number of mixture components to fit.

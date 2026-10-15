@@ -47,6 +47,13 @@ Unlike \code{\link[=cellcharter_cluster]{cellcharter_cluster()}}, this function 
 at the requested \code{n_clusters}; it does not fit neighbouring K values for
 AutoK stability. A completed checkpoint can be resumed after interruption.
 }
+\section{Experimental status}{
+
+Fixed-K fitting uses the experimental R Torch GMM path by default. For
+multi-million-observation datasets, consider fitting with Python CellCharter
+and storing its labels directly in \code{colData(sce)}.
+}
+
 \examples{
 spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 demo_fit <- function(x, n_clusters, seed, ...) list(k = n_clusters, seed = seed)

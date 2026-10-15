@@ -1,5 +1,13 @@
 # CellCharterR 0.99.0
 
+- Reorganized the public documentation around three workflows: a primary
+  precomputed full mouse-spleen downstream tutorial, a large-H5AD disk-backed
+  import tutorial, and the preserved experimental full R AutoK reproduction.
+- Marked the R Torch GMM/AutoK fitting path experimental for multi-million-spot
+  datasets while retaining the supported graph, aggregation, downstream
+  statistics, zonation, and plotting APIs. Downstream functions now accept
+  cluster labels directly from `colData` or `reducedDims`, without requiring a
+  CellCharterR clustering-stage record.
 - Added an exported SpatialExperiment-first workflow covering sample-local graph
   construction, neighborhood aggregation, AutoK/GMM clustering, domain-label
   attachment, cell-type enrichment, neighborhood enrichment, and differential
