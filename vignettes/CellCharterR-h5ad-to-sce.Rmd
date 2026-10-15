@@ -42,10 +42,16 @@ spe <- cellcharter_load_spe("large_spatial_dataset_spe")
 spe
 SpatialExperiment::spatialCoordsNames(spe)
 SingleCellExperiment::reducedDimNames(spe)
+SingleCellExperiment::colPairNames(spe)
+names(S4Vectors::metadata(spe)$anndata_uns)
 ```
 
 Large arrays stay on disk, while the returned SPE is independent of the source
-H5AD because the directory owns its copied HDF5 payload. The remaining sections
+H5AD because the directory owns its copied HDF5 payload. The complete AnnData
+hierarchy remains in `arrays.h5`; requested `obs`, `var`, and `obsm` fields are
+mapped to SPE structures, supported sparse `obsp` matrices become weighted
+`colPairs`, and `uns` remains on disk with a locator in SPE metadata. Sparse
+connectivity and distance values are preserved rather than recomputed. The remaining sections
 document the stricter two-file CODEX conversion used by the mouse-spleen
 reproduction.
 

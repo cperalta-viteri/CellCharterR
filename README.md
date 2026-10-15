@@ -127,6 +127,16 @@ spe <- cellcharter_import_h5ad(
 )
 ```
 
+The complete AnnData hierarchy is retained in the independent `arrays.h5`.
+The importer maps `obs` and `var` to `colData` and `rowData`; the requested
+spatial coordinates, PCA, CellCharter, and AUCell entries to SPE coordinates
+and `reducedDims`; and every supported sparse `obsp` entry to a same-named
+weighted `colPair`. In particular, `spatial_connectivities` and
+`spatial_distances` are imported with their stored values, so downstream
+analysis reuses the original graph without rebuilding it. Potentially large
+`uns` content remains in `arrays.h5` and is indexed from SPE metadata rather
+than being copied into memory.
+
 The complete saved directory is the portable object. After moving it, reload
 and automatically rebase its HDF5 paths with:
 
@@ -149,7 +159,7 @@ parameters, and other lightweight state are stored separately:
 spe <- cellcharter_aggregate(
   spe,
   representation = "PCA",
-  graph_name = "cellcharter_graph",
+  graph_name = "spatial_connectivities",
   n_layers = 3L,
   output = "X_cellcharter"
 )

@@ -138,12 +138,20 @@
 }
 
 .cc_sce_graph_matrix <- function(sce, graph_name, require_current = TRUE) {
-  if (require_current) .cc_sce_require_stage(sce, paste0("graph:", graph_name))
   if (!graph_name %in% SingleCellExperiment::colPairNames(sce)) {
     stop("SCE colPairs lacks graph `", graph_name, "`.", call. = FALSE)
   }
+  stage <- paste0("graph:", graph_name)
+  if (require_current && !is.null(.cc_sce_metadata(sce)$stages[[stage]])) {
+    .cc_sce_require_stage(sce, stage)
+  }
   graph <- SingleCellExperiment::colPair(sce, graph_name, asSparse = TRUE)
   entries <- Matrix::summary(graph)
+  if (any(entries$x < 0)) {
+    stop("SCE graph `", graph_name, "` contains negative edge weights.",
+         call. = FALSE)
+  }
+  entries <- entries[entries$x != 0, , drop = FALSE]
   graph <- Matrix::sparseMatrix(
     i = entries$i, j = entries$j, x = rep.int(1, nrow(entries)),
     dims = dim(graph)

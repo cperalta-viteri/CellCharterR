@@ -484,18 +484,18 @@ font-style: normal;
 line-height: normal;
 }
 
-code > span.kw { color: #E07020; } 
-code > span.dt { color: #404040; } 
-code > span.dv { color: #D02070; } 
-code > span.bn { color: #d14; } 
-code > span.fl { color: #D02070; } 
-code > span.ch { color: #40A040; } 
-code > span.st { color: #40A040; } 
-code > span.co { color: #808080; font-style: italic; } 
-code > span.ot { color: #2020F0; } 
-code > span.al { color: #ff0000; font-weight: bold; } 
-code > span.fu { color: #E07020; } 
-code > span.er { color: #FF0000; } 
+code > span.kw { color: #E07020; }
+code > span.dt { color: #404040; }
+code > span.dv { color: #D02070; }
+code > span.bn { color: #d14; }
+code > span.fl { color: #D02070; }
+code > span.ch { color: #40A040; }
+code > span.st { color: #40A040; }
+code > span.co { color: #808080; font-style: italic; }
+code > span.ot { color: #2020F0; }
+code > span.al { color: #ff0000; font-weight: bold; }
+code > span.fu { color: #E07020; }
+code > span.er { color: #FF0000; }
 code > span.identifier { color: #404040; }
 code > span.number { color: #D02070; }
 code > span.string { color: #40A040; }
@@ -745,9 +745,15 @@ spe &lt;- cellcharter_import_h5ad(
 spe &lt;- cellcharter_load_spe(&quot;large_spatial_dataset_spe&quot;)
 spe
 SpatialExperiment::spatialCoordsNames(spe)
-SingleCellExperiment::reducedDimNames(spe)</code></pre>
+SingleCellExperiment::reducedDimNames(spe)
+SingleCellExperiment::colPairNames(spe)
+names(S4Vectors::metadata(spe)$anndata_uns)</code></pre>
 <p>Large arrays stay on disk, while the returned SPE is independent of the source
-H5AD because the directory owns its copied HDF5 payload. The remaining sections
+H5AD because the directory owns its copied HDF5 payload. The complete AnnData
+hierarchy remains in <code>arrays.h5</code>; requested <code>obs</code>, <code>var</code>, and <code>obsm</code> fields are
+mapped to SPE structures, supported sparse <code>obsp</code> matrices become weighted
+<code>colPairs</code>, and <code>uns</code> remains on disk with a locator in SPE metadata. Sparse
+connectivity and distance values are preserved rather than recomputed. The remaining sections
 document the stricter two-file CODEX conversion used by the mouse-spleen
 reproduction.</p>
 <p>This vignette documents the exact conversion used for the CellCharterR CODEX
@@ -849,8 +855,8 @@ tiny_clustered &lt;- system.file(
 )
 tiny_from_h5ad &lt;- read_codex_spe(tiny_raw, tiny_clustered)
 tiny_from_h5ad
-#&gt; class: SpatialExperiment 
-#&gt; dim: 29 1000 
+#&gt; class: SpatialExperiment
+#&gt; dim: 29 1000
 #&gt; metadata(1): CellCharterR
 #&gt; assays(1): protein
 #&gt; rownames(29): CD45 Ly6C ... CD44 NKp46
@@ -925,20 +931,20 @@ the package’s current, version-aware citation and copyable BibTeX with:</p>
 #&gt; Warning in packageDescription(pkg = package, lib.loc = dirname(dir)): no
 #&gt; package &#39;CellCharterR&#39; was found
 #&gt; To cite CellCharterR in publications, use:
-#&gt; 
+#&gt;
 #&gt;   Peralta Viteri C (2026). _CellCharterR: Disk-Backed R Implementation
 #&gt;   of CellCharter Spatial Domains_.
 #&gt;   &lt;https://github.com/cperalta-viteri/CellCharterR&gt;.
-#&gt; 
+#&gt;
 #&gt; A BibTeX entry for LaTeX users is
-#&gt; 
+#&gt;
 #&gt;   @Manual{,
 #&gt;     title = {CellCharterR: Disk-Backed R Implementation of CellCharter Spatial Domains},
 #&gt;     author = {Christian {Peralta Viteri}},
 #&gt;     year = {2026},
 #&gt;     url = {https://github.com/cperalta-viteri/CellCharterR},
 #&gt;   }
-#&gt; 
+#&gt;
 #&gt; Depending on the analysis, also cite the underlying CellCharter method
 #&gt; (doi:10.1038/s41588-023-01588-4). For the bundled CODEX teaching data,
 #&gt; also cite Goltsev et al. (2018), doi:10.1016/j.cell.2018.07.010,
@@ -948,68 +954,61 @@ the package’s current, version-aware citation and copyable BibTeX with:</p>
 #&gt; R version 4.5.3 (2026-03-11)
 #&gt; Platform: x86_64-pc-linux-gnu
 #&gt; Running under: Ubuntu 24.04.4 LTS
-#&gt; 
+#&gt;
 #&gt; Matrix products: default
-#&gt; BLAS:   /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 
+#&gt; BLAS:   /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3
 #&gt; LAPACK: /usr/lib/x86_64-linux-gnu/openblas-pthread/libopenblasp-r0.3.26.so;  LAPACK version 3.12.0
-#&gt; 
+#&gt;
 #&gt; locale:
-#&gt;  [1] LC_CTYPE=C.UTF-8       LC_NUMERIC=C           LC_TIME=C.UTF-8       
-#&gt;  [4] LC_COLLATE=C.UTF-8     LC_MONETARY=C.UTF-8    LC_MESSAGES=C.UTF-8   
-#&gt;  [7] LC_PAPER=C.UTF-8       LC_NAME=C              LC_ADDRESS=C          
-#&gt; [10] LC_TELEPHONE=C         LC_MEASUREMENT=C.UTF-8 LC_IDENTIFICATION=C   
-#&gt; 
+#&gt;  [1] LC_CTYPE=C.UTF-8       LC_NUMERIC=C           LC_TIME=C.UTF-8
+#&gt;  [4] LC_COLLATE=C.UTF-8     LC_MONETARY=C.UTF-8    LC_MESSAGES=C.UTF-8
+#&gt;  [7] LC_PAPER=C.UTF-8       LC_NAME=C              LC_ADDRESS=C
+#&gt; [10] LC_TELEPHONE=C         LC_MEASUREMENT=C.UTF-8 LC_IDENTIFICATION=C
+#&gt;
 #&gt; time zone: Europe/Berlin
 #&gt; tzcode source: system (glibc)
-#&gt; 
+#&gt;
 #&gt; attached base packages:
-#&gt; [1] stats     graphics  grDevices utils     datasets  methods   base     
-#&gt; 
+#&gt; [1] stats     graphics  grDevices utils     datasets  methods   base
+#&gt;
 #&gt; other attached packages:
-#&gt; [1] BiocStyle_2.38.0    CellCharterR_0.99.0 testthat_3.3.2     
-#&gt; 
+#&gt; [1] BiocStyle_2.38.0    CellCharterR_0.99.0 testthat_3.3.2
+#&gt;
 #&gt; loaded via a namespace (and not attached):
-#&gt;  [1] tidyselect_1.2.1            dplyr_1.2.1                
-#&gt;  [3] farver_2.1.2                S7_0.2.2                   
-#&gt;  [5] fastmap_1.2.0               SingleCellExperiment_1.32.0
-#&gt;  [7] digest_0.6.39               lifecycle_1.0.5            
-#&gt;  [9] processx_3.9.0              magrittr_2.0.5             
-#&gt; [11] compiler_4.5.3              rlang_1.2.0                
-#&gt; [13] sass_0.4.10                 tools_4.5.3                
-#&gt; [15] yaml_2.3.12                 geometry_0.5.2             
-#&gt; [17] knitr_1.51                  labeling_0.4.3             
-#&gt; [19] S4Arrays_1.10.1             bit_4.6.0                  
-#&gt; [21] pkgbuild_1.4.8              DelayedArray_0.36.1        
-#&gt; [23] RColorBrewer_1.1-3          pkgload_1.5.2              
-#&gt; [25] abind_1.4-8                 HDF5Array_1.38.0           
-#&gt; [27] withr_3.0.2                 BiocGenerics_0.56.0        
-#&gt; [29] desc_1.4.3                  grid_4.5.3                 
-#&gt; [31] stats4_4.5.3                Rhdf5lib_1.32.0            
-#&gt; [33] ggplot2_4.0.3               scales_1.4.0               
-#&gt; [35] tinytex_0.59                SummarizedExperiment_1.40.0
-#&gt; [37] cli_3.6.6                   rmarkdown_2.31             
-#&gt; [39] generics_0.1.4              otel_0.2.0                 
-#&gt; [41] rjson_0.2.23                magic_1.6-1-1              
-#&gt; [43] cachem_1.1.0                rhdf5_2.54.1               
-#&gt; [45] BiocManager_1.30.27         XVector_0.50.0             
-#&gt; [47] coro_1.1.0                  matrixStats_1.5.0          
-#&gt; [49] vctrs_0.7.3                 Matrix_1.7-4               
-#&gt; [51] jsonlite_2.0.0              bookdown_0.46              
-#&gt; [53] callr_3.7.6                 IRanges_2.44.0             
-#&gt; [55] S4Vectors_0.48.1            bit64_4.8.0                
-#&gt; [57] magick_2.9.1                h5mread_1.2.1              
-#&gt; [59] jquerylib_0.1.4             glue_1.8.1                 
-#&gt; [61] ps_1.9.3                    gtable_0.3.6               
-#&gt; [63] GenomicRanges_1.62.1        tibble_3.3.1               
-#&gt; [65] pillar_1.11.1               htmltools_0.5.9            
-#&gt; [67] Seqinfo_1.0.0               brio_1.1.5                 
-#&gt; [69] rhdf5filters_1.22.0         torch_0.17.0               
-#&gt; [71] R6_2.6.1                    rprojroot_2.1.1            
-#&gt; [73] evaluate_1.0.5              lattice_0.22-9             
-#&gt; [75] Biobase_2.70.0              SpatialExperiment_1.20.0   
-#&gt; [77] bslib_0.10.0                Rcpp_1.1.1-1               
-#&gt; [79] SparseArray_1.10.10         xfun_0.57                  
-#&gt; [81] pkgconfig_2.0.3             MatrixGenerics_1.22.0</code></pre>
+#&gt;  [1] SummarizedExperiment_1.40.0 rjson_0.2.23
+#&gt;  [3] xfun_0.57                   bslib_0.10.0
+#&gt;  [5] processx_3.9.0              rhdf5_2.54.1
+#&gt;  [7] Biobase_2.70.0              lattice_0.22-9
+#&gt;  [9] callr_3.7.6                 rhdf5filters_1.22.0
+#&gt; [11] tools_4.5.3                 ps_1.9.3
+#&gt; [13] generics_0.1.4              stats4_4.5.3
+#&gt; [15] torch_0.17.0                Matrix_1.7-4
+#&gt; [17] desc_1.4.3                  S4Vectors_0.48.1
+#&gt; [19] lifecycle_1.0.5             compiler_4.5.3
+#&gt; [21] brio_1.1.5                  Seqinfo_1.0.0
+#&gt; [23] sass_0.4.10                 htmltools_0.5.9
+#&gt; [25] yaml_2.3.12                 jquerylib_0.1.4
+#&gt; [27] SingleCellExperiment_1.32.0 cachem_1.1.0
+#&gt; [29] DelayedArray_0.36.1         magick_2.9.1
+#&gt; [31] abind_1.4-8                 digest_0.6.39
+#&gt; [33] bookdown_0.46               magic_1.6-1-1
+#&gt; [35] rprojroot_2.1.1             fastmap_1.2.0
+#&gt; [37] grid_4.5.3                  cli_3.6.6
+#&gt; [39] SparseArray_1.10.10         magrittr_2.0.5
+#&gt; [41] S4Arrays_1.10.1             pkgbuild_1.4.8
+#&gt; [43] h5mread_1.2.1               withr_3.0.2
+#&gt; [45] bit64_4.8.0                 rmarkdown_2.31
+#&gt; [47] XVector_0.50.0              matrixStats_1.5.0
+#&gt; [49] bit_4.6.0                   otel_0.2.0
+#&gt; [51] SpatialExperiment_1.20.0    HDF5Array_1.38.0
+#&gt; [53] evaluate_1.0.5              knitr_1.51
+#&gt; [55] GenomicRanges_1.62.1        IRanges_2.44.0
+#&gt; [57] geometry_0.5.2              rlang_1.2.0
+#&gt; [59] Rcpp_1.1.1-1                BiocManager_1.30.27
+#&gt; [61] BiocGenerics_0.56.0         coro_1.1.0
+#&gt; [63] pkgload_1.5.2               jsonlite_2.0.0
+#&gt; [65] R6_2.6.1                    Rhdf5lib_1.32.0
+#&gt; [67] MatrixGenerics_1.22.0</code></pre>
 </div>
 
 
@@ -1078,7 +1077,7 @@ $(document).ready(function () {
 
 <script type="text/javascript">
 $(document).ready(function ()  {
-  
+
   // Map "enter" keypress to the same action as a cursor click
   function navigateLink(e) {
     if (e.key === "Enter") {

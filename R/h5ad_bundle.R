@@ -122,6 +122,17 @@
 
 .transition_read_frame <- function(file, group, n, index_path, columns = NULL) {
     entries <- .transition_children(file, group); available <- setdiff(entries$name, "_index")
+    frame_attrs <- tryCatch(rhdf5::h5readAttributes(file, group),
+                            error = function(e) list())
+    declared_order <- frame_attrs[["column-order"]]
+    if (!is.null(declared_order)) {
+        declared_order <- as.character(declared_order)
+        if (!setequal(declared_order, available)) {
+            stop("AnnData dataframe `", group,
+                 "` has an invalid column-order attribute.", call. = FALSE)
+        }
+        available <- declared_order
+    }
     if (!is.null(columns)) {
         unknown <- setdiff(columns, available)
         if (length(unknown)) stop("Unknown ", group, " columns: ", paste(unknown, collapse = ", "), call. = FALSE)
@@ -132,14 +143,15 @@
         if (identical(entry$otype, "H5I_GROUP")) {
             children <- .transition_children(file, path)$name
             if (all(c("categories", "codes") %in% children)) return(.transition_read_categorical(file, path, n))
-            return(NULL)
+            stop("Unsupported AnnData dataframe encoding at `", path,
+                 "`; no column was silently omitted.", call. = FALSE)
         }
         tryCatch(HDF5Array::HDF5Array(file, sub("^/", "", path)), error = function(e) {
             if (n > 1e6) stop("Cannot lazily represent ", path, ": ", conditionMessage(e), call. = FALSE)
             rhdf5::h5read(file, sub("^/", "", path))
         })
     })
-    keep <- !vapply(values, is.null, logical(1L)); values <- values[keep]; names(values) <- available[keep]
+    names(values) <- available
     ids <- as.character(rhdf5::h5read(file, index_path))
     if (length(ids) != n || anyNA(ids) || anyDuplicated(ids)) stop(index_path, " must contain unique identifiers.", call. = FALSE)
     answer <- do.call(S4Vectors::DataFrame, c(values, list(check.names = FALSE))); rownames(answer) <- ids
@@ -155,6 +167,70 @@
     })
     if (!length(columns)) return(NULL)
     answer <- do.call(S4Arrays::acbind, columns); colnames(answer) <- names; answer
+}
+
+.transition_read_obsp <- function(file, group, n_spots) {
+    entries <- .transition_children(file, group)
+    required <- c("data", "indices", "indptr")
+    if (!all(required %in% entries$name)) {
+        stop("AnnData sparse matrix `", group,
+             "` lacks data, indices, or indptr.", call. = FALSE)
+    }
+    attrs <- tryCatch(rhdf5::h5readAttributes(file, group),
+                      error = function(e) list())
+    encoding <- attrs[["encoding-type"]]
+    if (is.null(encoding)) encoding <- attrs[["encoding_type"]]
+    if (is.null(encoding)) {
+        stop("AnnData obsp matrix `", group,
+             "` lacks an encoding-type attribute; refusing to guess CSR versus CSC.",
+             call. = FALSE)
+    }
+    encoding <- as.character(encoding)[1L]
+    if (!encoding %in% c("csr_matrix", "csc_matrix")) {
+        stop("Unsupported AnnData obsp encoding `", encoding, "` at ",
+             group, ".", call. = FALSE)
+    }
+    shape <- attrs$shape
+    if (is.null(shape) && "shape" %in% entries$name) {
+        shape <- rhdf5::h5read(file, paste0(group, "/shape"))
+    }
+    if (is.null(shape)) {
+        stop("AnnData obsp matrix `", group,
+             "` lacks its required shape.", call. = FALSE)
+    }
+    if (anyNA(as.integer(shape)) ||
+        !identical(as.integer(shape), c(n_spots, n_spots))) {
+        stop("AnnData obsp matrix `", group, "` is not N-by-N.", call. = FALSE)
+    }
+    weights <- as.numeric(rhdf5::h5read(file, paste0(group, "/data")))
+    indices <- as.integer(rhdf5::h5read(file, paste0(group, "/indices")))
+    indptr <- as.integer(rhdf5::h5read(file, paste0(group, "/indptr")))
+    if (anyNA(indices) || anyNA(indptr) ||
+        length(weights) != length(indices) || length(indptr) != n_spots + 1L ||
+        indptr[1L] != 0L || tail(indptr, 1L) != length(indices) ||
+        any(diff(indptr) < 0L) || any(indices < 0L | indices >= n_spots) ||
+        any(!is.finite(weights))) {
+        stop("Invalid AnnData sparse matrix arrays at `", group, "`.", call. = FALSE)
+    }
+    major <- rep.int(seq_len(n_spots), diff(indptr))
+    minor <- indices + 1L
+    if (identical(encoding, "csr_matrix")) {
+        from <- major; to <- minor
+    } else {
+        from <- minor; to <- major
+    }
+    answer <- S4Vectors::SelfHits(from = from, to = to, nnode = n_spots,
+                                  value = weights, sort.by.query = FALSE)
+    S4Vectors::metadata(answer)$anndata_obsp <- list(
+        encoding_type = encoding,
+        encoding_version = as.character(attrs[["encoding-version"]])[1L],
+        shape = as.integer(shape), nnz = length(weights),
+        value_min = if (length(weights)) min(weights) else NA_real_,
+        value_max = if (length(weights)) max(weights) else NA_real_,
+        explicit_zeros = sum(weights == 0),
+        diagonal_entries = sum(from == to)
+    )
+    answer
 }
 
 .transition_build_spe <- function(arrays_file, assay_path, assay_name, obs_columns, var_columns,
@@ -183,9 +259,59 @@
         rownames(aucell) <- colnames(spe); SingleCellExperiment::reducedDim(spe, "AUCell") <- aucell
     }
     graphs <- .transition_children(arrays_file, "/obsp")
+    unsupported_graphs <- graphs$name[graphs$otype != "H5I_GROUP"]
+    if (length(unsupported_graphs)) {
+        stop("Unsupported dense or non-sparse AnnData obsp entries: ",
+             paste(unsupported_graphs, collapse = ", "),
+             ". No obsp entry was silently omitted.", call. = FALSE)
+    }
+    graph_names <- graphs$name
+    graph_report <- stats::setNames(vector("list", length(graph_names)), graph_names)
+    sample_codes <- match(sample_id, unique(sample_id))
+    for (name in graph_names) {
+        pair <- .transition_read_obsp(
+            arrays_file, paste0("/obsp/", name), n_spots
+        )
+        from <- S4Vectors::from(pair); to <- S4Vectors::to(pair)
+        cross_sample <- FALSE
+        if (length(pair)) {
+            for (start in seq.int(1L, length(pair), by = 1000000L)) {
+                index <- start:min(length(pair), start + 999999L)
+                if (any(sample_codes[from[index]] != sample_codes[to[index]])) {
+                    cross_sample <- TRUE
+                    break
+                }
+            }
+        }
+        if (cross_sample) {
+            stop("AnnData obsp matrix `", name,
+                 "` contains edges between different samples in `",
+                 sample_column, "`.", call. = FALSE)
+        }
+        graph_report[[name]] <- c(
+            S4Vectors::metadata(pair)$anndata_obsp,
+            list(cross_sample_edges = 0L)
+        )
+        SingleCellExperiment::colPair(spe, name) <- pair
+        rm(pair, from, to)
+    }
+    uns <- .transition_children(arrays_file, "/uns")
+    # Keep potentially huge images and other unstructured payloads on disk.
+    # The complete /uns hierarchy remains in arrays.h5 and this locator is
+    # rebuilt whenever the portable directory is moved.
+    S4Vectors::metadata(spe)$anndata_uns <- list(
+        filepath = arrays_file, group = "/uns", entries = uns$name
+    )
     S4Vectors::metadata(spe)$transitionR <- list(
         arrays_file = arrays_file, independent_of_source = TRUE, complete_h5ad_clone = TRUE,
-        obsp_groups = graphs$name[graphs$otype == "H5I_GROUP"])
+        anndata_mapping = list(
+            obs = colnames(col_data), var = colnames(row_data),
+            obsm = c(spatial = spatial_path, reduced_dims, AUCell = aucell_path),
+            obsp = graph_names,
+            uns = uns$name
+        ),
+        obsp_groups = graph_names, obsp_report = graph_report,
+        uns_entries = uns$name)
     valid <- methods::validObject(spe, test = TRUE)
     if (!identical(valid, TRUE)) stop("Invalid SPE: ", paste(valid, collapse = "; "), call. = FALSE)
     spe

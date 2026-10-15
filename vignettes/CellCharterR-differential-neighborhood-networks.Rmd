@@ -118,7 +118,7 @@ spatialCoords: spatial (x, y)
 reducedDims: X_trVAE, X_cellcharter
 colData: sample, condition, cell_type, dominant_cell_type,
          cellcharter_domain_k4
-colPairs: cellcharter_graph
+colPairs: spatial_connectivities, spatial_distances
 metadata: CellCharterR results and provenance
 ```
 
@@ -159,22 +159,21 @@ spe$dominant_cell_type <- factor(dominant_cell_type)
 table(spe$dominant_cell_type)
 ```
 
-# Build or reuse the spatial graph
+# Reuse the imported spatial graph
 
-If the SPE does not already contain the graph, build a sample-local Delaunay
-graph from native spatial coordinates. Long links are trimmed automatically;
-physical samples are never connected to one another.
+The migration preserves AnnData `obsp["spatial_connectivities"]` and
+`obsp["spatial_distances"]` as named SPE `colPairs`. Therefore, this downstream
+workflow uses the exact precomputed graph and does not rebuild it from the
+coordinates.
 
-```{r build-graph, eval=FALSE}
-spe <- cellcharter_graph(
-  spe,
-  spatial = "spatial",
-  sample_col = "sample",
-  graph_name = "cellcharter_graph"
-)
-
+```{r inspect-imported-graph, eval=FALSE}
 SingleCellExperiment::colPairNames(spe)
-SingleCellExperiment::colPair(spe, "cellcharter_graph")
+spatial_graph <- SingleCellExperiment::colPair(
+  spe,
+  "spatial_connectivities",
+  asSparse = TRUE
+)
+dim(spatial_graph)
 ```
 
 ```{r load-result, include=FALSE, purl=FALSE}
@@ -277,7 +276,7 @@ condition, and sample/library identifiers. Sample is the permutation unit.
 ```{r compute-differential, eval=FALSE}
 spe <- cellcharter_diff_nhood_enrichment(
   spe,
-  graph_name = "cellcharter_graph",
+  graph_name = "spatial_connectivities",
   domain_col = "cellcharter_domain_k4",
   condition_col = "condition",
   sample_col = "sample",
@@ -417,7 +416,7 @@ precomputed domains; it does not invoke R Torch GMM or AutoK.
 ```{r reproduce-result, eval=FALSE}
 spe <- cellcharter_diff_nhood_enrichment(
   spe,
-  graph_name = "cellcharter_graph",
+  graph_name = "spatial_connectivities",
   domain_col = "cellcharter_domain_k4",
   condition_col = "condition",
   sample_col = "sample",
@@ -433,8 +432,8 @@ cellcharter_plot_graph_diff(spe, result_name = "BALBc_vs_MRL")
 
 # Save the completed downstream analysis
 
-The import directory is the independent starting SPE. After adding the graph,
-domain labels, annotations, and downstream results, save a separate completed
+The import directory is the independent starting SPE, including its imported
+graph. After adding domain labels, annotations, and downstream results, save a separate completed
 analysis directory. This preserves the updated SPE and every CellCharterR result:
 
 ```{r save-completed-analysis, eval=FALSE}
