@@ -63,6 +63,10 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   file.path(checkpoint_dir, "fits", sprintf("k_%03d", k), sprintf("run_%03d.rds", run))
 }
 
+.autok_round_path <- function(checkpoint_dir, run) {
+  file.path(checkpoint_dir, "rounds", sprintf("run_%03d.rds", run))
+}
+
 .autok_atomic_save_rds <- function(object, path) {
   directory <- dirname(path)
   dir.create(directory, recursive = TRUE, showWarnings = FALSE)
@@ -154,6 +158,10 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
     readRDS(path),
     error = function(e) stop("Cannot read AutoK checkpoint `", path, "`: ", conditionMessage(e))
   )
+  if (identical(artifact$format, "cellcharter_autok_round_v1")) {
+    artifact <- artifact$artifacts[[as.character(expected$k)]]
+    if (is.null(artifact)) stop("AutoK round checkpoint `", path, "` has no K = ", expected$k, ".")
+  }
   required <- c(
     "format_version", "k", "run", "seed", "n_obs", "n_features",
     "data_id", "nll", "model", "labels"
@@ -186,12 +194,15 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 }
 
 .autok_resume_contract <- function(input_data_id, fit_args, predict_args,
-                                    default_torch, implementation_digest) {
+                                    default_torch, implementation_digest,
+                                    algorithm = NULL) {
   list(
     schema = "CellCharterR_autok_resume_identity",
     schema_version = 2L,
     input_data_id = input_data_id,
-    algorithm = if (default_torch) {
+    algorithm = if (!is.null(algorithm)) {
+      algorithm
+    } else if (default_torch) {
       # Increment only for a change that makes fitted models scientifically
       # incompatible. Package releases and performance-only changes do not.
       "torch-full-covariance-em-v1"
@@ -295,13 +306,17 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   else sprintf("%ds", secs)
 }
 
-.autok_read_labels <- function(path, n_obs) {
+.autok_read_labels <- function(path, n_obs, k = NULL) {
   artifact <- tryCatch(
     readRDS(path),
     error = function(e) stop(
       "Cannot read AutoK checkpoint `", path, "`: ", conditionMessage(e)
     )
   )
+  if (identical(artifact$format, "cellcharter_autok_round_v1")) {
+    if (is.null(k)) stop("Internal error: K is required for a round checkpoint.")
+    artifact <- artifact$artifacts[[as.character(k)]]
+  }
   value <- artifact$labels
   if (length(value) != n_obs || anyNA(value)) {
     stop("AutoK checkpoint `", path, "` has invalid labels.")
@@ -408,6 +423,13 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #'   `"ram"` to materialise only the observation-by-feature representation once
 #'   as a CPU float32 Torch tensor and reuse it throughout AutoK. The latter can
 #'   substantially accelerate repeated GPU fits and never materialises assays.
+#' @param backend GMM implementation. `"torch"` preserves the original path;
+#'   `"cpp"` fits all requested K values for a run through `cpp_gmm_fit_many()`.
+#' @param workers,threads_per_fit Positive parallelism controls for the C++ backend.
+#' @param progress Whether to emit C++ round progress and estimated time remaining.
+#' @param checkpoint_mode Checkpoint granularity. `"fit"` writes the historical
+#'   per-K artifacts; `"round"` writes one bundle after a complete C++ round;
+#'   `"none"` performs no writes and retains every model and label vector in RAM.
 #' @return A `cellcharter_autok` object containing stability, convergence
 #'   history, and paths to the lowest-NLL model checkpoint for every K. Label
 #'   vectors remain in the per-fit RDS files rather than being duplicated in RAM.
@@ -437,7 +459,9 @@ cellcharter_autok_fit <- function(
     seed = 1L, fit_fun = NULL, predict_fun = NULL, nll_fun = NULL,
     similarity_fun = cellcharter_fowlkes_mallows,
     fit_args = list(), predict_args = list(), data_id = NULL, resume = TRUE,
-    cache_representation = c("none", "ram")) {
+    cache_representation = c("none", "ram"),
+    backend = c("torch", "cpp"), workers = 1L, threads_per_fit = 1L,
+    progress = TRUE, checkpoint_mode = c("fit", "round", "none")) {
   grid <- .autok_k_grid(n_clusters)
   fit_k <- grid$fit_k
   candidate_k <- fit_k[-c(1L, length(fit_k))]
@@ -458,6 +482,16 @@ cellcharter_autok_fit <- function(
     stop("`resume` must be TRUE or FALSE.")
   }
   cache_representation <- match.arg(cache_representation)
+  backend <- match.arg(backend)
+  checkpoint_mode <- match.arg(checkpoint_mode)
+  if (!identical(backend, "cpp") && !identical(checkpoint_mode, "fit")) {
+    stop("`checkpoint_mode = \"round\"` or `\"none\"` requires `backend = \"cpp\"`.")
+  }
+  workers <- .autok_validate_integer(workers, "workers")
+  threads_per_fit <- .autok_validate_integer(threads_per_fit, "threads_per_fit")
+  if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
+    stop("`progress` must be TRUE or FALSE.")
+  }
   fit_args <- .autok_validate_hook_args(fit_args, c("x", "n_clusters", "seed"), "fit_args")
   predict_args <- .autok_validate_hook_args(predict_args, c("model", "newdata"), "predict_args")
   fit_fun <- fit_fun %||% .autok_default_fit
@@ -466,11 +500,48 @@ cellcharter_autok_fit <- function(
   if (!is.function(fit_fun) || !is.function(predict_fun) || !is.function(nll_fun)) {
     stop("`fit_fun`, `predict_fun`, and `nll_fun` must be functions.")
   }
+  if (identical(backend, "cpp") &&
+      (!identical(fit_fun, .autok_default_fit) ||
+       !identical(predict_fun, .autok_default_predict) ||
+       !identical(nll_fun, .autok_default_nll))) {
+    stop("`backend = \"cpp\"` does not support custom fit, predict, or NLL hooks.")
+  }
+  if (identical(backend, "cpp")) {
+    supported_cpp_args <- c("max_iter", "tolerance", "covariance_regularization")
+    unsupported <- setdiff(names(fit_args), supported_cpp_args)
+    if (length(unsupported)) {
+      stop(
+        "C++ `fit_args` contains unsupported arguments: ",
+        paste(unsupported, collapse = ", "),
+        ". Use only `max_iter`, `tolerance`, and `covariance_regularization`.",
+        call. = FALSE
+      )
+    }
+    if (length(predict_args)) {
+      stop("`predict_args` must be empty for `backend = \"cpp\"`; labels are returned by the compiled fit.",
+           call. = FALSE)
+    }
+  }
   # Representation validation/materialisation is deliberately lazy. A resume
   # with no new fit must not scan or copy a multi-million-row representation.
   fit_x <- NULL
   representation_prepared <- FALSE
-  if (identical(fit_fun, .autok_default_fit)) {
+  if (identical(backend, "cpp")) {
+    prepare_representation <- function() {
+      if (!representation_prepared) {
+        if (progress) message(sprintf(
+          "CellCharterR AutoK: materialising the %d x %d representation once for the C++ backend.",
+          nrow(x), ncol(x)
+        ))
+        value <- as.matrix(x)
+        storage.mode(value) <- "double"
+        fit_x <<- value
+        if (any(!is.finite(fit_x))) stop("`x` must contain only finite values.")
+        representation_prepared <<- TRUE
+      }
+      invisible(NULL)
+    }
+  } else if (identical(fit_fun, .autok_default_fit)) {
     validation_batch_size <- fit_args$batch_size %||% 8192L
     if (is.character(validation_batch_size) &&
         length(validation_batch_size) == 1L &&
@@ -522,12 +593,26 @@ cellcharter_autok_fit <- function(
   implementation_functions <- list(
     fit = fit_fun, predict = predict_fun, nll = nll_fun
   )
+  if (identical(backend, "cpp")) {
+    # Native code is not represented by an R closure. Keep an explicit ABI
+    # token beside the public wrappers and bump it whenever numerical semantics
+    # in src/cpp_gmm.cpp change, so stale native fits cannot be resumed.
+    implementation_functions <- list(
+      cpp_backend_abi = function() "cpp-full-covariance-em-v1.0.0",
+      cpp_gmm_fit = cpp_gmm_fit,
+      cpp_gmm_fit_many = cpp_gmm_fit_many,
+      cpp_gmm_predict = cpp_gmm_predict,
+      cpp_gmm_predict_proba = cpp_gmm_predict_proba,
+      cpp_gmm_log_likelihood = cpp_gmm_log_likelihood,
+      cpp_compatibility = .cpp_gmm_compatibility
+    )
+  }
   # The public defaults are deliberately small wrappers.  Hash their
   # transitive Torch implementation as well, otherwise a numerical change in
   # an internal EM helper could incorrectly reuse old per-fit checkpoints even
   # though the wrapper body itself had not changed.
-  if (identical(fit_fun, .autok_default_fit) ||
-      identical(predict_fun, .autok_default_predict)) {
+  if (!identical(backend, "cpp") && (identical(fit_fun, .autok_default_fit) ||
+      identical(predict_fun, .autok_default_predict))) {
     implementation_functions <- c(
       implementation_functions,
       list(
@@ -564,7 +649,10 @@ cellcharter_autok_fit <- function(
   default_torch <- identical(fit_fun, .autok_default_fit) &&
     identical(predict_fun, .autok_default_predict) && identical(nll_fun, .autok_default_nll)
   resume_contract <- .autok_resume_contract(
-    input_data_id, fit_args, predict_args, default_torch, implementation_digest
+    input_data_id, fit_args, predict_args, default_torch, implementation_digest,
+    algorithm = if (identical(backend, "cpp")) {
+      paste0("cpp-full-covariance-em-v1.0.0:", implementation_digest)
+    } else NULL
   )
   data_id <- digest::digest(
     .cc_contract_canonical(resume_contract), algo = "sha256", serialize = TRUE
@@ -577,9 +665,11 @@ cellcharter_autok_fit <- function(
     stop("`x` must have at least one row and one column.")
   }
   checkpoint_dir <- normalizePath(checkpoint_dir, winslash = "/", mustWork = FALSE)
-  dir.create(file.path(checkpoint_dir, "fits"), recursive = TRUE, showWarnings = FALSE)
+  if (!identical(checkpoint_mode, "none")) {
+    dir.create(file.path(checkpoint_dir, "fits"), recursive = TRUE, showWarnings = FALSE)
+  }
   legacy_state_exists <- file.exists(file.path(checkpoint_dir, "autok_state.rds"))
-  legacy_data_ids <- if (resume && default_torch) .autok_legacy_data_id(
+  legacy_data_ids <- if (resume && default_torch && identical(backend, "torch")) .autok_legacy_data_id(
     checkpoint_dir,
     list(input_data_id = input_data_id, fit_args = fit_args, predict_args = predict_args,
          fit_k = fit_k, candidate_k = candidate_k, seed = seed,
@@ -594,7 +684,7 @@ cellcharter_autok_fit <- function(
   }
 
   state_path <- file.path(checkpoint_dir, "autok_state.rds")
-  saved_state <- if (resume && file.exists(state_path)) {
+  saved_state <- if (resume && !identical(checkpoint_mode, "none") && file.exists(state_path)) {
     tryCatch(readRDS(state_path), error = function(e) NULL)
   } else NULL
   restore_state <- .autok_compatible_state(
@@ -620,9 +710,12 @@ cellcharter_autok_fit <- function(
   campaign_total <- length(fit_k) * max_runs
   campaign_completed <- 0L
   new_fit_seconds <- numeric()
+  # Write-free campaigns retain artifacts by run and K. This intentionally
+  # trades bounded memory and interruption recovery for eliminating all I/O.
+  memory_artifacts <- list()
 
   start_run <- 1L
-  if (restore_state) {
+  if (!identical(checkpoint_mode, "none") && restore_state) {
     runs_completed <- min(as.integer(saved_state$runs_completed), max_runs)
     if (runs_completed < 0L || is.na(runs_completed)) stop("Saved AutoK state has invalid `runs_completed`.")
     edge_stability <- saved_state$edge_stability[
@@ -679,8 +772,12 @@ cellcharter_autok_fit <- function(
         stop("Committed AutoK state has an incomplete or malformed fit index.")
       }
       fit_index$resumed <- TRUE
-      fit_index$path <- mapply(.autok_checkpoint_path, checkpoint_dir = checkpoint_dir,
-                               k = fit_index$k, run = fit_index$run, USE.NAMES = FALSE)
+      fit_index$path <- if (identical(backend, "cpp") && identical(checkpoint_mode, "round")) {
+        vapply(fit_index$run, function(run) .autok_round_path(checkpoint_dir, run), character(1))
+      } else {
+        mapply(.autok_checkpoint_path, checkpoint_dir = checkpoint_dir,
+               k = fit_index$k, run = fit_index$run, USE.NAMES = FALSE)
+      }
       missing_fit <- !file.exists(fit_index$path)
       if (any(missing_fit)) {
         stop("Committed AutoK state references missing fit checkpoint `",
@@ -752,6 +849,8 @@ cellcharter_autok_fit <- function(
       resume_contract = resume_contract,
       compatible_data_ids = legacy_data_ids,
       cache_representation = cache_representation,
+      backend = backend, workers = workers, threads_per_fit = threads_per_fit,
+      checkpoint_mode = checkpoint_mode,
       cache_format_version = 2L,
       input_data_id = input_data_id, implementation_digest = implementation_digest,
       similarity_digest = similarity_digest,
@@ -761,12 +860,12 @@ cellcharter_autok_fit <- function(
       fit_index = fit_index
     )
     .autok_atomic_save_rds(restored_state, state_path)
-  } else if (resume && file.exists(state_path)) {
+  } else if (!identical(checkpoint_mode, "none") && resume && file.exists(state_path)) {
     # A committed but incompatible/corrupt state is not an interrupted final
     # run. Preserve the historical fail-closed behavior and all artifacts.
     if (is.null(saved_state)) stop("Cannot read committed AutoK state `", state_path, "`.")
     message("CellCharterR AutoK resume: committed state is incompatible; validating fit checkpoints before refusing reuse.")
-  } else if (resume) {
+  } else if (!identical(checkpoint_mode, "none") && resume && identical(backend, "torch")) {
     .autok_quarantine_incomplete_runs(checkpoint_dir, 0L)
   }
 
@@ -780,17 +879,102 @@ cellcharter_autok_fit <- function(
       NULL
     }
 
+    cpp_round <- NULL
+    cpp_artifacts <- list()
+    cpp_round_elapsed <- NA_real_
+    if (identical(backend, "cpp")) {
+      reusable <- if (identical(checkpoint_mode, "none")) {
+        rep(FALSE, length(fit_k))
+      } else vapply(fit_k, function(k) {
+        path <- if (identical(checkpoint_mode, "round")) {
+          .autok_round_path(checkpoint_dir, run)
+        } else .autok_checkpoint_path(checkpoint_dir, k, run)
+        if (!resume || !file.exists(path)) return(FALSE)
+        expected <- list(k = as.integer(k), run = as.integer(run), seed = run_seed,
+                         n_obs = as.integer(n_obs), n_features = as.integer(n_features),
+                         data_id = data_id)
+        isTRUE(tryCatch({
+          .autok_read_checkpoint(path, expected, n_obs)
+          TRUE
+        }, error = function(e) FALSE))
+      }, logical(1))
+      # A round bundle is a single transactional unit. If any K is absent or
+      # invalid, recompute the complete round rather than overwriting the file
+      # with a mixture that silently drops previously valid entries.
+      if (identical(checkpoint_mode, "round") && !all(reusable)) {
+        reusable[] <- FALSE
+      }
+      missing_k <- fit_k[!reusable]
+      if (length(missing_k)) {
+        prepare_representation()
+        fit_started <- proc.time()[["elapsed"]]
+        cpp_round <- do.call(
+          cpp_gmm_fit_many,
+          c(list(x = fit_x, n_clusters = as.integer(missing_k),
+                 seeds = rep.int(run_seed, length(missing_k)), workers = workers,
+                 threads_per_fit = threads_per_fit), fit_args)
+        )
+        cpp_round_elapsed <- proc.time()[["elapsed"]] - fit_started
+        if (!is.list(cpp_round) || length(cpp_round) != length(missing_k)) {
+          stop("`cpp_gmm_fit_many()` must return one model for every requested K.")
+        }
+        if (!is.null(names(cpp_round)) && all(as.character(missing_k) %in% names(cpp_round))) {
+          cpp_round <- cpp_round[as.character(missing_k)]
+        }
+        names(cpp_round) <- as.character(missing_k)
+      }
+    }
+
     for (k in fit_k) {
-      path <- .autok_checkpoint_path(checkpoint_dir, k, run)
+      path <- if (identical(checkpoint_mode, "none")) {
+        NA_character_
+      } else if (identical(backend, "cpp") && identical(checkpoint_mode, "round")) {
+        .autok_round_path(checkpoint_dir, run)
+      } else .autok_checkpoint_path(checkpoint_dir, k, run)
       expected <- list(
         k = as.integer(k), run = as.integer(run), seed = run_seed,
         n_obs = as.integer(n_obs), n_features = as.integer(n_features), data_id = data_id
       )
-      reused <- resume && file.exists(path)
+      reused <- !identical(checkpoint_mode, "none") && resume && file.exists(path)
+      if (reused && identical(backend, "cpp")) {
+        reused <- isTRUE(tryCatch({
+          .autok_read_checkpoint(path, expected, n_obs)
+          TRUE
+        }, error = function(e) FALSE))
+      }
       if (reused) {
         artifact <- .autok_read_checkpoint(
           path, expected, n_obs, compatible_data_ids = legacy_data_ids
         )
+      } else if (identical(backend, "cpp")) {
+        model <- cpp_round[[as.character(k)]]
+        labels <- model$labels
+        nll <- model$nll %||% model$nll_
+        if (length(labels) != n_obs || anyNA(labels)) {
+          stop("C++ GMM model must contain one non-missing `$labels` value per observation.")
+        }
+        if (length(nll) != 1L || !is.numeric(nll) || !is.finite(nll)) {
+          stop("C++ GMM model must contain one finite numeric `$nll` value.")
+        }
+        artifact <- list(
+          format_version = 2L, k = as.integer(k), run = as.integer(run),
+          seed = run_seed, n_obs = as.integer(n_obs), n_features = as.integer(n_features),
+          data_id = data_id, nll = as.numeric(nll), model = model, labels = labels,
+          backend = "cpp", workers = workers, threads_per_fit = threads_per_fit,
+          representation_cache = list(mode = "ram", format_version = 2L)
+        )
+        if (identical(checkpoint_mode, "fit")) {
+          .autok_atomic_save_rds(artifact, path)
+        } else if (identical(checkpoint_mode, "round")) {
+          cpp_artifacts[[as.character(k)]] <- artifact
+        } else {
+          if (is.null(memory_artifacts[[as.character(run)]])) {
+            memory_artifacts[[as.character(run)]] <- list()
+          }
+          memory_artifacts[[as.character(run)]][[as.character(k)]] <- artifact
+        }
+        fit_elapsed <- cpp_round_elapsed / length(cpp_round)
+        new_fit_seconds <- c(new_fit_seconds, fit_elapsed)
       } else {
         prepare_representation()
         fit_started <- proc.time()[["elapsed"]]
@@ -840,14 +1024,14 @@ cellcharter_autok_fit <- function(
       fit_index <- rbind(
         fit_index,
         data.frame(k = k, run = run, seed = run_seed, nll = artifact$nll,
-                   path = path, bytes = as.numeric(file.info(path)$size),
+                   path = path, bytes = if (!is.na(path) && file.exists(path)) as.numeric(file.info(path)$size) else NA_real_,
                    resumed = reused, stringsAsFactors = FALSE)
       )
       if (run > 1L && k != fit_k[[length(fit_k)]]) {
         current_round_labels[[as.character(k)]] <- artifact$labels
       }
       rm(artifact)
-      if (!reused) {
+      if (!reused && identical(backend, "torch")) {
         # Reclaim unreachable R/Torch objects but retain the CUDA caching
         # allocator between successful fits. OOM recovery empties it explicitly.
         .autok_cuda_cleanup(empty_cache = FALSE)
@@ -859,6 +1043,24 @@ cellcharter_autok_fit <- function(
           .autok_format_duration(eta_seconds)
         ))
       }
+    }
+    if (identical(backend, "cpp") && identical(checkpoint_mode, "round") &&
+        length(cpp_artifacts)) {
+      round_path <- .autok_round_path(checkpoint_dir, run)
+      .autok_atomic_save_rds(list(
+        format = "cellcharter_autok_round_v1", run = run,
+        data_id = data_id, artifacts = cpp_artifacts
+      ), round_path)
+      fit_index$bytes[fit_index$run == run] <- as.numeric(file.info(round_path)$size)
+    }
+    if (identical(backend, "cpp") && length(cpp_round) && progress) {
+      mean_fit_seconds <- mean(new_fit_seconds)
+      eta_seconds <- mean_fit_seconds * (campaign_total - campaign_completed)
+      message(sprintf(
+        "CellCharterR AutoK: %d/%d fits complete; C++ round=%s; ETA through max_runs=%s.",
+        campaign_completed, campaign_total, .autok_format_duration(cpp_round_elapsed),
+        .autok_format_duration(eta_seconds)
+      ))
     }
 
     if (run > 1L) {
@@ -874,8 +1076,14 @@ cellcharter_autok_fit <- function(
         for (edge in seq_len(length(fit_k) - 1L)) {
           lower_k <- fit_k[[edge]]
           upper_k <- fit_k[[edge + 1L]]
-          previous_path <- .autok_checkpoint_path(checkpoint_dir, upper_k, previous_run)
-          previous_labels <- .autok_read_labels(previous_path, n_obs)
+          if (identical(checkpoint_mode, "none")) {
+            previous_labels <- memory_artifacts[[as.character(previous_run)]][[as.character(upper_k)]]$labels
+          } else {
+            previous_path <- if (identical(backend, "cpp") && identical(checkpoint_mode, "round")) {
+              .autok_round_path(checkpoint_dir, previous_run)
+            } else .autok_checkpoint_path(checkpoint_dir, upper_k, previous_run)
+            previous_labels <- .autok_read_labels(previous_path, n_obs, upper_k)
+          }
           score <- similarity_fun(current_labels[[as.character(lower_k)]], previous_labels)
           if (length(score) != 1L || !is.numeric(score) || !is.finite(score)) {
             stop("`similarity_fun` must return one finite numeric value.")
@@ -913,6 +1121,8 @@ cellcharter_autok_fit <- function(
       resume_contract = resume_contract,
       compatible_data_ids = legacy_data_ids,
       cache_representation = cache_representation,
+      backend = backend, workers = workers, threads_per_fit = threads_per_fit,
+      checkpoint_mode = checkpoint_mode,
       cache_format_version = 2L,
       input_data_id = input_data_id, implementation_digest = implementation_digest,
       similarity_digest = similarity_digest,
@@ -921,7 +1131,9 @@ cellcharter_autok_fit <- function(
       edge_stability = edge_stability, convergence_history = convergence_history,
       fit_index = fit_index
     )
-    .autok_atomic_save_rds(partial, file.path(checkpoint_dir, "autok_state.rds"))
+    if (!identical(checkpoint_mode, "none")) {
+      .autok_atomic_save_rds(partial, file.path(checkpoint_dir, "autok_state.rds"))
+    }
     if (converged) break
   }
 
@@ -939,6 +1151,11 @@ cellcharter_autok_fit <- function(
   })
   best_index <- do.call(rbind, best_rows)
   rownames(best_index) <- as.character(best_index$k)
+  embedded_best_artifacts <- if (identical(checkpoint_mode, "none")) {
+    stats::setNames(lapply(seq_len(nrow(best_index)), function(i) {
+      memory_artifacts[[as.character(best_index$run[[i]])]][[as.character(best_index$k[[i]])]]
+    }), as.character(best_index$k))
+  } else NULL
 
   result <- structure(
     list(
@@ -951,6 +1168,8 @@ cellcharter_autok_fit <- function(
       resume_contract = resume_contract,
       compatible_data_ids = legacy_data_ids,
       cache_representation = cache_representation,
+      backend = backend, workers = workers, threads_per_fit = threads_per_fit,
+      checkpoint_mode = checkpoint_mode,
       cache_format_version = 2L,
       input_data_id = input_data_id, implementation_digest = implementation_digest,
       similarity_digest = similarity_digest,
@@ -960,11 +1179,17 @@ cellcharter_autok_fit <- function(
       edge_stability = edge_stability,
       convergence_history = convergence_history,
       best_k = as.integer(best_k), best_index = best_index,
+      # Keep only each K's lowest-NLL artifact in the returned object. Full
+      # per-round labels are needed while calculating FMI, but retaining them
+      # after selection would unnecessarily inflate the final result.
+      embedded_best_artifacts = embedded_best_artifacts,
       fit_index = fit_index, checkpoint_dir = checkpoint_dir
     ),
     class = "cellcharter_autok"
   )
-  .autok_atomic_save_rds(result, file.path(checkpoint_dir, "autok_result.rds"))
+  if (!identical(checkpoint_mode, "none")) {
+    .autok_atomic_save_rds(result, file.path(checkpoint_dir, "autok_result.rds"))
+  }
   result
 }
 
@@ -1015,7 +1240,14 @@ cellcharter_autok_model <- function(object, k = NULL) {
   k <- .autok_validate_integer(k, "k")
   row <- object$best_index[object$best_index$k == k, , drop = FALSE]
   if (nrow(row) != 1L) stop("No fitted model is available for K = ", k, ".")
-  readRDS(row$path[[1L]])$model
+  if (!is.null(object$embedded_best_artifacts)) {
+    return(object$embedded_best_artifacts[[as.character(k)]]$model)
+  }
+  artifact <- readRDS(row$path[[1L]])
+  if (identical(artifact$format, "cellcharter_autok_round_v1")) {
+    artifact <- artifact$artifacts[[as.character(k)]]
+  }
+  artifact$model
 }
 
 #' Prepare AutoK stability diagnostics

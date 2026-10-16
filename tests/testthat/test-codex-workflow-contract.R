@@ -26,7 +26,9 @@ test_that("CODEX workflow keeps primary, standalone K11, and published roles dis
     workflow, 'role_id = "published_h5ad_reference"', fixed = TRUE
   )
   expect_match(workflow, "tutorial_k11_seed <- 12345L", fixed = TRUE)
-  expect_match(workflow, "tutorial_k11_model <- torch_gmm_fit(", fixed = TRUE)
+  expect_match(workflow, "tutorial_k11_model <- if (identical(gmm_backend, \"cpp\"))", fixed = TRUE)
+  expect_match(workflow, "cpp_gmm_fit(", fixed = TRUE)
+  expect_match(workflow, "torch_gmm_fit(", fixed = TRUE)
   expect_match(workflow, "n_clusters = 11L", fixed = TRUE)
   expect_match(workflow, "seed = tutorial_k11_seed", fixed = TRUE)
   expect_match(workflow, "tutorial_k11_model_provenance_path", fixed = TRUE)

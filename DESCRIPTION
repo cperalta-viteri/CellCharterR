@@ -6,7 +6,8 @@ Description: Implements a reproducible, disk-backed workflow for identifying
     spatial domains in SpatialExperiment and SingleCellExperiment data. It
     constructs sample-local
     spatial graphs, aggregates exclusive graph-hop representations, fits
-    batched full-covariance Gaussian mixture models with R Torch, and selects
+    batched full-covariance Gaussian mixture models with R Torch or an
+    experimental multithreaded C++ CPU backend, and selects
     domain counts using CellCharter-style stability. It also provides
     cell-type enrichment, directed neighborhood enrichment, differential
     neighborhood enrichment, durable checkpoints, and a version-pinned CODEX
@@ -30,6 +31,7 @@ Imports:
     IRanges,
     Matrix,
     methods,
+    Rcpp,
     rhdf5,
     S4Arrays,
     S4Vectors,
@@ -40,6 +42,8 @@ Imports:
     torch,
     utils,
     withr
+LinkingTo:
+    Rcpp
 Suggests:
     BiocStyle,
     ggplot2,
@@ -51,7 +55,8 @@ Suggests:
     testthat (>= 3.0.0)
 VignetteBuilder: knitr
 biocViews: Software, Spatial, SingleCell, Clustering, Proteomics
-SystemRequirements: LibTorch CPU runtime provided through the R torch package
+SystemRequirements: C++17; LibTorch CPU runtime provided through the R torch package
+NeedsCompilation: yes
 Config/testthat/edition: 3
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3

@@ -14,6 +14,7 @@ suppressPackageStartupMessages({
 source("R/sce_workflow.R")
 source("R/aggregation.R")
 source("R/torch_gmm.R")
+source("R/cpp_gmm.R")
 source("R/provenance.R")
 source("R/autok.R")
 source("R/enrichment.R")
@@ -102,6 +103,21 @@ num_threads <- as.integer(Sys.getenv(
   "CODEX_NUM_THREADS",
   as.character(max(1L, parallel::detectCores(logical = FALSE)))
 ))
+gmm_backend <- match.arg(
+  Sys.getenv("CODEX_GMM_BACKEND", "cpp"), c("cpp", "torch")
+)
+available_logical_cores <- max(1L, parallel::detectCores(logical = TRUE))
+autok_threads_per_fit <- as.integer(Sys.getenv(
+  "CODEX_AUTOK_THREADS_PER_FIT", as.character(min(4L, available_logical_cores))
+))
+autok_workers <- as.integer(Sys.getenv(
+  "CODEX_AUTOK_WORKERS",
+  as.character(min(21L, max(1L, available_logical_cores %/% autok_threads_per_fit)))
+))
+autok_checkpoint_mode <- match.arg(
+  Sys.getenv("CODEX_AUTOK_CHECKPOINT_MODE", "none"),
+  c("none", "round", "fit")
+)
 autok_bounds <- c(
   as.integer(Sys.getenv("CODEX_MIN_K", "2")),
   as.integer(Sys.getenv("CODEX_MAX_K", "20"))
@@ -1391,7 +1407,14 @@ if (!"torch" %in% loadedNamespaces()) {
   stop("Internal error: Torch was not preloaded for the requested model stage.")
 }
 cell_order_sha256 <- .cc_observation_order_sha256(colnames(sce))
-gmm_implementation_functions <- list(
+gmm_implementation_functions <- if (identical(gmm_backend, "cpp")) list(
+  fit = cpp_gmm_fit,
+  fit_many = cpp_gmm_fit_many,
+  predict = cpp_gmm_predict,
+  predict_proba = cpp_gmm_predict_proba,
+  log_likelihood = cpp_gmm_log_likelihood,
+  compatibility = .cpp_gmm_compatibility
+) else list(
   fit = torch_gmm_fit,
   predict = torch_gmm_predict,
   predict_proba = torch_gmm_predict_proba,
@@ -1414,7 +1437,10 @@ gmm_implementation_functions <- list(
   model_device = .rc_model_device,
   runtime_info = torch_gmm_runtime_info
 )
-autok_runtime <- torch_gmm_runtime_info("auto", batch_size, seed, num_threads)
+autok_runtime <- if (identical(gmm_backend, "cpp")) list(
+  device = "cpu", backend = "compiled-cpp-double",
+  outer_workers = autok_workers, threads_per_fit = autok_threads_per_fit, seed = seed
+) else torch_gmm_runtime_info("auto", batch_size, seed, num_threads)
 autok_contract <- cellcharter_stage_contract(
   stage = "autok",
   implementation_digest = .stage_implementation("autok", c(list(
@@ -1435,16 +1461,24 @@ autok_contract <- cellcharter_stage_contract(
     candidate_bounds = autok_bounds, fitted_bounds = c(autok_bounds[[1L]] - 1L,
                                                        autok_bounds[[2L]] + 1L),
     max_runs = max_runs, convergence_tol = convergence_tol,
-    batch_size = batch_size, max_iter = gmm_max_iter,
+    backend = gmm_backend, workers = autok_workers,
+    threads_per_fit = autok_threads_per_fit,
+    checkpoint_mode = autok_checkpoint_mode,
+    batch_size = if (identical(gmm_backend, "torch")) batch_size else NA_integer_,
+    max_iter = gmm_max_iter,
     tolerance = gmm_tolerance,
     covariance_regularization = covariance_regularization,
-    covariance_type = "full", initialization = "hard nearest-centroid",
-    prediction_batch_size = batch_size, device_request = "auto",
-    num_threads = num_threads,
+    covariance_type = "full", initialization = if (identical(gmm_backend, "cpp")) {
+      "deterministic C++ k-means++/Lloyd then hard nearest-centroid (not sklearn RNG-identical)"
+    } else "hard nearest-centroid",
+    prediction_batch_size = if (identical(gmm_backend, "torch")) batch_size else NA_integer_,
+    device_request = if (identical(gmm_backend, "torch")) "auto" else "cpu",
+    num_threads = if (identical(gmm_backend, "torch")) num_threads else 1L,
     model_selection = "lowest final NLL within K; highest FM stability across K"
   ),
   seeds = list(base_seed = seed),
-  versions = .stage_versions(c("torch", "Matrix")), runtime = autok_runtime
+  versions = .stage_versions(c("Rcpp", "Matrix", if (identical(gmm_backend, "torch")) "torch")),
+  runtime = autok_runtime
 )
 
 role_metadata <- function(role_id, role, role_seed, model_path) {
@@ -1558,18 +1592,37 @@ if ("autok" %in% requested_stages) {
   autok <- cellcharter_autok_fit(
     x_cellcharter, n_clusters = autok_bounds, checkpoint_dir = autok_dir,
     max_runs = max_runs, convergence_tol = convergence_tol, seed = seed,
-    fit_args = list(
+    fit_args = if (identical(gmm_backend, "cpp")) list(
+      max_iter = gmm_max_iter, tolerance = gmm_tolerance,
+      covariance_regularization = covariance_regularization
+    ) else list(
       batch_size = batch_size, max_iter = gmm_max_iter,
       tolerance = gmm_tolerance,
       covariance_regularization = covariance_regularization,
       device = "auto", num_threads = num_threads
     ),
-    predict_args = list(batch_size = batch_size, device = "auto"),
-    data_id = fit_data_id, resume = TRUE
+    predict_args = if (identical(gmm_backend, "cpp")) list() else
+      list(batch_size = batch_size, device = "auto"),
+    data_id = fit_data_id, resume = !identical(autok_checkpoint_mode, "none"),
+    backend = gmm_backend, workers = autok_workers,
+    threads_per_fit = autok_threads_per_fit,
+    checkpoint_mode = autok_checkpoint_mode
   )
+  # No-checkpoint campaigns deliberately keep fits in memory; persist only
+  # the completed AutoK result required by downstream reproducibility.
+  if (identical(autok_checkpoint_mode, "none")) {
+    .atomic_save_rds(autok, autok_path)
+  }
   dir.create(selected_dir, recursive = TRUE, showWarnings = FALSE)
   best_row <- autok$best_index[autok$best_index$k == autok$best_k, , drop = FALSE]
-  best_artifact <- readRDS(best_row$path[[1L]])
+  best_artifact <- if (identical(autok_checkpoint_mode, "none")) {
+    autok$embedded_best_artifacts[[as.character(autok$best_k)]]
+  } else {
+    loaded <- readRDS(best_row$path[[1L]])
+    if (identical(loaded$format, "cellcharter_autok_round_v1")) {
+      loaded$artifacts[[as.character(autok$best_k)]]
+    } else loaded
+  }
   accepted_fit_data_ids <- unique(c(autok$data_id, autok$compatible_data_ids))
   if (!best_artifact$data_id %in% accepted_fit_data_ids ||
       length(best_artifact$labels) != ncol(sce)) {
@@ -1667,9 +1720,10 @@ if (any(requested_stages %in% c("autok", "report"))) {
 }
 
 # CHECKPOINT CONTRACT REGION: tutorial_k11 BEGIN
-tutorial_runtime <- torch_gmm_runtime_info(
-  "auto", batch_size, tutorial_k11_seed, num_threads
-)
+tutorial_runtime <- if (identical(gmm_backend, "cpp")) list(
+  device = "cpu", backend = "compiled-cpp-double", outer_workers = 1L,
+  threads_per_fit = autok_threads_per_fit, seed = tutorial_k11_seed
+) else torch_gmm_runtime_info("auto", batch_size, tutorial_k11_seed, num_threads)
 tutorial_contract <- cellcharter_stage_contract(
   stage = "tutorial_k11",
   implementation_digest = .stage_implementation(
@@ -1683,15 +1737,19 @@ tutorial_contract <- cellcharter_stage_contract(
   cell_order_sha256 = cell_order_sha256,
   parameters = list(
     role_id = "r_tutorial_k11_sensitivity", n_clusters = 11L,
-    batch_size = batch_size, max_iter = gmm_max_iter,
+    backend = gmm_backend,
+    batch_size = if (identical(gmm_backend, "torch")) batch_size else NA_integer_,
+    max_iter = gmm_max_iter,
     tolerance = gmm_tolerance,
     covariance_regularization = covariance_regularization,
     covariance_type = "full", initialization = "hard nearest-centroid",
-    prediction_batch_size = batch_size, device_request = "auto",
-    num_threads = num_threads
+    prediction_batch_size = if (identical(gmm_backend, "torch")) batch_size else NA_integer_,
+    device_request = if (identical(gmm_backend, "torch")) "auto" else "cpu",
+    num_threads = if (identical(gmm_backend, "torch")) num_threads else 1L
   ),
   seeds = list(seed = tutorial_k11_seed),
-  versions = .stage_versions(c("torch", "Matrix")), runtime = tutorial_runtime
+  versions = .stage_versions(c("Rcpp", "Matrix", if (identical(gmm_backend, "torch")) "torch")),
+  runtime = tutorial_runtime
 )
 if ("tutorial_k11" %in% requested_stages) {
   started <- Sys.time()
@@ -1714,17 +1772,21 @@ if ("tutorial_k11" %in% requested_stages) {
   }
   tutorial_model_created <- !tutorial_reusable
   if (tutorial_model_created) {
-    tutorial_k11_model <- torch_gmm_fit(
-      x_cellcharter,
-      n_clusters = 11L,
-      batch_size = batch_size,
-      max_iter = gmm_max_iter,
-      tolerance = gmm_tolerance,
-      covariance_regularization = covariance_regularization,
-      device = "auto",
-      seed = tutorial_k11_seed,
-      num_threads = num_threads
-    )
+    tutorial_k11_model <- if (identical(gmm_backend, "cpp")) {
+      cpp_gmm_fit(
+        x_cellcharter, n_clusters = 11L, max_iter = gmm_max_iter,
+        tolerance = gmm_tolerance,
+        covariance_regularization = covariance_regularization,
+        seed = tutorial_k11_seed, num_threads = autok_threads_per_fit
+      )
+    } else {
+      torch_gmm_fit(
+        x_cellcharter, n_clusters = 11L, batch_size = batch_size,
+        max_iter = gmm_max_iter, tolerance = gmm_tolerance,
+        covariance_regularization = covariance_regularization,
+        device = "auto", seed = tutorial_k11_seed, num_threads = num_threads
+      )
+    }
     .atomic_save_rds(tutorial_k11_model, tutorial_k11_model_path)
     .atomic_save_rds(c(role_metadata(
       role_id = "r_tutorial_k11_sensitivity",
@@ -1734,7 +1796,7 @@ if ("tutorial_k11" %in% requested_stages) {
     ), list(
       k = 11L,
       fit_id = tutorial_fit_id,
-      fit_function = "torch_gmm_fit",
+      fit_function = if (identical(gmm_backend, "cpp")) "cpp_gmm_fit" else "torch_gmm_fit",
       runtime = runtime,
       tutorial_contract_id = tutorial_contract$contract_id,
       aggregation_contract_id = aggregation_contract$contract_id
@@ -1774,10 +1836,14 @@ if ("tutorial_k11" %in% requested_stages) {
     )
   }
   if (!tutorial_reusable) {
-    tutorial_k11_labels <- torch_gmm_predict(
-      tutorial_k11_model, x_cellcharter,
-      batch_size = batch_size, device = "auto"
-    )
+    tutorial_k11_labels <- if (identical(gmm_backend, "cpp")) {
+      tutorial_k11_model$labels
+    } else {
+      torch_gmm_predict(
+        tutorial_k11_model, x_cellcharter,
+        batch_size = batch_size, device = "auto"
+      )
+    }
     tutorial_checkpoint <- c(role_metadata(
       role_id = "r_tutorial_k11_sensitivity",
       role = paste(
@@ -1792,7 +1858,7 @@ if ("tutorial_k11" %in% requested_stages) {
       fit_id = tutorial_fit_id,
       tutorial_contract_id = tutorial_contract$contract_id,
       aggregation_contract_id = aggregation_contract$contract_id,
-      fit_function = "torch_gmm_fit",
+      fit_function = if (identical(gmm_backend, "cpp")) "cpp_gmm_fit" else "torch_gmm_fit",
       reference_call = "Cluster(n_clusters=11, random_state=12345)",
       reference_version = "CellCharter 0.2.0",
       reference_commit = "2a8fdde8213e32e5a00f1f9571bffd3dbb825a79"

@@ -12,7 +12,7 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-```{r setup, include=FALSE, purl=FALSE}
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>",
@@ -20,6 +20,7 @@ knitr::opts_chunk$set(
   fig.height = 6.5,
   dpi = 120
 )
+library(CellCharterR)
 project_root <- if (file.exists("DESCRIPTION")) {
   normalizePath(".")
 } else if (file.exists(file.path("..", "DESCRIPTION"))) {
@@ -176,7 +177,7 @@ spatial_graph <- SingleCellExperiment::colPair(
 dim(spatial_graph)
 ```
 
-```{r load-result, include=FALSE, purl=FALSE}
+```{r load-result, include=FALSE}
 library(CellCharterR)
 
 k4_result <- readRDS(extdata_file("mouse_spleen_k4_diff_nhood.rds"))
@@ -214,7 +215,7 @@ stronger positive enrichment; non-positive values remain in the stored result
 but are omitted from this display, following the CellCharter presentation.
 
 ```{r ecosystem-enrichment, fig.width=12, fig.height=8, fig.cap="Cell-type enrichment defining the four K=4 mouse-spleen spatial ecosystems.", fig.alt="Positive cell-type enrichment dot plot defining four K equals 4 mouse-spleen spatial ecosystems"}
-cellcharter_plot_enrichment(
+CellCharterR::cellcharter_plot_enrichment(
   k4_enrichment,
   title = "Cell types defining the K=4 spatial ecosystems"
 )
@@ -352,7 +353,7 @@ supported at that threshold. Arrow width is intentionally constant, so it does
 not create an additional visual claim about magnitude.
 
 ```{r default-network, fig.cap="Full mouse-spleen K=4 differential neighborhood-enrichment network. The two panels share identical node coordinates.", fig.alt="Two-panel K equals 4 differential neighborhood network showing both condition contrast directions with shared node positions"}
-cellcharter_plot_graph_diff(k4_result)
+CellCharterR::cellcharter_plot_graph_diff(k4_result)
 ```
 
 The graph is asymmetric: domain 0 -> domain 2 and domain 2 -> domain 0 are
@@ -365,7 +366,7 @@ Colors are presentation choices, not part of the statistical test. A single
 color applies to both panels; a named vector can assign one color per condition.
 
 ```{r custom-colours, fig.cap="The same result with user-supplied condition colors and the strongest four arrows retained independently per panel.", fig.alt="Differential neighborhood network with dark blue and dark red condition colors and four strongest arrows per panel"}
-cellcharter_plot_graph_diff(
+CellCharterR::cellcharter_plot_graph_diff(
   k4_result,
   edge_colours = c(BALBc = "#2166AC", MRL = "#B2182B"),
   top_n = 4
@@ -384,7 +385,7 @@ For exploratory multiplicity control, select a method supported by
 off-diagonal hypothesis before display filtering.
 
 ```{r supported-only, fig.cap="Edges supported by the raw directional empirical p-value threshold of 0.05.", fig.alt="Differential neighborhood network restricted to edges with raw directional empirical p values no greater than 0.05"}
-cellcharter_plot_graph_diff(
+CellCharterR::cellcharter_plot_graph_diff(
   k4_result,
   significant_only = TRUE,
   alpha = 0.05
@@ -427,7 +428,7 @@ spe <- cellcharter_diff_nhood_enrichment(
   result_name = "BALBc_vs_MRL"
 )
 
-cellcharter_plot_graph_diff(spe, result_name = "BALBc_vs_MRL")
+CellCharterR::cellcharter_plot_graph_diff(spe, result_name = "BALBc_vs_MRL")
 ```
 
 # Save the completed downstream analysis
@@ -437,7 +438,7 @@ graph. After adding domain labels, annotations, and downstream results, save a s
 analysis directory. This preserves the updated SPE and every CellCharterR result:
 
 ```{r save-completed-analysis, eval=FALSE}
-cellcharter_save_analysis(
+CellCharterR::cellcharter_save_analysis(
   spe,
   output_dir = "results/codex_mouse_spleen_completed",
   progress = TRUE

@@ -20,6 +20,7 @@
 /INSTALLATION_MANIFEST.md
 /INSTALLME.md
 /IMPLEMENTME.md
+/TASK.md
 
 # Local transitionR source data and generated SPE bundles
 /transitionR/*.h5ad

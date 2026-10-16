@@ -19,7 +19,12 @@ cellcharter_autok_fit(
   predict_args = list(),
   data_id = NULL,
   resume = TRUE,
-  cache_representation = c("none", "ram")
+  cache_representation = c("none", "ram"),
+  backend = c("torch", "cpp"),
+  workers = 1L,
+  threads_per_fit = 1L,
+  progress = TRUE,
+  checkpoint_mode = c("fit", "round", "none")
 )
 }
 \arguments{
@@ -66,6 +71,17 @@ from its first K.}
 \code{"ram"} to materialise only the observation-by-feature representation once
 as a CPU float32 Torch tensor and reuse it throughout AutoK. The latter can
 substantially accelerate repeated GPU fits and never materialises assays.}
+
+\item{backend}{GMM implementation. \code{"torch"} preserves the original path;
+\code{"cpp"} fits all requested K values for a run through \code{cpp_gmm_fit_many()}.}
+
+\item{workers, threads_per_fit}{Positive parallelism controls for the C++ backend.}
+
+\item{progress}{Whether to emit C++ round progress and estimated time remaining.}
+
+\item{checkpoint_mode}{Checkpoint granularity. \code{"fit"} writes the historical
+per-K artifacts; \code{"round"} writes one bundle after a complete C++ round;
+\code{"none"} performs no writes and retains every model and label vector in RAM.}
 }
 \value{
 A \code{cellcharter_autok} object containing stability, convergence

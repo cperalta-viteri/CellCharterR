@@ -12,9 +12,9 @@ test_that("AutoK caches current-round labels without changing stability", {
   reads <- 0L
   original_read_labels <- CellCharterR:::.autok_read_labels
   testthat::local_mocked_bindings(
-    .autok_read_labels = function(path, n_obs) {
+    .autok_read_labels = function(path, n_obs, k = NULL) {
       reads <<- reads + 1L
-      original_read_labels(path, n_obs)
+      original_read_labels(path, n_obs, k)
     },
     .package = "CellCharterR"
   )
