@@ -1,11 +1,11 @@
 ---
-title: "Finding spatial domains with CellCharterR"
+title: "Beginner workflow: finding spatial domains with CellCharterR"
 author: "Christian Peralta Viteri"
 output:
   BiocStyle::html_document:
     toc: true
 vignette: >
-  %\VignetteIndexEntry{Finding spatial domains with CellCharterR}
+  %\VignetteIndexEntry{01. Beginner workflow: finding spatial domains with CellCharterR}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -30,12 +30,17 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
 
 ## What this workflow does
 
-Spatial assays measure many cells while retaining each cell's position in a
-tissue. CellCharterR groups cells into **spatial domains**: regions whose cells
+This is the first CellCharterR tutorial. It introduces the complete workflow on
+a small object that is safe to run on an ordinary CPU. Continue afterwards to
+the [full mouse-spleen reproduction](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html),
+which applies the scientific protocol to all observations, and then to the
+[additional downstream analyses](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-differential-neighborhood-networks.html).
+
+Spatial assays measure many spots while retaining each spot's position in a
+tissue. CellCharterR groups spots into **spatial domains**: regions whose spots
 have similar molecular measurements and similar neighborhoods.
 
-This vignette uses a portable 1,000-segmented-cell CODEX teaching subset. Its
-observations are individual segmented cells, not transcriptomic capture spots. It is an exact seeded
+This vignette uses a portable 1,000-spot CODEX teaching subset. It is an exact seeded
 random subset of the canonical mouse-spleen object, but it is deliberately too
 small to reproduce or interpret the full biological result. Its purpose is to
 show the complete interface safely, offline, and on a CPU.
@@ -45,27 +50,27 @@ The workflow has five ideas:
 1. keep measurements, canonical spatial coordinates, annotations, and results
    together in one `SpatialExperiment` (SPE), a spatially aware subclass of
    `SingleCellExperiment`;
-2. connect nearby cells separately within each physical tissue section;
-3. summarize each cell and its graph neighborhoods;
+2. connect nearby spots separately within each physical tissue section;
+3. summarize each spot and its graph neighborhoods;
 4. repeat Gaussian-mixture clustering for candidate K values and choose a
    stable number of domains; and
 5. describe which cell types and domain-domain contacts are enriched.
 
 ### Short glossary
 
-- **Cell:** one measured observation and one column of the SPE.
+- **Spot:** one measured spatial observation and one column of the SPE.
 - **Marker:** a measured protein feature, stored as a row of the `protein`
   assay.
-- **Representation or embedding:** a compact numeric description of each cell;
+- **Representation or embedding:** a compact numeric description of each spot;
   this example uses the fixed published trVAE representation.
-- **Spatial graph:** links between nearby cells on the same physical slide.
+- **Spatial graph:** links between nearby spots on the same physical slide.
 - **Graph hop:** one step along that graph; two hops reach neighbors of direct
-  neighbors while excluding cells already reached sooner.
-- **Domain:** a cluster defined from a cell and its spatial neighborhood.
+  neighbors while excluding spots already reached sooner.
+- **Domain:** a cluster defined from a spot and its spatial neighborhood.
 - **Enrichment:** observed abundance or contact divided by its analytical
   expectation, displayed here as log2 fold change where stated.
 - **Biological replicate/library:** one independently sampled slide. It—not an
-  individual cell—is the permutation unit for condition comparisons.
+  individual spot—is the permutation unit for condition comparisons.
 
 ## Load and inspect the teaching object
 
@@ -75,7 +80,7 @@ spe <- cellcharter_mouse_spleen_tiny()
 spe
 ```
 
-Each column is a segmented cell. The `protein` assay contains marker intensities,
+Each column is a spatial spot. The `protein` assay contains marker intensities,
 `spatialCoords(spe)` contains canonical x/y positions, and `X_trVAE` is the
 fixed representation used by the published CellCharter tutorial.
 
@@ -85,6 +90,17 @@ SingleCellExperiment::reducedDimNames(spe)
 SpatialExperiment::spatialCoordsNames(spe)
 head(SummarizedExperiment::colData(spe)[, c("sample", "condition", "cell_type")])
 table(SummarizedExperiment::colData(spe)$sample)
+```
+
+For the compact teaching plots, `cell_type_reduced` is a precomputed grouping
+of closely related detailed `cell_type` labels. The full-data reports retain
+the complete 27-level annotation instead.
+
+```{r inspect-teaching-annotation}
+head(unique(data.frame(
+  detailed = as.character(spe$cell_type),
+  teaching_group = as.character(spe$cell_type_reduced)
+)))
 ```
 
 ## Run the workflow one stage at a time
@@ -145,10 +161,9 @@ saveRDS(spe, "checkpoints/spe_after_aggregation.rds", compress = FALSE)
 
 ### 3. Run AutoK and attach the selected domains
 
-The R Torch GMM/AutoK path demonstrated on this 1,000-observation teaching
-object is experimental for multi-million-spot datasets. At that scale, domains
-may instead be fitted with Python CellCharter and stored directly in `colData`
-or a one-column `reducedDim`; all downstream R analyses remain available.
+The call below records the exact compiled C++ settings that generated the
+packaged teaching result loaded later in this vignette. The settings are
+intentionally small for the 1,000-spot object.
 
 ```{r staged-clustering, eval=FALSE}
 spe <- cellcharter_cluster(
@@ -160,23 +175,23 @@ spe <- cellcharter_cluster(
   max_runs = 3L,
   convergence_tol = 0.01,
   seed = 1L,
-  fit_args = list(
-    batch_size = 256L,
-    max_iter = 20L,
-    device = "cpu",
-    num_threads = 1L
-  ),
-  predict_args = list(batch_size = 256L, device = "cpu")
+  backend = "cpp",
+  workers = 2L,
+  threads_per_fit = 1L,
+  checkpoint_mode = "none",
+  fit_args = list(max_iter = 20L),
+  resume = FALSE
 )
 ```
 
-If the run is interrupted, load the same object later and repeat the identical
-call with the same checkpoint directory and `resume = TRUE`. Completed fits are
-reused; only an unfinished fit is restarted.
+The packaged teaching run disables fit checkpoints because it finishes in
+seconds. For a longer analysis, use round-level checkpoints from the beginning.
+After an interruption, load the saved post-aggregation SPE and repeat the exact
+same call with `resume = TRUE`:
 
 ```{r resume-clustering, eval=FALSE}
 spe <- readRDS("checkpoints/spe_after_aggregation.rds")
-checkpoint_dir <- "checkpoints/tiny_autok"
+checkpoint_dir <- "checkpoints/tiny_autok_cpp_resumable"
 
 spe <- cellcharter_cluster(
   spe,
@@ -187,14 +202,23 @@ spe <- cellcharter_cluster(
   max_runs = 3L,
   convergence_tol = 0.01,
   seed = 1L,
-  fit_args = list(batch_size = 256L, max_iter = 20L, device = "cpu"),
-  predict_args = list(batch_size = 256L, device = "cpu"),
+  backend = "cpp",
+  workers = 2L,
+  threads_per_fit = 1L,
+  checkpoint_mode = "round",
+  fit_args = list(max_iter = 20L),
   resume = TRUE
 )
 ```
 
-Use `max_runs = 10L`, the default model iteration limit, and `device = "auto"`
-for a scientific analysis. The smaller values above only bound vignette work.
+Use `max_runs = 10L` and the default model iteration limit for a scientific
+analysis. The smaller values above only bound vignette work. For larger runs,
+choose `workers * threads_per_fit` no larger than the CPU
+threads and memory bandwidth available to the R session. Round-level
+checkpointing writes one atomic bundle after all K fits in a round finish; use
+`checkpoint_mode = "fit"` when preserving every completed K is more important
+than fitting K values concurrently. R Torch/CUDA remains available through
+`backend = "torch"`, but is experimental for multi-million-observation data.
 
 ### 4. Compute downstream statistics
 
@@ -241,8 +265,12 @@ spe <- cellcharter_workflow(
   autok_args = list(
     max_runs = 3L,
     convergence_tol = 0.01,
-    fit_args = list(batch_size = 256L, max_iter = 20L, device = "cpu"),
-    predict_args = list(batch_size = 256L, device = "cpu")
+    backend = "cpp",
+    workers = 2L,
+    threads_per_fit = 1L,
+    checkpoint_mode = "none",
+    fit_args = list(max_iter = 20L),
+    resume = FALSE
   )
 )
 ```
@@ -275,9 +303,9 @@ all(sample_id[S4Vectors::from(pairs)] == sample_id[S4Vectors::to(pairs)])
 ```
 
 `X_cellcharter_tiny` concatenates the original representation with exclusive
-one-, two-, and three-hop means. “Exclusive” means that a cell reached in one
+one-, two-, and three-hop means. “Exclusive” means that a spot reached in one
 hop is not counted again in the two-hop block. These features let the GMM
-distinguish cells with similar marker states but different tissue contexts.
+distinguish spots with similar marker states but different tissue contexts.
 
 ## Diagnose the choice of K
 
@@ -301,7 +329,7 @@ releases. The small compatibility branch below supports both APIs. We subset
 the SPE itself, so its native coordinates, annotations, and sample identifiers
 remain aligned automatically.
 
-```{r spatial-map, fig.cap="Spatial distribution of the teaching domain labels in the BALBc-1 and early MRL-4 slides.", fig.alt="Teaching domain labels plotted at spatial cell coordinates"}
+```{r spatial-map, fig.cap="Spatial distribution of the teaching domain labels in the BALBc-1 and early MRL-4 slides.", fig.alt="Teaching domain labels plotted at spatial spot coordinates"}
 display_spe <- spe[, spe$sample %in% c("BALBc-1", "MRL-4")]
 plot_function <- if ("plotCoords" %in% getNamespaceExports("ggspavis")) {
   getExportedValue("ggspavis", "plotCoords")
@@ -345,7 +373,7 @@ The cell-type result compares the observed cell-type proportion inside each
 domain with the cohort-wide expectation. Neighborhood enrichment is directed:
 row-domain contact with column-domain need not have the same normalized value
 as the reverse direction. Differential neighborhood enrichment permutes the
-condition assignment at the **sample/library level**, never cell by cell.
+condition assignment at the **sample/library level**, never spot by spot.
 
 ```{r result-tables}
 results <- S4Vectors::metadata(spe)$CellCharterR$results
@@ -447,7 +475,7 @@ resolution, not a biological truth.
 `spatialCoords()`, `colPairs()` endpoints, reduced dimensions, and `colData()`
 subset together with the SPE. Dataset-level fitted results in `metadata()`,
 however, no longer
-describe the subset. CellCharterR records ordered-cell digests and refuses to
+describe the subset. CellCharterR records ordered-observation digests and refuses to
 reuse such stages until they are recomputed.
 
 ```{r subsetting-safety}
@@ -461,11 +489,16 @@ try(cellcharter_aggregate(
 ))
 ```
 
+The displayed error is expected: it demonstrates that CellCharterR detects the
+changed ordered-observation identity and refuses to reuse a graph-stage contract from
+the 1,000-spot object on a 100-spot subset. Rebuild the graph on `smaller`
+before aggregating it.
+
 ## Moving to a real analysis
 
 The complete mouse-spleen analysis is the primary CellCharterR reproducibility
 report. It contains the full visible code, pinned versions, checkpoints,
-AutoK-selected K=4 result, separately labelled K=11 sensitivity analysis,
+compiled-C++ AutoK-selected K=10 result, separately labelled K=11 sensitivity analysis,
 cell-type enrichment, neighborhood enrichment, and differential neighborhood
 enrichment. [Open the complete mouse-spleen reproducibility report](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html).
 
@@ -485,7 +518,7 @@ disk and about 693.7 MiB after loading. Full AutoK repeats many GMM fits, so
 runtime is hardware- and K-range-dependent; use a durable checkpoint directory
 and resume completed fits rather than restarting. The preserved full report
 records the publication-scale parameters and limitations. If a stage fails,
-first inspect its recorded seed, cell-order digest, sample field, CPU thread
+first inspect its recorded seed, observation-order digest, sample field, CPU thread
 count, and checkpoint contract.
 
 ## References

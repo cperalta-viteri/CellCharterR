@@ -1,11 +1,11 @@
 ---
-title: "Loading large H5AD datasets as disk-backed SpatialExperiments"
+title: "Large-data workflow: loading H5AD as a disk-backed SpatialExperiment"
 author: "Christian Peralta Viteri"
 output:
   BiocStyle::html_document:
     toc: true
 vignette: >
-  %\VignetteIndexEntry{Loading large H5AD datasets as disk-backed SpatialExperiments}
+  %\VignetteIndexEntry{04. Large-data workflow: loading H5AD as a disk-backed SpatialExperiment}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -24,7 +24,33 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 ## Scope
 
-This is the second CellCharterR tutorial. It covers the disk-backed import and
+This is the fourth CellCharterR tutorial. Start with the
+[beginner workflow](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-beginner-workflow.html),
+then read the
+[full mouse-spleen reproduction](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html)
+and the
+[additional downstream tutorial](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-differential-neighborhood-networks.html)
+for the biological workflow.
+
+Choose the storage pattern before converting:
+
+| Need | Recommended function | What must travel with the SPE |
+|---|---|---|
+| General large H5AD, independent and relocatable | `cellcharter_import_h5ad()` | The complete output directory |
+| Reload an imported directory | `cellcharter_load_spe()` | The same complete directory |
+| Save an SPE plus later CellCharterR results | `cellcharter_save_analysis()` | The complete analysis directory |
+| Inspect the two pinned CODEX H5ADs in place | `read_codex_spe()` | Both original H5AD files |
+| One ordinary RDS containing selected arrays | Explicitly materialize those arrays | Enough RAM and disk for every selected field |
+
+For a large import, budget disk space at least comparable to the H5AD's
+uncompressed datasets plus temporary working space. `output_dir` must not
+already contain an unrelated conversion. An interrupted
+`cellcharter_import_h5ad()` call resumes its validated work; reuse the same
+source and output paths rather than deleting partial output. Before moving the
+result, confirm that `cellcharter_load_spe()` succeeds, then copy the entire
+directory—not an individual RDS or HDF5 file.
+
+This tutorial covers the disk-backed import and
 portable storage patterns needed for large H5AD spatial datasets. For a general
 large H5AD, `cellcharter_import_h5ad()` creates an independent, resumable directory
 without requiring Python, `anndataR`, `zellkonverter`, or R 4.5:
@@ -144,7 +170,7 @@ SpatialExperiment::spatialCoordsNames(spe)
 
 The protein assay and trVAE representation remain HDF5-backed. The canonical
 two-column `spatialCoords()` matrix is realized in memory (about 10.8 MiB for
-707,474 segmented cells), as required by `SpatialExperiment`; the large assay and
+707,474 spatial spots), as required by `SpatialExperiment`; the large assay and
 representation are not materialized. The reader validates global or
 sample-scoped cell identities and will not accept positional coincidence as
 proof of alignment.
@@ -173,11 +199,14 @@ This disk-backed object depends on the H5AD files staying at their recorded
 locations. It is appropriate for scalable computation, but it is not the
 portable distribution artifact.
 
-## Create a movable SpatialExperiment
+## Create a selected-field, in-memory RDS
 
-To move one object elsewhere and forget the H5AD files, explicitly realize the
-arrays as ordinary matrices and build a new object. This needs enough RAM for
-all selected fields.
+To create one ordinary RDS and forget the H5AD files, explicitly realize every
+field that the RDS must contain. The example below selects one assay and one
+reduced dimension. It is therefore a **selected-field export**, not a complete
+copy of an arbitrary AnnData hierarchy, and it needs enough RAM for the
+selected arrays. Use `cellcharter_import_h5ad()` when complete, disk-backed,
+relocatable preservation is required.
 
 ```{r portable, eval=FALSE}
 portable <- SpatialExperiment::SpatialExperiment(
@@ -197,18 +226,18 @@ portable <- SpatialExperiment::SpatialExperiment(
 saveRDS(portable, "CellCharterR_mouse_spleen_spe.rds")
 ```
 
-The validated canonical portable artifact is 286.0 MiB on disk and occupies
+The validated mouse-spleen selected-field artifact is 286.0 MiB on disk and occupies
 approximately 693.7 MiB after loading in R. Its SHA-256 is
 `d9adda271ad26aca5887a2d4f38feea8bb3a1503b561e34ee9f13df129371219`.
 It is deliberately not bundled inside the software package; the project must
 publish it as a separate data product before assigning a durable download URL.
 The packaged teaching `SpatialExperiment` retains the same deterministic 1,000
-cell identities and stores coordinates canonically in `spatialCoords()`.
+spot identities and stores coordinates canonically in `spatialCoords()`.
 
 The repository's
 `inst/scripts/make-codex-portable-and-tiny.R` additionally attaches the already
-checkpointed aggregate representation, K=4 primary labels, K=11 sensitivity
-labels, checksums, and a deterministic 1,000-segmented-cell subset. It does not recompute
+checkpointed aggregate representation, existing domain annotations, checksums,
+and a deterministic 1,000-spot subset. It does not recompute
 the full analysis.
 
 ## Provenance and licenses

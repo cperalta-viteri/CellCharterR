@@ -211,9 +211,10 @@ test_that("enrichment plotting accepts stored results and direct result lists", 
   spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
   result <- S4Vectors::metadata(spe)$CellCharterR$results$enrichment$value
 
-  expect_warning(
-    from_spe <- cellcharter_plot_enrichment(spe),
-    "unverified legacy freshness"
+  # The regenerated packaged workflow carries current freshness metadata, so
+  # plotting its stored result must not be treated as a legacy handoff.
+  expect_no_warning(
+    from_spe <- cellcharter_plot_enrichment(spe)
   )
   from_result <- cellcharter_plot_enrichment(result, title = "Tiny enrichment")
 

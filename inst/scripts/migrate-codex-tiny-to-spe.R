@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 
-# Rebuild only the portable 1,000-cell teaching object from the packaged H5AD
+# Rebuild only the portable 1,000-spot teaching object from the packaged H5AD
 # pair as a native SpatialExperiment. Existing full-data labels and aggregate
 # features are copied from the already validated tiny object; no full-data
 # graph, clustering, or downstream statistic is recomputed.

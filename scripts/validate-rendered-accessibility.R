@@ -7,7 +7,9 @@
 args <- commandArgs(trailingOnly = TRUE)
 html_paths <- if (length(args)) args else c(
   "docs/CellCharterR-beginner-workflow.html",
-  "docs/CellCharterR-mouse-spleen-reproducibility.html"
+  "docs/CellCharterR-mouse-spleen-reproducibility.html",
+  "docs/CellCharterR-differential-neighborhood-networks.html",
+  "docs/CellCharterR-h5ad-to-sce.html"
 )
 output_dir <- "results/accessibility_validation"
 
@@ -124,8 +126,10 @@ result <- list(
   all_alt_text_nonempty = TRUE,
   simulations = c("grayscale", "protanopia", "deuteranopia"),
   note = paste(
-    "Domain maps redundantly encode domain by point shape and colour;",
-    "all heatmaps and dot plots have accessible value tables in the HTML."
+    "Every embedded PNG has non-empty alternative text and was rendered to",
+    "grayscale, protanopia, and deuteranopia simulations for manual review.",
+    "Some scientific panels encode values primarily by colour; inspect the",
+    "underlying saved result objects when exact numeric values are required."
   )
 )
 saveRDS(result, file.path(output_dir, "accessibility_validation.rds"), version = 3L)

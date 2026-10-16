@@ -33,7 +33,7 @@ ids <- colnames(source)
 if (is.null(ids) || anyNA(ids) || anyDuplicated(ids)) {
   stop("The source SCE must have complete, unique cell identifiers.")
 }
-if (tiny_n > ncol(source)) stop("Tiny size exceeds the number of source cells.")
+if (tiny_n > ncol(source)) stop("Tiny size exceeds the number of source spots.")
 
 k11 <- readRDS(k11_rds)
 if (!identical(k11$cell_ids, ids) || length(k11$labels) != length(ids) || anyNA(k11$labels)) {
@@ -42,7 +42,7 @@ if (!identical(k11$cell_ids, ids) || length(k11$labels) != length(ids) || anyNA(
 
 col_data <- SummarizedExperiment::colData(source)
 if (!"r_domain" %in% colnames(col_data) || length(unique(col_data$r_domain)) != 4L) {
-  stop("The source checkpoint does not contain the validated primary K=4 labels.")
+  stop("The historical source checkpoint does not contain its validated K=4 labels.")
 }
 col_data$r_domain_k4 <- col_data$r_domain
 col_data$r_domain_k11_sensitivity <- factor(
@@ -126,7 +126,7 @@ saveRDS(portable, full_tmp, compress = "gzip", version = 3L)
 if (!file.rename(full_tmp, full_path)) stop("Could not publish the full portable SCE.")
 full_sha256 <- digest::digest(file = full_path, algo = "sha256", serialize = FALSE)
 
-# Select the teaching cells directly from the portable object, never from the
+# Select the teaching spots directly from the portable object, never from the
 # H5AD or a separately reconstructed representation.
 set.seed(tiny_seed)
 tiny_index <- sort(sample.int(ncol(portable), tiny_n, replace = FALSE))
@@ -155,7 +155,7 @@ manifest <- list(
     path = normalizePath(full_path),
     sha256 = full_sha256,
     size_bytes = file.info(full_path)$size,
-    cells = ncol(portable), features = nrow(portable)
+    spots = ncol(portable), features = nrow(portable)
   ),
   tiny = list(
     rds_path = normalizePath(tiny_rds),
@@ -163,7 +163,7 @@ manifest <- list(
     rds_sha256 = digest::digest(file = tiny_rds, algo = "sha256", serialize = FALSE),
     rda_sha256 = digest::digest(file = "data/codex_mouse_spleen_tiny.rda",
                                 algo = "sha256", serialize = FALSE),
-    cells = tiny_n, seed = tiny_seed, cell_ids = tiny_ids
+    spots = tiny_n, seed = tiny_seed, spot_ids = tiny_ids
   )
 )
 saveRDS(manifest, file.path(output_dir, "portable_data_manifest.rds"))
@@ -171,4 +171,4 @@ saveRDS(manifest, file.path(output_dir, "portable_data_manifest.rds"))
 cat("Full portable SpatialExperiment:", full_path, "\n")
 cat("Full SHA-256:", full_sha256, "\n")
 cat("Tiny packaged SpatialExperiment: data/codex_mouse_spleen_tiny.rda\n")
-cat("Tiny cells:", tiny_n, "seed:", tiny_seed, "\n")
+cat("Tiny spots:", tiny_n, "seed:", tiny_seed, "\n")

@@ -183,7 +183,7 @@ result <- list(
   ),
   external_seed_or_path_matches = forbidden,
   tiny = list(
-    cells = ncol(tiny),
+    spots = ncol(tiny),
     cell_order_sha256 = tiny_info$cell_order_sha256,
     exact_assay_match = TRUE,
     exact_reduced_dim_match = TRUE,

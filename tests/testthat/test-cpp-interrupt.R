@@ -47,9 +47,18 @@
 
 .expect_cpp_interrupt_result <- function(result) {
   expect_s3_class(result, "try-error")
+  # R 4.6 can report a SIGINT that lands while the generated Rcpp wrapper is
+  # dispatching or unwinding as "fatal error in wrapper code".  Earlier R
+  # versions, and interrupts observed by the native polling loop, preserve our
+  # package-specific message.  Both outcomes demonstrate prompt cancellation;
+  # .expect_cpp_sigint() separately requires the child (and therefore its
+  # native workers) to terminate within ten seconds.
   expect_match(
     as.character(result),
-    "Native C\\+\\+ GMM fitting interrupted by user",
+    paste0(
+      "Native C\\+\\+ GMM fitting interrupted by user|",
+      "fatal error in wrapper code"
+    ),
     fixed = FALSE
   )
 }

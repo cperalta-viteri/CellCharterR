@@ -14,7 +14,7 @@
   neighborhood enrichment.
 - Added strict ordered-cell identity checks, `colPairs()` graph storage,
   synchronized subsetting tests, and stale-stage detection.
-- Added a portable 1,000-segmented-cell CODEX teaching SPE and exact miniature H5AD import
+- Added a portable 1,000-spot CODEX teaching SPE and exact miniature H5AD import
   fixtures under CC BY 4.0 attribution.
 - Added a CPU-only beginner vignette over K=2 through K=10, an H5AD-to-SCE
   conversion vignette, and the preserved full mouse-spleen reproducibility
@@ -22,7 +22,7 @@
 - Added a movable, separately distributed full mouse-spleen SPE checkpoint with
   no H5AD or HDF5Array dependency.
 - Added `cellcharter_plot_graph_diff()` for deterministic two-panel directed
-  differential-neighborhood networks, together with a full mouse-spleen K=4
+  differential-neighborhood networks, together with a full mouse-spleen K=10
   illustrative vignette and rendered HTML.
 - Added block-aware authors-style AUCell zonation with disk-backed score
   access, compact patient-level results, optional spot-level zone labels, and

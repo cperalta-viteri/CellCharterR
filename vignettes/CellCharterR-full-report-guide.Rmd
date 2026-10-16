@@ -1,0 +1,54 @@
+---
+title: "Full mouse-spleen reproduction report"
+author: "CellCharterR contributors"
+output:
+  BiocStyle::html_document:
+    toc: true
+vignette: >
+  %\VignetteIndexEntry{02. Full mouse-spleen reproduction report}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+## What this report establishes
+
+The full report reproduces the downstream CellCharter workflow from the fixed
+published mouse-spleen trVAE representation. It documents the sample-local
+graph, neighborhood aggregation, compiled C++ AutoK search, independently
+selected K=10 primary result, separately labelled compiled C++ K=11 sensitivity result, cell-type
+enrichment, and condition-specific and differential neighborhood enrichment.
+It does not claim that CellCharterR regenerated the trVAE representation.
+
+The expensive analysis is not rerun during package installation. Its rendered
+HTML contains the preserved code, parameters, provenance, figures, and
+limitations. Open either copy:
+
+- [Installed report](../reports/CellCharterR-mouse-spleen-reproducibility.html)
+- [Public report](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html)
+
+## Preserved roles
+
+K=10 is the primary resolution selected by the compiled C++ AutoK stability
+analysis. The stability curve retains the other peaks so users can inspect
+alternative resolutions. K=11 is a standalone tutorial-matched compiled C++
+sensitivity fit; it is neither the AutoK selection nor the published H5AD label
+vector. The report keeps these roles separate and validates ordered-spot
+identity before combining artifacts.
+
+For a small runnable introduction, return to the
+[beginner workflow](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-beginner-workflow.html).
+For supported downstream analysis from existing domains, continue to the
+[differential-neighborhood tutorial](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-differential-neighborhood-networks.html).
+
+```{r locate-installed-report}
+report <- system.file(
+  "reports", "CellCharterR-mouse-spleen-reproducibility.html",
+  package = "CellCharterR"
+)
+stopifnot(nzchar(report), file.exists(report))
+basename(report)
+```
+
+```{r session-info}
+sessionInfo()
+```

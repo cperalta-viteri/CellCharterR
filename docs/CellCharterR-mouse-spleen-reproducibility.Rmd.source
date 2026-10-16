@@ -1,6 +1,6 @@
 ---
-title: "Experimental CellCharterR mouse-spleen analysis: AutoK primary and standalone K=11 sensitivity"
-author: "CellCharterR second-review revision"
+title: "Full downstream mouse-spleen reproduction: compiled C++ AutoK and K=11 sensitivity"
+author: "CellCharterR contributors"
 date: "`r format(Sys.time(), '%Y-%m-%d %H:%M UTC', tz = 'UTC')`"
 output:
   html_document:
@@ -9,7 +9,7 @@ output:
     number_sections: true
     code_folding: show
 params:
-  result_dir: "results/CellCharterR_mouse_spleen_v2/second_review_deliverables"
+  result_dir: "results/CellCharterR_mouse_spleen_cpp_v1/report_artifacts"
 ---
 
 ```{r setup, include=FALSE}
@@ -29,16 +29,14 @@ if (!grepl("^/", requested_result_dir)) {
   requested_result_dir <- file.path(project_root, requested_result_dir)
 }
 result_dir <- normalizePath(requested_result_dir, winslash = "/", mustWork = TRUE)
-manifest <- readRDS(file.path(result_dir, "CellCharterR_primary_K11_manifest.rds"))
+manifest <- readRDS(file.path(result_dir, "CellCharterR_cpp_manifest.rds"))
 stopifnot(
   identical(manifest$tool, "CellCharterR"),
-  identical(manifest$roles$Primary$role_id, "r_autok_primary"),
-  identical(manifest$roles$TutorialK11$role_id, "r_tutorial_k11_sensitivity"),
+  identical(manifest$backend, "compiled-cpp-double"),
+  identical(manifest$roles$Primary$role_id, "r_cpp_autok_primary"),
+  identical(manifest$roles$TutorialK11$role_id, "r_cpp_tutorial_k11_sensitivity"),
   identical(manifest$roles$TutorialK11$seed, 12345L),
-  identical(
-    manifest$roles$PublishedH5ADReference$role_id,
-    "published_h5ad_reference"
-  ),
+  identical(manifest$primary_k, 10L),
   identical(manifest$displayed_samples, c("BALBc-1", "MRL-4")),
   file.exists(manifest$autok_stability_plot),
   identical(manifest$enrichment_plot_parameters$group_key, "cell_type"),
@@ -175,41 +173,117 @@ plot_heatmap <- function(x, title, limits = NULL, annotate = FALSE,
 }
 ```
 
-> **Experimental workflow.** This preserved report documents the complete R
-> Torch GMM/AutoK reproduction. That clustering path is experimental for very
-> large datasets because it can be substantially slower than Python
-> CellCharter. The main tutorial uses these precomputed domains for supported R
-> graph, enrichment, differential, and plotting workflows.
+> **Scope and provenance.** This preserved report starts from the fixed
+> published trVAE representation and reproduces the downstream graph,
+> aggregation, AutoK/GMM, enrichment, and proximity stages. It is not a claim
+> of end-to-end representation equivalence. Every domain figure and downstream
+> result in this report was generated from the completed compiled C++ CPU run.
+> R Torch/CUDA remains available as an experimental alternative.
+
+> **Static report.** The installed HTML is self-contained scientific evidence.
+> Its source is archival and expects the preserved result directory named in
+> `params$result_dir`; it is not intended to rerun a full-data analysis during
+> package installation.
+
+This is the second CellCharterR tutorial and the complete scientific
+reproduction report. New users should first read the
+[beginner workflow](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-beginner-workflow.html).
+The next tutorial demonstrates
+[additional downstream analyses](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-differential-neighborhood-networks.html)
+from the preserved C++ K=10 result.
 
 # Scope and artifact roles
 
-This report consumes regenerated outputs under a new result root. The frozen
-Phase-0 report and artifacts are provisional/stale and are not used here. The
-primary result is whatever K the R AutoK run selected independently; it is never
-fixed to K=4 or K=11. The K=11 panel is a separate `torch_gmm_fit()` sensitivity
-fit corresponding to `Cluster(n_clusters=11, random_state=12345)`. Its integer
-seed is matched, but R and Python use different initialization and random-number
-streams, so this does not claim seed-identical fitted parameters. Published H5AD
-`cluster_cellcharter` labels are retained only as a third reference artifact and
-are not plotted as the R tutorial fit.
+This report consumes the completed compiled-C++ outputs. Earlier provisional
+outputs are not used here. The
+primary result is K=10, selected independently by the compiled C++ AutoK run
+over the predeclared range K=2 through K=20. The K=11 panel is a separate
+compiled C++ sensitivity fit corresponding to the tutorial's requested
+resolution and seed 12345. The C++ and Python implementations use different
+initialization and random-number streams, so this does not claim seed-identical
+fitted parameters. Published H5AD `cluster_cellcharter` labels are not plotted
+as either R result.
 
-```{r roles, echo=TRUE, eval=FALSE}
+```{r roles, echo=TRUE}
 role_table <- do.call(rbind, lapply(manifest$roles, function(x) data.frame(
   role_id = x$role_id,
   k = x$k,
   seed = if (is.na(x$seed)) "NA (not an R fit)" else as.character(x$seed),
-  model_path = if (is.na(x$model_path)) "NA (published labels)" else x$model_path,
-  cell_order_sha256 = x$cell_order_sha256,
-  aggregation_data_id = x$aggregation_data_id,
   stringsAsFactors = FALSE
 )))
 knitr::kable(role_table, caption = "Non-interchangeable analysis roles")
+```
+
+```{r provenance-summary, echo=TRUE}
+provenance <- data.frame(
+  field = c(
+    "Backend", "CellCharter reference", "Reference commit", "Analysis graph",
+    "Spots", "Libraries", "Displayed slides", "AutoK elapsed"
+  ),
+  value = c(
+    manifest$backend, manifest$reference_version, manifest$reference_commit,
+    manifest$graph_source, format(manifest$spots, big.mark = ","),
+    length(manifest$samples), paste(manifest$displayed_samples, collapse = ", "),
+    sprintf("%.1f minutes", manifest$autok$elapsed_seconds / 60)
+  )
+)
+knitr::kable(provenance, caption = "Compact provenance for the preserved analysis")
 ```
 
 Only BALBc-1 and early MRL-4 are displayed in maps. Enrichment and proximity
 statistics use all nine libraries. The full `cell_type` annotation is used for
 the log2 observed/expected dot plot with `size_threshold=0.58`,
 `color_threshold=0.58`, and the CellCharter v0.2.0 default clustered labels.
+
+## Full mouse-spleen before/after benchmark
+
+```{r full-benchmark, echo=TRUE}
+format_duration <- function(seconds) {
+  hours <- floor(seconds / 3600)
+  minutes <- floor((seconds %% 3600) / 60)
+  secs <- round(seconds %% 60)
+  sprintf("%dh %02dm %02ds", hours, minutes, secs)
+}
+
+benchmark_table <- data.frame(
+  implementation = c(
+    manifest$benchmark$legacy$backend,
+    manifest$benchmark$cpp$backend
+  ),
+  spatial_spots = format(manifest$benchmark$spots, big.mark = ","),
+  features = manifest$benchmark$features,
+  AutoK_rounds = manifest$benchmark$rounds,
+  GMM_fits = manifest$benchmark$fits,
+  observed_wall_time = c(
+    paste0(">= ", format_duration(
+      manifest$benchmark$legacy$elapsed_lower_bound_seconds
+    )),
+    format_duration(manifest$benchmark$cpp$elapsed_seconds)
+  ),
+  execution = c(
+    paste0(manifest$benchmark$legacy$device, "; sequential K fits"),
+    paste0(
+      manifest$benchmark$cpp$workers, " workers x ",
+      manifest$benchmark$cpp$threads_per_fit, " threads"
+    )
+  ),
+  check.names = FALSE
+)
+knitr::kable(
+  benchmark_table,
+  caption = "Observed timing for the same first five AutoK rounds (K=1 through K=21)"
+)
+```
+
+For 707,474 spatial spots and 40 aggregated features, the compiled C++ run
+completed the same 105-fit, five-round comparison window at least
+`r sprintf("%.1f", manifest$benchmark$speedup_lower_bound)` times faster. The
+legacy time is a conservative lower bound reconstructed from completed
+checkpoint timestamps, whereas the C++ duration was recorded by the runner.
+This is an observed workflow comparison, not a controlled microbenchmark: the
+backends use different initializers and numerical engines. The comparison is
+therefore evidence of the practical wall-time improvement, not a claim that
+both optimizers produce identical fitted parameters.
 
 # From input SPE to saved results
 
@@ -249,14 +323,21 @@ full_spe <- cellcharter_cluster(
   full_spe,
   representation = "X_cellcharter",
   candidate_k = 2:20,
-  checkpoint_dir = "results/CellCharterR_mouse_spleen_v2/autok",
+  checkpoint_dir = "results/CellCharterR_mouse_spleen_cpp_v1/unused-no-checkpoints",
   domain_col = "cellcharter_domain",
   max_runs = 10L,
   convergence_tol = 0.01,
-  seed = 1L,
-  fit_args = list(device = "auto", batch_size = 8192L),
-  predict_args = list(device = "auto", batch_size = 8192L),
-  resume = TRUE
+  seed = 0L,
+  backend = "cpp",
+  workers = 8L,
+  threads_per_fit = 4L,
+  checkpoint_mode = "none",
+  fit_args = list(
+    max_iter = 100L,
+    tolerance = 0.001,
+    covariance_regularization = 1e-6
+  ),
+  resume = FALSE
 )
 
 full_spe <- cellcharter_enrichment(
@@ -277,7 +358,8 @@ full_spe <- cellcharter_diff_nhood_enrichment(
   sample_col = "sample",
   condition_groups = c("BALBc", "MRL"),
   n_perms = 100L,
-  seed = 1L
+  seed = 0L,
+  permutation_mode = "cellcharter_v0.2.0"
 )
 
 saveRDS(
@@ -286,11 +368,12 @@ saveRDS(
 )
 ```
 
-## Resume AutoK after an interruption
+## Optional resumable compiled C++ run
 
-Keep the post-aggregation SPE and AutoK directory together. Days or weeks
-later, repeat the exact clustering call with
-`resume = TRUE`; completed `run_*.rds` fits are reused.
+The measured 38-minute run above used `checkpoint_mode = "none"` to avoid all
+fit-checkpoint I/O. If interruption recovery is more important, use a new
+directory and `checkpoint_mode = "round"`; repeat this exact call with
+`resume = TRUE` after an interruption.
 
 ```{r full-resume-workflow, eval=FALSE}
 full_spe <- readRDS(
@@ -301,16 +384,26 @@ full_spe <- cellcharter_cluster(
   full_spe,
   representation = "X_cellcharter",
   candidate_k = 2:20,
-  checkpoint_dir = "results/CellCharterR_mouse_spleen_v2/autok",
+  checkpoint_dir = "results/CellCharterR_mouse_spleen_cpp_resumable/autok",
   domain_col = "cellcharter_domain",
   max_runs = 10L,
   convergence_tol = 0.01,
-  seed = 1L,
-  fit_args = list(device = "cuda", batch_size = 16384L),
-  predict_args = list(device = "cuda", batch_size = 32768L),
+  seed = 0L,
+  backend = "cpp",
+  workers = 8L,
+  threads_per_fit = 4L,
+  checkpoint_mode = "round",
+  fit_args = list(
+    max_iter = 100L, tolerance = 0.001,
+    covariance_regularization = 1e-6
+  ),
   resume = TRUE
 )
 ```
+
+The resume call is deliberately identical to the original fit call. Changing
+the backend, seed, candidate range, or numerical settings creates a different
+fit contract and must use a new checkpoint directory.
 
 ## Optional compact wrapper
 
@@ -324,7 +417,7 @@ full_spe <- cellcharter_workflow(
   full_spe,
   group_col = "cell_type",
   candidate_k = 2:20,
-  checkpoint_dir = "results/CellCharterR_mouse_spleen_v2/autok",
+  checkpoint_dir = "results/CellCharterR_mouse_spleen_cpp_v1/unused-no-checkpoints",
   representation = "X_trVAE",
   sample_col = "sample",
   condition_col = "condition",
@@ -333,7 +426,17 @@ full_spe <- cellcharter_workflow(
   n_layers = 3L,
   condition_groups = c("BALBc", "MRL"),
   n_perms = 100L,
-  seed = 1L
+  seed = 0L,
+  autok_args = list(
+    backend = "cpp",
+    workers = 8L,
+    threads_per_fit = 4L,
+    checkpoint_mode = "none",
+    fit_args = list(
+      max_iter = 100L, tolerance = 0.001,
+      covariance_regularization = 1e-6
+    )
+  )
 )
 ```
 
@@ -341,13 +444,16 @@ full_spe <- cellcharter_workflow(
 # AutoK stability and K selection
 
 The points are all saved neighboring-K Fowlkes--Mallows comparisons from the
-seven repeated fits; the line is their mean. K=1 is shown as non-estimable
+five repeated fits; the line is their mean. AutoK stopped before the requested
+maximum of ten runs because the final stability change was 0.00793, below the
+predeclared `convergence_tol = 0.01`. K=1 is shown as non-estimable
 because this criterion requires fitted solutions on both neighboring K values.
-K=4 is the independently selected global maximum. K=11 is annotated only as
-the predeclared tutorial-matched sensitivity and lies on the secondary K=10--11
-stability shoulder.
+K=10 is the independently selected global maximum. Other local peaks remain
+visible because stability is a resolution diagnostic, not a command to ignore
+biologically useful alternatives. K=11 is annotated as the predeclared
+tutorial-matched sensitivity on the neighboring stability shoulder.
 
-```{r autok-stability, echo=TRUE, out.width="100%", fig.alt="Mouse-spleen neighboring-K Fowlkes-Mallows stability from K=1 through K=20; K=4 is selected and K=11 is highlighted"}
+```{r autok-stability, echo=TRUE, out.width="100%", fig.cap="Compiled C++ neighboring-K Fowlkes--Mallows stability for the full mouse-spleen analysis. K=10 is the independently selected primary resolution; K=11 is highlighted as the tutorial-matched sensitivity resolution, while other local peaks remain visible.", fig.alt="Mouse-spleen compiled C++ neighboring-K Fowlkes-Mallows stability from K 2 through K 20; K 10 is selected, K 11 is highlighted, and other peaks remain visible"}
 knitr::include_graphics(manifest$autok_stability_plot)
 ```
 
@@ -365,7 +471,7 @@ primary_balbc_mrl <- readRDS(primary_paths[["differential_balbc_mrl"]])
 
 ## BALBc-1 and early MRL-4 domains
 
-```{r primary-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Primary K=4 spatial domains on BALBc-1 and early MRL-4"}
+```{r primary-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.cap="Compiled C++ AutoK-primary K=10 spatial domains in the BALBc-1 and early MRL-4 slides.", fig.alt="Compiled C++ primary K 10 spatial domains on BALBc-1 and early MRL-4"}
 primary_spe <- map_to_spe(primary_map, primary_k)
 ggspavis::plotCoords(
   primary_spe,
@@ -385,13 +491,13 @@ ggspavis::plotCoords(
 ```{r primary-map-table, echo=TRUE, eval=FALSE}
 knitr::kable(
   as.data.frame(table(sample = primary_map$sample, domain = primary_map$domain)),
-  caption = "Accessible cell counts underlying the primary domain maps"
+  caption = "Accessible spot counts underlying the primary domain maps"
 )
 ```
 
 ## Cluster ~ full cell type dot plot (log2 observed/expected)
 
-```{r primary-dotplot, echo=TRUE, fig.width=18, fig.height=9, fig.alt="Positive cell-type enrichment by primary K=4 domain; darker and larger red points indicate stronger positive log2 fold change"}
+```{r primary-dotplot, echo=TRUE, fig.width=18, fig.height=9, fig.cap="Positive cell-type enrichment in the compiled C++ primary K=10 domains. Darker and larger red points indicate stronger positive log2 fold change.", fig.alt="Positive cell-type enrichment by compiled C++ primary K 10 domain; darker and larger red points indicate stronger positive log2 fold change"}
 graphics::par(mar = c(18, 6, 3, 1))
 CellCharterR::cellcharter_plot_enrichment(
   primary_enrichment,
@@ -410,7 +516,7 @@ knitr::kable(primary_enrichment_table,
 
 ## BALBc and MRL neighborhood enrichment
 
-```{r primary-nhood, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at primary K=4"}
+```{r primary-nhood, echo=TRUE, fig.width=12, fig.height=5.5, fig.cap="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at the compiled C++ primary K=10 resolution.", fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at compiled C++ primary K 10"}
 graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
 plot_heatmap(
   primary_nhood$BALBc$enrichment, "Healthy spleen — BALBc",
@@ -437,7 +543,7 @@ Both panels reuse one sample-level permutation result (`n_perms=100`). A star
 marks directional empirical `p <= 0.05`; reversing the display negates only the
 effect and reuses the same permutation counts and p-values.
 
-```{r primary-differential, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="Differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed BALBc minus MRL display"}
+```{r primary-differential, echo=TRUE, fig.width=12, fig.height=5.5, fig.cap="Compiled C++ primary K=10 differential directed neighborhood enrichment in both MRL-minus-BALBc and BALBc-minus-MRL display directions.", fig.alt="Compiled C++ primary K 10 differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed BALBc minus MRL display"}
 graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
 plot_heatmap(
   primary_mrl_balbc$effect, "MRL vs BALBc", annotate = TRUE,
@@ -458,6 +564,31 @@ knitr::kable(primary_diff_table,
 
 # Standalone tutorial-matched K=11 sensitivity analysis
 
+The C++ K=11 sensitivity was one standalone fit, not an AutoK selection and not
+the published H5AD labels. These are the exact historical settings used to
+generate its preserved labels:
+
+```{r k11-fit-code, eval=FALSE}
+full_spe <- cellcharter_cluster_fixed(
+  full_spe,
+  representation = "X_cellcharter",
+  n_clusters = 11L,
+  domain_col = "cellcharter_domain_k11_sensitivity",
+  checkpoint_dir = "results/CellCharterR_mouse_spleen_v2/tutorial_k11_standalone",
+  seed = 12345L,
+  fit_args = list(
+    max_iter = 100L,
+    tolerance = 0.001,
+    covariance_regularization = 1e-6,
+    num_threads = 4L
+  ),
+  predict_args = list(),
+  fit_fun = cpp_gmm_fit,
+  predict_fun = cpp_gmm_predict,
+  resume = TRUE
+)
+```
+
 ```{r k11-load, echo=TRUE}
 k11_paths <- manifest$artifacts$TutorialK11
 k11_map <- readRDS(k11_paths[["map_input"]])
@@ -469,7 +600,7 @@ k11_balbc_mrl <- readRDS(k11_paths[["differential_balbc_mrl"]])
 
 ## BALBc-1 and early MRL-4 domains
 
-```{r k11-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.alt="K=11 sensitivity spatial domains on BALBc-1 and early MRL-4"}
+```{r k11-maps, echo=TRUE, fig.width=12, fig.height=5.5, fig.cap="Tutorial-matched K=11 sensitivity domains in the BALBc-1 and early MRL-4 slides.", fig.alt="K=11 sensitivity spatial domains on BALBc-1 and early MRL-4"}
 k11_spe <- map_to_spe(k11_map, 11L)
 ggspavis::plotCoords(
   k11_spe,
@@ -489,13 +620,13 @@ ggspavis::plotCoords(
 ```{r k11-map-table, echo=TRUE, eval=FALSE}
 knitr::kable(
   as.data.frame(table(sample = k11_map$sample, domain = k11_map$domain)),
-  caption = "Accessible cell counts underlying the K=11 domain maps"
+  caption = "Accessible spot counts underlying the K=11 domain maps"
 )
 ```
 
 ## Cluster ~ full cell type dot plot (log2 observed/expected)
 
-```{r k11-dotplot, echo=TRUE, fig.width=18, fig.height=10, fig.alt="Positive cell-type enrichment by K=11 sensitivity domain; darker and larger red points indicate stronger positive log2 fold change"}
+```{r k11-dotplot, echo=TRUE, fig.width=18, fig.height=10, fig.cap="Positive cell-type enrichment in the tutorial-matched K=11 sensitivity domains. Darker and larger red points indicate stronger positive log2 fold change.", fig.alt="Positive cell-type enrichment by K=11 sensitivity domain; darker and larger red points indicate stronger positive log2 fold change"}
 graphics::par(mar = c(18, 6, 3, 1))
 CellCharterR::cellcharter_plot_enrichment(
   k11_enrichment,
@@ -514,7 +645,7 @@ knitr::kable(k11_enrichment_table,
 
 ## BALBc and MRL neighborhood enrichment
 
-```{r k11-nhood, echo=TRUE, fig.width=14, fig.height=7, fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at K=11"}
+```{r k11-nhood, echo=TRUE, fig.width=14, fig.height=7, fig.cap="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at the K=11 sensitivity resolution.", fig.alt="Directed observed-minus-expected neighborhood enrichment for BALBc and MRL at K=11"}
 graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
 plot_heatmap(
   k11_nhood$BALBc$enrichment, "Healthy spleen — BALBc (K=11)",
@@ -537,7 +668,7 @@ knitr::kable(k11_nhood_table,
 
 ## Differential neighborhood enrichment in both display directions
 
-```{r k11-differential, echo=TRUE, fig.width=15, fig.height=7.5, fig.alt="K=11 differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed display"}
+```{r k11-differential, echo=TRUE, fig.width=15, fig.height=7.5, fig.cap="K=11 sensitivity differential directed neighborhood enrichment in both MRL-minus-BALBc and BALBc-minus-MRL display directions.", fig.alt="K=11 differential directed neighborhood enrichment shown as MRL minus BALBc and the reversed display"}
 graphics::par(mfrow = c(1, 2), mar = c(5, 5, 3, 1))
 plot_heatmap(
   k11_mrl_balbc$effect, "MRL vs BALBc (K=11)", annotate = TRUE,

@@ -1,5 +1,5 @@
 ---
-title: "Mouse-spleen downstream analysis with CellCharterR"
+title: "Additional downstream analysis: differential neighborhood networks"
 author: "CellCharterR contributors"
 date: "`r format(Sys.Date(), '%Y-%m-%d')`"
 output:
@@ -7,7 +7,7 @@ output:
     toc: true
     toc_float: true
 vignette: >
-  %\VignetteIndexEntry{Mouse-spleen downstream analysis with CellCharterR}
+  %\VignetteIndexEntry{03. Additional downstream analysis: differential neighborhood networks}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -38,17 +38,23 @@ extdata_file <- function(filename) {
 
 # Purpose
 
-This is the primary CellCharterR tutorial. It starts from the official CODEX
+This is the third CellCharterR tutorial. Begin with the
+[beginner workflow](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-beginner-workflow.html),
+then consult the
+[full mouse-spleen reproduction](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-mouse-spleen-reproducibility.html)
+for graph construction, aggregation, AutoK, and both reported resolutions.
+
+This tutorial starts from the official CODEX
 mouse-spleen datasets, shows their `SpatialExperiment` representation, prepares
 a biologically useful dominant cell-type annotation, and demonstrates the
-supported downstream workflow using the independently selected **K = 4**
+additional downstream workflow using the compiled C++ AutoK-selected **K = 10**
 domains. The expensive full-data results are loaded from preserved package
 artifacts, so installation and vignette rendering never rerun clustering or
 the 100 sample-level permutations.
 
-The R Torch GMM/AutoK implementation is experimental for very large datasets.
-This tutorial therefore assumes that domain labels have already been computed
-and stored in `colData(spe)` or a `reducedDim`. Graph construction, enrichment,
+The compiled C++ CPU GMM/AutoK backend is the supported path used for these
+saved domains. This tutorial starts after clustering, with labels stored in
+`colData(spe)` or a `reducedDim`. Graph construction, enrichment,
 neighborhood enrichment, differential testing, and plotting remain native R
 workflows.
 
@@ -67,8 +73,9 @@ returns a native `SpatialExperiment`. It does not require Python, `anndataR`,
 needed after the directory has been validated.
 
 The code is not executed while building this vignette because the official
-mouse-spleen H5AD is hundreds of MiB. The second tutorial gives the complete
-download, checksum, and large-data storage details.
+mouse-spleen H5AD is hundreds of MiB. The
+[large-data workflow](https://cperalta-viteri.github.io/CellCharterR/docs/CellCharterR-h5ad-to-sce.html)
+gives the complete download, checksum, and storage details.
 
 ```{r import-full-spe, eval=FALSE}
 library(CellCharterR)
@@ -90,7 +97,7 @@ spe <- cellcharter_load_spe(spe_dir)
 methods::validObject(spe)
 ```
 
-The migrated full object contains 707,474 segmented cells. Protein expression,
+The migrated full object contains 707,474 spatial spots. Protein expression,
 AUCell-like score matrices, and supplied embeddings can remain disk-backed.
 AnnData `obs` variables become `colData`, `obsm` matrices become reduced
 dimensions, and spatial coordinates use the native `spatialCoords()` slot.
@@ -104,8 +111,8 @@ SingleCellExperiment::reducedDimNames(spe)
 SpatialExperiment::spatialCoordsNames(spe)
 SingleCellExperiment::colPairNames(spe)
 
-# Labels saved in AnnData.obs are immediately ordinary SPE variables.
-table(spe$cellcharter_domain_k4)
+# The released H5AD carries the published K=11 reference labels.
+table(spe$cluster_cellcharter)
 ```
 
 After the graph and precomputed domain labels are added, the recommended object
@@ -113,59 +120,45 @@ organization is:
 
 ```text
 class: SpatialExperiment
-dimensions: 29 proteins × 707,474 segmented cells
+dimensions: 29 proteins × 707,474 spatial spots
 assays: protein (disk-backed)
 spatialCoords: spatial (x, y)
 reducedDims: X_trVAE, X_cellcharter
-colData: sample, condition, cell_type, dominant_cell_type,
-         cellcharter_domain_k4
-colPairs: spatial_connectivities, spatial_distances
+colData: sample, condition, cell_type, cluster_cellcharter,
+         cellcharter_domain_cpp_k10 (attached below)
+colPairs: spatial_connectivities, spatial_distances,
+          cellcharter_graph_pinned_global (rebuilt below)
 metadata: CellCharterR results and provenance
 ```
 
-The domain labels do not require a special registration function. When the
-completed AnnData stores them in `obs`, migration places them directly in
-`colData(spe)`. Downstream functions read `domain_col` from there, from a
-one-column `reducedDim`, or from an unambiguous named reducedDim column.
+Domain labels do not require a special registration function. Migration places
+the published H5AD's `cluster_cellcharter` variable directly in `colData(spe)`.
+The independently selected C++ K=10 labels are a different result, so the next
+section attaches their preserved, order-validated package artifact under a new
+name. Downstream functions can read `domain_col` from `colData`, a one-column
+`reducedDim`, or an unambiguous named reducedDim column.
 
-# Assign a dominant cell type
+# Use the detailed assigned cell type
 
-The CODEX H5AD already contains a detailed per-cell annotation. For readable
-domain enrichment, closely related dendritic, stromal, and residual labels are
-collapsed into a dominant cell-type variable. This is an annotation step, not
-a CellCharter clustering step.
+The CODEX H5AD already contains one detailed assigned cell type per segmented
+cell. That `cell_type` field is the exact annotation used to generate the
+preserved 27-row enrichment artifact below. No relabelling or collapsing is
+performed in this reproduction.
 
-```{r dominant-cell-type, eval=FALSE}
-dominant_cell_type <- as.character(spe$cell_type)
-
-collapsed <- c(
-  "CD4(+)CD8(-)cDC" = "DCs",
-  "CD4(-)CD8(+)cDC" = "DCs",
-  "CD4(-)CD8(-) cDC" = "DCs",
-  "CD106(+)CD16/32(+)CD31(+) stroma" = "stroma",
-  "CD106(+)CD16/32(+)CD31(-)Ly6C(-) stroma" = "stroma",
-  "CD106(-)CD16/32(-)Ly6C(+)CD31(+) stroma" = "stroma",
-  "ERTR7(+) stroma" = "stroma",
-  "CD3(+) other markers (-)" = "other",
-  "CD106(+)CD16/32(-)Ly6C(+)CD31(+)" = "other",
-  "CD106(-)CD16/32(+)Ly6C(+)CD31(-)" = "other",
-  "noid" = "other",
-  "CD4(+)MHCII(+)" = "other",
-  "capsule" = "other"
-)
-
-replacement <- unname(collapsed[dominant_cell_type])
-dominant_cell_type[!is.na(replacement)] <- replacement[!is.na(replacement)]
-spe$dominant_cell_type <- factor(dominant_cell_type)
-table(spe$dominant_cell_type)
+```{r assigned-cell-type, eval=FALSE}
+stopifnot("cell_type" %in% colnames(SummarizedExperiment::colData(spe)))
+table(spe$cell_type)
 ```
 
-# Reuse the imported spatial graph
+# Preserve the imported graph and reconstruct the primary-analysis graph
 
-The migration preserves AnnData `obsp["spatial_connectivities"]` and
-`obsp["spatial_distances"]` as named SPE `colPairs`. Therefore, this downstream
-workflow uses the exact precomputed graph and does not rebuild it from the
-coordinates.
+Migration preserves AnnData `obsp["spatial_connectivities"]` and
+`obsp["spatial_distances"]` as named SPE `colPairs`; the first block verifies
+that handoff. The released H5AD graph, however, applies a 99th-percentile edge
+cutoff within each sample. The preserved C++ K=10 result used sample-local
+Delaunay graphs followed by one global 99th-percentile cutoff, matching the
+pinned CellCharter 0.2.0 implementation. These graphs are both retained, but
+they are not interchangeable.
 
 ```{r inspect-imported-graph, eval=FALSE}
 SingleCellExperiment::colPairNames(spe)
@@ -177,12 +170,56 @@ spatial_graph <- SingleCellExperiment::colPair(
 dim(spatial_graph)
 ```
 
+Reconstruct the exact graph contract used by the C++ K=10 downstream artifacts:
+
+```{r reconstruct-primary-graph, eval=FALSE}
+spe <- cellcharter_graph(
+  spe,
+  spatial = "spatial",
+  sample_col = "sample",
+  graph_name = "cellcharter_graph_pinned_global",
+  percentile = 99
+)
+```
+
+# Attach the independently selected C++ K=10 labels
+
+The released H5AD stores the publication's K=11 labels, not the independent R
+K=10 result. CellCharterR therefore ships the compact C++ K=10 label vector with an
+ordered-cell SHA-256 digest. The assignment stops rather than silently pairing
+labels with a differently ordered SPE.
+
+```{r attach-k4-labels, eval=FALSE}
+cpp_labels <- readRDS(
+  system.file(
+    "extdata", "mouse_spleen_cpp_k10_labels.rds",
+    package = "CellCharterR", mustWork = TRUE
+  )
+)
+observed_order <- digest::digest(
+  as.character(colnames(spe)), algo = "sha256"
+)
+stopifnot(
+  length(cpp_labels$labels) == ncol(spe),
+  identical(observed_order, cpp_labels$cell_order_sha256),
+  identical(cpp_labels$k, 10L),
+  identical(cpp_labels$backend, "compiled-cpp-double"),
+  identical(
+    cpp_labels$graph_source,
+    "R-native Qhull with pinned CellCharter 0.2.0 global cutoff"
+  )
+)
+spe$cellcharter_domain_cpp_k10 <- factor(cpp_labels$labels, levels = 0:9)
+```
+
 ```{r load-result, include=FALSE}
 library(CellCharterR)
 
-k4_result <- readRDS(extdata_file("mouse_spleen_k4_diff_nhood.rds"))
+cpp_result <- readRDS(extdata_file("mouse_spleen_cpp_k10_diff_nhood.rds"))
 
-k4_enrichment <- readRDS(extdata_file("mouse_spleen_k4_enrichment.rds"))
+cpp_enrichment <- readRDS(extdata_file("mouse_spleen_cpp_k10_enrichment.rds"))
+
+cpp_labels <- readRDS(extdata_file("mouse_spleen_cpp_k10_labels.rds"))
 
 ```
 
@@ -192,17 +229,34 @@ pinned CellCharter 0.2.0 compatibility mode.
 
 # Compute cell-type enrichment
 
-With dominant cell types and precomputed K=4 domains in the SPE, the complete
+With detailed cell types and precomputed C++ K=10 domains in the SPE, the complete
 computation is one call. This code is shown but not rerun here; the following
-figure loads its preserved result.
+figure loads its preserved result. The visible checks make the loaded
+artifact's biological grouping and permutation contract explicit.
 
 ```{r compute-enrichment, eval=FALSE}
 spe <- cellcharter_enrichment(
   spe,
-  group_col = "dominant_cell_type",
-  domain_col = "cellcharter_domain_k4",
+  group_col = "cell_type",
+  domain_col = "cellcharter_domain_cpp_k10",
   result_name = "cell_type_enrichment",
   log2_fold_change = TRUE
+)
+```
+
+```{r verify-precomputed-contract}
+stopifnot(
+  nrow(cpp_enrichment$enrichment) == 27L,
+  identical(cpp_labels$k, 10L),
+  identical(cpp_labels$backend, "compiled-cpp-double"),
+  identical(cpp_result$params$n_perms, 100L),
+  identical(cpp_result$params$seed, 0L),
+  identical(cpp_result$params$library_unit, "sample")
+)
+c(
+  domains = cpp_labels$k,
+  detailed_cell_types = nrow(cpp_enrichment$enrichment),
+  permutations = cpp_result$params$n_perms
 )
 ```
 
@@ -214,15 +268,15 @@ cell-type enrichment as log2 fold change. Darker and larger red points indicate
 stronger positive enrichment; non-positive values remain in the stored result
 but are omitted from this display, following the CellCharter presentation.
 
-```{r ecosystem-enrichment, fig.width=12, fig.height=8, fig.cap="Cell-type enrichment defining the four K=4 mouse-spleen spatial ecosystems.", fig.alt="Positive cell-type enrichment dot plot defining four K equals 4 mouse-spleen spatial ecosystems"}
+```{r ecosystem-enrichment, fig.width=12, fig.height=8, fig.cap="Cell-type enrichment defining the ten compiled C++ K=10 mouse-spleen spatial ecosystems.", fig.alt="Positive cell-type enrichment dot plot defining ten compiled C++ K 10 mouse-spleen spatial ecosystems"}
 CellCharterR::cellcharter_plot_enrichment(
-  k4_enrichment,
-  title = "Cell types defining the K=4 spatial ecosystems"
+  cpp_enrichment,
+  title = "Cell types defining the compiled C++ K=10 spatial ecosystems"
 )
 ```
 
 These enrichment profiles provide the biological context for the numbered
-nodes below: each network node is one of these four spatial ecosystems, not an
+nodes below: each network node is one of these ten spatial ecosystems, not an
 individual cell type.
 
 # Spatial-neighborhood enrichment in healthy and lupus spleen
@@ -232,7 +286,7 @@ observed-minus-expected matrices for BALBc and MRL. The heatmaps below show the
 condition-specific directed neighborhood enrichment before taking their
 contrast. Rows are central ecosystems and columns are their neighbors.
 
-```{r condition-neighborhood-heatmaps, fig.width=12, fig.height=5.8, fig.cap="Directed K=4 spatial-neighborhood enrichment in healthy BALBc and lupus MRL mouse spleen.", fig.alt="Side-by-side heatmaps of directed spatial neighborhood enrichment in BALBc and MRL mouse spleen"}
+```{r condition-neighborhood-heatmaps, fig.width=12, fig.height=5.8, fig.cap="Directed compiled C++ K=10 spatial-neighborhood enrichment in healthy BALBc and lupus MRL mouse spleen.", fig.alt="Side-by-side heatmaps of directed compiled C++ K 10 spatial neighborhood enrichment in BALBc and MRL mouse spleen"}
 neighborhood_long <- function(x, condition) {
   value <- as.data.frame(as.table(x), stringsAsFactors = FALSE)
   names(value) <- c("source", "target", "enrichment")
@@ -242,8 +296,8 @@ neighborhood_long <- function(x, condition) {
 }
 
 condition_neighborhood <- rbind(
-  neighborhood_long(k4_result$enrichment$BALBc, "Healthy — BALBc"),
-  neighborhood_long(k4_result$enrichment$MRL, "Lupus — MRL")
+  neighborhood_long(cpp_result$enrichment$BALBc, "Healthy — BALBc"),
+  neighborhood_long(cpp_result$enrichment$MRL, "Lupus — MRL")
 )
 neighborhood_limit <- max(abs(condition_neighborhood$enrichment), na.rm = TRUE)
 
@@ -277,8 +331,8 @@ condition, and sample/library identifiers. Sample is the permutation unit.
 ```{r compute-differential, eval=FALSE}
 spe <- cellcharter_diff_nhood_enrichment(
   spe,
-  graph_name = "spatial_connectivities",
-  domain_col = "cellcharter_domain_k4",
+  graph_name = "cellcharter_graph_pinned_global",
+  domain_col = "cellcharter_domain_cpp_k10",
   condition_col = "condition",
   sample_col = "sample",
   condition_groups = c("BALBc", "MRL"),
@@ -297,7 +351,7 @@ that effect while retaining the same directional empirical p-values. Rows are
 source ecosystems and columns are neighboring target ecosystems. A star marks
 an empirical `p <= 0.05` from the 100 sample-level permutations.
 
-```{r contrast-heatmaps, fig.width=12, fig.height=5.8, fig.cap="Full K=4 differential neighborhood-enrichment matrices in both display directions.", fig.alt="Side-by-side heatmaps of the BALBc minus MRL and MRL minus BALBc differential neighborhood enrichment matrices"}
+```{r contrast-heatmaps, fig.width=12, fig.height=5.8, fig.cap="Full compiled C++ K=10 differential neighborhood-enrichment matrices in both display directions.", fig.alt="Side-by-side heatmaps of the compiled C++ K 10 BALBc minus MRL and MRL minus BALBc differential neighborhood enrichment matrices"}
 contrast_long <- function(effect, pvalue, contrast) {
   value <- as.data.frame(as.table(effect), stringsAsFactors = FALSE)
   names(value) <- c("source", "target", "effect")
@@ -312,8 +366,8 @@ contrast_long <- function(effect, pvalue, contrast) {
 }
 
 contrast_heatmaps <- rbind(
-  contrast_long(k4_result$effect, k4_result$pvalue, "BALBc minus MRL"),
-  contrast_long(-k4_result$effect, k4_result$pvalue, "MRL minus BALBc")
+  contrast_long(cpp_result$effect, cpp_result$pvalue, "BALBc minus MRL"),
+  contrast_long(-cpp_result$effect, cpp_result$pvalue, "MRL minus BALBc")
 )
 effect_limit <- max(abs(contrast_heatmaps$effect), na.rm = TRUE)
 
@@ -352,8 +406,8 @@ threshold; dashed arrows are retained effects that are not statistically
 supported at that threshold. Arrow width is intentionally constant, so it does
 not create an additional visual claim about magnitude.
 
-```{r default-network, fig.cap="Full mouse-spleen K=4 differential neighborhood-enrichment network. The two panels share identical node coordinates.", fig.alt="Two-panel K equals 4 differential neighborhood network showing both condition contrast directions with shared node positions"}
-CellCharterR::cellcharter_plot_graph_diff(k4_result)
+```{r default-network, fig.cap="Full mouse-spleen compiled C++ K=10 differential neighborhood-enrichment network. The two panels share identical node coordinates.", fig.alt="Two-panel compiled C++ K 10 differential neighborhood network showing both condition contrast directions with shared node positions"}
+CellCharterR::cellcharter_plot_graph_diff(cpp_result)
 ```
 
 The graph is asymmetric: domain 0 -> domain 2 and domain 2 -> domain 0 are
@@ -367,7 +421,7 @@ color applies to both panels; a named vector can assign one color per condition.
 
 ```{r custom-colours, fig.cap="The same result with user-supplied condition colors and the strongest four arrows retained independently per panel.", fig.alt="Differential neighborhood network with dark blue and dark red condition colors and four strongest arrows per panel"}
 CellCharterR::cellcharter_plot_graph_diff(
-  k4_result,
+  cpp_result,
   edge_colours = c(BALBc = "#2166AC", MRL = "#B2182B"),
   top_n = 4
 )
@@ -386,7 +440,7 @@ off-diagonal hypothesis before display filtering.
 
 ```{r supported-only, fig.cap="Edges supported by the raw directional empirical p-value threshold of 0.05.", fig.alt="Differential neighborhood network restricted to edges with raw directional empirical p values no greater than 0.05"}
 CellCharterR::cellcharter_plot_graph_diff(
-  k4_result,
+  cpp_result,
   significant_only = TRUE,
   alpha = 0.05
 )
@@ -394,17 +448,16 @@ CellCharterR::cellcharter_plot_graph_diff(
 
 # Illustrative interpretation
 
-In this K = 4 result, the largest positive displayed effect is the directed
-association from domain 1 to domain 2, favoring BALBc. At the raw threshold of
-0.05, three BALBc-favored arrows are retained and no MRL-favored arrow passes
-the same threshold. A recorded p-value of zero means that none of the 100
+In this C++ K=10 result, direction, effect size, and empirical support must be
+read together. A recorded p-value of zero means that none of the 100
 reference-compatible permutation draws was as extreme; it does **not** mean
-that the probability is literally zero.
+that the probability is literally zero. The complete heatmaps should be
+inspected before applying the network's display filters.
 
 These domain numbers do not themselves identify cell types or mechanisms.
 Biological interpretation should combine this network with the corresponding
 spatial maps, cell-type enrichment results, sample-level consistency, and the
-known limitations of the K = 4 domain resolution. The figure is therefore a
+known limitations of the K=10 domain resolution. The figure is therefore a
 diagnostic summary of the computed differential neighborhood result, not proof
 of a causal interaction.
 
@@ -412,13 +465,13 @@ of a causal interaction.
 
 The following code documents where the plotted differential result originates,
 but it is not run when the vignette is built. It starts from the full SPE with
-precomputed domains; it does not invoke R Torch GMM or AutoK.
+precomputed domains; it does not rerun the compiled C++ GMM or AutoK.
 
 ```{r reproduce-result, eval=FALSE}
 spe <- cellcharter_diff_nhood_enrichment(
   spe,
-  graph_name = "spatial_connectivities",
-  domain_col = "cellcharter_domain_k4",
+  graph_name = "cellcharter_graph_pinned_global",
+  domain_col = "cellcharter_domain_cpp_k10",
   condition_col = "condition",
   sample_col = "sample",
   condition_groups = c("BALBc", "MRL"),
@@ -434,7 +487,8 @@ CellCharterR::cellcharter_plot_graph_diff(spe, result_name = "BALBc_vs_MRL")
 # Save the completed downstream analysis
 
 The import directory is the independent starting SPE, including its imported
-graph. After adding domain labels, annotations, and downstream results, save a separate completed
+graph. After adding the validated C++ K=10 labels, the pinned-global graph, and
+downstream results, save a separate completed
 analysis directory. This preserves the updated SPE and every CellCharterR result:
 
 ```{r save-completed-analysis, eval=FALSE}

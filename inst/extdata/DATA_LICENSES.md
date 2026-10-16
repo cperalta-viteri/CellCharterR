@@ -16,6 +16,17 @@
 - CellCharter method: Varrone et al. (2024), DOI
   `10.1038/s41588-023-01588-4`.
 
-`codex_mouse_spleen_tiny` is a deterministic 1,000-segmented-cell CODEX derivative distributed
+`codex_mouse_spleen_tiny` is a deterministic 1,000-spot CODEX derivative distributed
 under the same CC BY 4.0 attribution terms. It is intended for teaching and
 software validation, not biological inference.
+
+`mouse_spleen_k4_enrichment.rds` and `mouse_spleen_k4_diff_nhood.rds` are
+historical compact derived outputs from that same CODEX data. They are
+distributed under the same CC BY 4.0 attribution terms and retain their
+CellCharterR/reference provenance within the objects or the archived report.
+
+`mouse_spleen_cpp_k10_labels.rds`, `mouse_spleen_cpp_k10_enrichment.rds`, and
+`mouse_spleen_cpp_k10_diff_nhood.rds` are the corresponding compact outputs
+from the completed compiled-C++ AutoK primary result. They use the same CODEX
+attribution terms and record the backend, ordered-cell identity, graph contract,
+and pinned CellCharter reference in the label artifact and rendered report.
