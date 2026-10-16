@@ -321,6 +321,60 @@ cellcharter_plot_autok_stability(autok, k_range = 2:10) +
   ggplot2::theme_minimal(base_size = 16)
 ```
 
+### Save the completed AutoK search and revisit another K
+
+`checkpoint_mode = "none"` disables writes *while AutoK is running*; it does
+not discard a successful search. After `cellcharter_cluster()` returns, the SPE
+contains the selected labels in `colData()` and the complete AutoK result in
+`metadata()`. For a no-checkpoint run, that result is self-contained: it keeps
+the lowest-negative-log-likelihood model and labels for every fitted K. Save
+the returned SPE before ending the R session:
+
+```{r save-completed-autok, eval=FALSE}
+saveRDS(
+  spe,
+  "checkpoints/spe_after_autok.rds",
+  compress = FALSE
+)
+
+# Saving only AutoK is also possible when the spatial object is stored elsewhere.
+autok <- S4Vectors::metadata(spe)$CellCharterR$autok$tiny_domain
+saveRDS(autok, "checkpoints/tiny_autok_complete.rds", compress = FALSE)
+```
+
+The stability curve can then be inspected in a later session without fitting
+the GMMs again:
+
+```{r reload-completed-autok, eval=FALSE}
+spe <- readRDS("checkpoints/spe_after_autok.rds")
+autok <- S4Vectors::metadata(spe)$CellCharterR$autok$tiny_domain
+
+cellcharter_autok_best_k(autok)
+cellcharter_plot_autok_stability(autok, k_range = 2:10)
+```
+
+Suppose the stability plot motivates inspecting K=4 even though AutoK selected
+another resolution. AutoK already fitted K=4, so the best K=4 labels can be
+attached under a new `colData()` name without repeating the search:
+
+```{r reuse-alternative-k, eval=FALSE}
+k4_model <- cellcharter_autok_model(autok, k = 4L)
+k4_labels <- k4_model$labels
+stopifnot(length(k4_labels) == ncol(spe), !anyNA(k4_labels))
+
+spe$tiny_domain_k4 <- factor(
+  k4_labels,
+  levels = sort(unique(k4_labels))
+)
+table(spe$tiny_domain_k4)
+```
+
+This recovery is available only after the call completes and the returned SPE
+or AutoK object is saved. If R is interrupted during a no-checkpoint search,
+the unfinished work is lost. Use `checkpoint_mode = "round"` or `"fit"` when
+mid-run recovery is required; in those modes, retain the checkpoint directory
+because the AutoK result refers to its fitted-model artifacts.
+
 ## Map the teaching domains
 
 `ggspavis` plots annotations directly from a `SpatialExperiment`. Its current
