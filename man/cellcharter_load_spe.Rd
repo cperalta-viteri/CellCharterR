@@ -4,10 +4,42 @@
 \alias{cellcharter_load_spe}
 \title{Load a movable disk-backed SpatialExperiment}
 \usage{
-cellcharter_load_spe(path)
+cellcharter_load_spe(
+  path,
+  verify = c("auto", "full", "none"),
+  legacy_import_spec = NULL,
+  materialize_block_mib = 64,
+  max_materialized_gib = getOption("CellCharterR.import.max_materialized_gib", Inf),
+  progress = interactive()
+)
 }
 \arguments{
 \item{path}{Directory created by \code{\link[=cellcharter_import_h5ad]{cellcharter_import_h5ad()}}.}
+
+\item{verify}{Integrity verification mode. \code{"auto"} (the default) trusts the
+size and modification-time fingerprint recorded when the SHA-256 was
+computed, and re-hashes after that fingerprint changes (for example after
+a normal file copy). \code{"full"} always performs a complete sequential read
+and is the mode for adversarial cryptographic verification. \code{"none"}
+skips cryptographic verification. Even in \code{"none"} mode, file size, HDF5
+structure, and object validity are checked during reconstruction.}
+
+\item{legacy_import_spec}{Optional named list describing the original
+converter arguments for a format-1 directory, whose manifest predates
+recorded import recipes. It must contain \code{assay_path}, \code{assay_name},
+\code{obs_columns}, \code{var_columns}, \code{spatial_path}, \code{reduced_dims},
+\code{aucell_path}, and \code{sample_column}. Omit it for historical defaults.}
+
+\item{materialize_block_mib}{Maximum target size of each temporary block used
+while reading coordinates and embeddings into native matrices.}
+
+\item{max_materialized_gib}{Optional safety limit for the conservative peak
+estimate for native metadata, coordinates, embeddings, graphs, R-object
+overhead, and bounded import workspaces. The count assay is excluded
+because it remains HDF5-backed. Defaults to the
+\code{CellCharterR.import.max_materialized_gib} option or \code{Inf}.}
+
+\item{progress}{Whether to display column- and block-level import progress.}
 }
 \value{
 A valid disk-backed \code{SpatialExperiment}.

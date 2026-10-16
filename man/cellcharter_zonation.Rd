@@ -60,5 +60,6 @@ Adapts the equal-depth zonal enrichment mechanics used by Simkin et al. to
 ordered, mutually exclusive zones defined from AUCell programs. Scores are
 standardized separately within each patient/block. The strongest positive
 zone program assigns each spot; spots without a positive zone score remain
-unassigned. This analysis does not use spatial distance or a graph.
+unassigned. This analysis does not use spatial distance or a graph. Stored
+score, block, and parameter fingerprints prevent plotting stale results.
 }

@@ -13,7 +13,11 @@ cellcharter_import_h5ad(h5ad_file, output_dir, ...)
 conversion manifest. Move these files together.}
 
 \item{...}{Additional importer arguments such as \code{sample_column},
-\code{reduced_dims}, and \code{chunk_mib}.}
+\code{reduced_dims}, \code{chunk_mib}, \code{materialize_block_mib},
+\code{max_materialized_gib}, \code{source_verification}, and \code{progress}.
+\code{source_verification = "sampled"} is fast and assumes the source remains
+stable while copying; \code{"full"} performs an additional complete source read
+and requires its SHA-256 to equal the independent clone before publication.}
 }
 \value{
 A disk-backed \code{SpatialExperiment}.
@@ -21,7 +25,21 @@ A disk-backed \code{SpatialExperiment}.
 \description{
 The complete H5AD is cloned byte-for-byte into a resumable directory before a
 \code{\link[SpatialExperiment:SpatialExperiment]{SpatialExperiment::SpatialExperiment()}} is constructed. Large arrays remain
-on disk. Python, reticulate, anndataR, and zellkonverter are not required.
+on disk. A SHA-256 of the independent \code{arrays.h5} artifact is recorded before
+publication. Python, reticulate, anndataR, and zellkonverter are not required.
+}
+\details{
+The disk-backed importer deliberately accepts dense HDF5 datasets for the
+assay, spatial coordinates, and reduced dimensions. Sparse \code{X} and sparse or
+matrix-form AUCell \code{obsm} entries fail with an actionable error instead of
+being silently materialised or omitted.
+
+The count assay is the only HDF5-backed slot in the returned object.
+\code{colData}, \code{rowData}, spatial coordinates, reduced dimensions (including
+AUCell), imported \code{SelfHits} graphs, and \code{uns} locator metadata are native R
+objects. The importer reports both raw-payload and conservative peak-memory
+estimates before allocating these slots and reads matrices and graphs in
+bounded blocks without creating a second full transposed matrix.
 }
 \examples{
 \dontrun{

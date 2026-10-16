@@ -78,6 +78,35 @@ test_that("Torch CPU initialization is chunk-invariant and matches legacy qualit
   expect_lte(objective(small), objective(legacy) * 1.02 + 1e-6)
 })
 
+test_that("Torch initialization is stable under a large common translation", {
+  skip_if_not_installed("torch")
+  x <- torch_kmeans_fixture()
+  dev <- torch_gmm_device("cpu")
+  run <- function(value) {
+    .rc_torch_stream_kmeans(
+      .rc_reader(value), 3L, 47L, 123L, dev, max_iter = 30L
+    )
+  }
+  baseline <- run(x)
+  shifted <- run(x + 1e6)
+  labels <- function(value, result) {
+    max.col(-.rc_kmeans_distances(value, result$means), ties.method = "first")
+  }
+
+  expect_true(baseline$converged)
+  expect_true(shifted$converged)
+  expect_equal(
+    cellcharter_fowlkes_mallows(
+      labels(x, baseline), labels(x + 1e6, shifted)
+    ),
+    1, tolerance = 1e-7
+  )
+  # At 1e6, adjacent float32 values are 0.0625 apart. Agreement below two
+  # representable steps verifies numerical stability without demanding
+  # precision that the selected backend cannot represent.
+  expect_equal(shifted$means - 1e6, baseline$means, tolerance = 0.125)
+})
+
 test_that("Torch CUDA initialization repeats and agrees with Torch CPU", {
   skip_if_not_installed("torch")
   if (identical(Sys.getenv("CELLCHARTERR_CPU_ONLY"), "true")) {
@@ -96,6 +125,10 @@ test_that("Torch CUDA initialization repeats and agrees with Torch CPU", {
   cpu <- run("cpu", 47L)
   cuda <- run("cuda", 47L)
   repeated_cuda <- run("cuda", 47L)
+  shifted_cuda <- .rc_torch_stream_kmeans(
+    .rc_reader(x + 1e4), 3L, 47L, 123L, torch_gmm_device("cuda"),
+    max_iter = 30L
+  )
 
   expect_identical(repeated_cuda$means, cuda$means)
   expect_equal(
@@ -107,6 +140,13 @@ test_that("Torch CUDA initialization repeats and agrees with Torch CPU", {
   cuda_labels <- max.col(-.rc_kmeans_distances(x, cuda$means), ties.method = "first")
   expect_equal(
     cellcharter_fowlkes_mallows(cpu_labels, cuda_labels), 1,
+    tolerance = 1e-7
+  )
+  shifted_labels <- max.col(
+    -.rc_kmeans_distances(x + 1e4, shifted_cuda$means), ties.method = "first"
+  )
+  expect_equal(
+    cellcharter_fowlkes_mallows(cpu_labels, shifted_labels), 1,
     tolerance = 1e-7
   )
 })

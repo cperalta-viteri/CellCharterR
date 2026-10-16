@@ -9,9 +9,11 @@ cpp_gmm_log_likelihood(model, newdata, batch_size = 8192L)
 \arguments{
 \item{model}{A model returned by \code{\link[=cpp_gmm_fit]{cpp_gmm_fit()}}.}
 
-\item{newdata}{Numeric observation-by-feature matrix.}
+\item{newdata}{Numeric observation-by-feature matrix or \code{DelayedMatrix}.}
 
-\item{batch_size}{Maximum rows scored at once.}
+\item{batch_size}{Maximum rows read and scored at once. Label prediction
+retains only one \code{batch_size}-by-K score block in memory; posterior
+prediction explicitly returns the complete observation-by-K matrix.}
 }
 \value{
 Mean per-observation log likelihood.

@@ -31,7 +31,9 @@ one-column reducedDim, or an unambiguous column name inside a reducedDim.}
 The updated \code{SingleCellExperiment}.
 }
 \description{
-Attach CellCharter neighborhood enrichment to an SCE
+The stored result fingerprints the weighted graph, domain annotations, and
+analysis parameters so stale results can be detected without materializing
+the complete graph.
 }
 \examples{
 example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)

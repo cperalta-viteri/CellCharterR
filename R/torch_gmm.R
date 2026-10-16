@@ -68,6 +68,22 @@ torch_gmm_device <- function(device = c("auto", "cuda", "cpu")) {
     stop("Every block of `x` must be a numeric matrix with a stable feature dimension.", call. = FALSE)
   if (!isTRUE(reader$trusted) && any(!is.finite(value)))
     stop("`x` contains non-finite values; impute or remove them before fitting the GMM.", call. = FALSE)
+  # R matrices are usually double precision, whereas the Torch backend is
+  # deliberately float32 for CellCharter/PyCave parity. Detect overflow before
+  # conversion so it is reported as an input problem rather than as repeated
+  # Cholesky failures later in EM.
+  float32_max <- 3.4028234663852886e38
+  if (!isTRUE(reader$trusted) && any(abs(value) > float32_max)) {
+    observed <- max(abs(value))
+    stop(sprintf(
+      paste0(
+        "`x` contains magnitude %.6g, outside the finite float32 range ",
+        "(maximum %.6g) required by the Torch GMM; centre or rescale the ",
+        "representation before fitting."
+      ),
+      observed, float32_max
+    ), call. = FALSE)
+  }
   value
 }
 
@@ -450,11 +466,46 @@ torch_gmm_sample_rows <- function(x, n = 10000L, seed = 1L) {
   })
 }
 
+.rc_select_gpu_name <- function(value, visible = "") {
+  if (!length(value)) return(NA_character_)
+  fields <- strsplit(as.character(value), ",", fixed = TRUE)
+  fields <- lapply(fields, trimws)
+  valid <- lengths(fields) >= 3L
+  if (!any(valid)) return(NA_character_)
+  fields <- fields[valid]
+  index <- vapply(fields, `[[`, character(1L), 1L)
+  uuid <- vapply(fields, `[[`, character(1L), 2L)
+  name <- vapply(fields, function(x) paste(x[-c(1L, 2L)], collapse = ","),
+                 character(1L))
+  selector <- strsplit(as.character(visible %||% ""), ",", fixed = TRUE)[[1L]][1L]
+  selector <- trimws(selector)
+  # `strsplit("")[[1L]][1L]` is NA on supported R releases.  An unset or
+  # empty CUDA_VISIBLE_DEVICES means the first device returned by nvidia-smi,
+  # not a literal device named "NA".
+  if (!length(selector) || is.na(selector) || !nzchar(selector)) {
+    return(name[[1L]])
+  }
+  selected <- if (grepl("^[0-9]+$", selector)) {
+    which(index == selector)
+  } else {
+    which(uuid == selector | startsWith(uuid, selector) |
+            startsWith(selector, uuid))
+  }
+  if (length(selected)) return(name[[selected[[1L]]]])
+  # Never report physical GPU 0 when CUDA exposes a UUID/MIG device that the
+  # physical-device query cannot resolve.
+  paste0("visible CUDA device ", selector)
+}
+
 .rc_gpu_name <- function(cuda) {
   if (!cuda || !nzchar(Sys.which("nvidia-smi"))) return(NA_character_)
-  value <- try(system2("nvidia-smi", c("--query-gpu=name", "--format=csv,noheader"),
-                       stdout = TRUE, stderr = FALSE), silent = TRUE)
-  if (inherits(value, "try-error") || !length(value)) NA_character_ else value[[1L]]
+  value <- try(system2(
+    "nvidia-smi",
+    c("--query-gpu=index,uuid,name", "--format=csv,noheader"),
+    stdout = TRUE, stderr = FALSE
+  ), silent = TRUE)
+  if (inherits(value, "try-error")) return(NA_character_)
+  .rc_select_gpu_name(value, Sys.getenv("CUDA_VISIBLE_DEVICES", ""))
 }
 
 #' Report the Torch execution environment
@@ -538,6 +589,8 @@ torch_gmm_runtime_info <- function(device = "auto", batch_size = 8192L,
 #'   initializer or `"torch"` for the accelerated full-data Torch initializer.
 #' @param validate_input Whether to scan every input block for finite values
 #'   before fitting. AutoK may perform this scan once for the whole campaign.
+#' @param .oom_retries Internal maximum number of complete-fit CUDA OOM retries.
+#'   AutoK sets this to zero because it owns campaign-level batch-size retries.
 #' @return A `torch_gmm` model.  Only mixture parameters are retained in memory.
 #' @examplesIf requireNamespace("torch", quietly = TRUE)
 #' # A tiny, deterministic, CPU-only fit.
@@ -557,7 +610,94 @@ torch_gmm_fit <- function(x, n_clusters, batch_size = 8192L, max_iter = 100L,
                           tolerance = 1e-3, covariance_regularization = 1e-6,
                           device = "auto", seed = 1L, num_threads = NULL,
                           initialization_method = c("legacy", "torch"),
-                          validate_input = TRUE) {
+                          validate_input = TRUE, .oom_retries = 10L) {
+  reader <- .rc_reader(x)
+  k <- .rc_positive_integer(n_clusters, "n_clusters")
+  if (k > reader$n) {
+    stop("`n_clusters` must be between 1 and nrow(x).", call. = FALSE)
+  }
+  if (is.character(batch_size) && length(batch_size) == 1L &&
+      identical(batch_size, "auto")) {
+    tuning <- torch_gmm_autotune_batch_size(
+      reader$p, k, reader$n, device = device
+    )
+    batch_size <- tuning$batch_size
+    device <- tuning$device
+  } else {
+    batch_size <- .rc_positive_integer(batch_size, "batch_size")
+    device <- torch_gmm_device(device)$type
+  }
+
+  # CUDA memory reported by the driver is necessarily only a snapshot. A
+  # concurrent process or allocator fragmentation can invalidate even a
+  # conservative estimate. Restart the complete deterministic fit with a
+  # smaller transfer batch; never continue from a partially updated model.
+  .rc_torch_oom_retry(
+    call = function(current_batch) .rc_torch_gmm_fit_once(
+      x = x, n_clusters = k, batch_size = current_batch,
+      max_iter = max_iter, tolerance = tolerance,
+      covariance_regularization = covariance_regularization,
+      device = device, seed = seed, num_threads = num_threads,
+      initialization_method = initialization_method,
+      validate_input = validate_input
+    ),
+    batch_size = batch_size, device = device, max_retries = .oom_retries
+  )
+}
+
+.rc_torch_cuda_cleanup <- function() {
+  invisible(gc(verbose = FALSE))
+  if (!requireNamespace("torch", quietly = TRUE)) return(invisible(NULL))
+  ns <- asNamespace("torch")
+  if (exists("cuda_empty_cache", envir = ns, inherits = FALSE)) {
+    try(get("cuda_empty_cache", envir = ns)(), silent = TRUE)
+  }
+  invisible(NULL)
+}
+
+.rc_torch_is_cuda_oom <- function(condition) {
+  grepl(
+    "CUDA out of memory|CUDACachingAllocator|cuda.*alloc",
+    conditionMessage(condition), ignore.case = TRUE
+  )
+}
+
+.rc_torch_oom_retry <- function(call, batch_size, device, max_retries = 10L) {
+  batch_size <- .rc_positive_integer(batch_size, "batch_size")
+  max_retries <- .rc_positive_integer(
+    max_retries, "max_retries", allow_zero = TRUE
+  )
+  retries <- 0L
+  repeat {
+    outcome <- tryCatch(
+      list(value = call(batch_size), error = NULL),
+      error = function(error) list(value = NULL, error = error)
+    )
+    if (is.null(outcome$error)) return(outcome$value)
+    retry <- identical(device, "cuda") &&
+      .rc_torch_is_cuda_oom(outcome$error) &&
+      retries < max_retries && batch_size > 1L
+    if (!retry) stop(outcome$error)
+    next_batch <- as.integer(max(1L, floor(batch_size / 2)))
+    retries <- retries + 1L
+    message(sprintf(
+      paste0(
+        "CellCharterR GMM: CUDA OOM at batch_size=%d; discarding the ",
+        "partial fit, clearing the cache, and retrying from initialization ",
+        "with batch_size=%d (retry %d/%d)."
+      ),
+      batch_size, next_batch, retries, max_retries
+    ))
+    batch_size <- next_batch
+    .rc_torch_cuda_cleanup()
+  }
+}
+
+.rc_torch_gmm_fit_once <- function(
+    x, n_clusters, batch_size = 8192L, max_iter = 100L,
+    tolerance = 1e-3, covariance_regularization = 1e-6,
+    device = "auto", seed = 1L, num_threads = NULL,
+    initialization_method = c("legacy", "torch"), validate_input = TRUE) {
   reader <- .rc_reader(x)
   k <- .rc_positive_integer(n_clusters, "n_clusters")
   if (is.character(batch_size) && length(batch_size) == 1L &&

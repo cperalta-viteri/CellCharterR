@@ -4,7 +4,8 @@
 #' observed-to-expected enrichment. Non-positive values remain in the returned
 #' statistical result but are omitted from the plot. The input can be a
 #' clustered `SpatialExperiment`, a result returned by the enrichment kernel,
-#' or an enrichment matrix.
+#' or an enrichment matrix. For experiment input, stored scientific-input and
+#' parameter fingerprints are checked before plotting.
 #'
 #' @param x A `SingleCellExperiment`/`SpatialExperiment` containing a stored
 #'   enrichment result, a list with an `enrichment` matrix, or the matrix itself.
@@ -33,7 +34,9 @@ cellcharter_plot_enrichment <- function(
     stop("Install `ggplot2` to plot CellCharter enrichment.", call. = FALSE)
   }
   if (inherits(x, "SingleCellExperiment")) {
-    record <- S4Vectors::metadata(x)$CellCharterR$results[[result_name]]
+    record <- .cc_sce_require_result(
+      x, result_name, context = "Stored enrichment result"
+    )
     if (is.null(record$value$enrichment)) {
       stop("SCE lacks stored enrichment result `", result_name,
            "`; run `cellcharter_enrichment()` first.", call. = FALSE)

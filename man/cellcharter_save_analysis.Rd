@@ -25,7 +25,10 @@ cellcharter_save_analysis(
 The normalized analysis directory, invisibly.
 }
 \description{
-Large assays and embeddings are copied blockwise into analysis-owned HDF5
-files. The returned directory can be moved independently of its source H5AD
-and original backing files.
+Large assays are copied blockwise into analysis-owned HDF5 files. Reduced
+dimensions, annotations, coordinates, and graphs are saved as native R/
+Bioconductor objects, so the loaded object keeps only its assays disk-backed.
+The returned directory can be moved independently of its source H5AD and
+original backing files. AnnData \verb{/uns} content is copied separately without
+duplicating the complete source H5AD clone.
 }

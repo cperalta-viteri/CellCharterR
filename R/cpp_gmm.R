@@ -5,10 +5,16 @@
 #' generator. Its K-means++ initialization is not RNG-identical to the pinned
 #' sklearn initializer, so fitted solutions require empirical parity checks and
 #' are not described as exact seeded CellCharter reproductions. Its result
-#' has class `torch_gmm`, so the existing prediction and checkpoint interfaces
-#' can consume it. The input is currently an in-memory numeric matrix.
+#' inherits from both `cpp_gmm` and `torch_gmm`: the dedicated `cpp_gmm` class
+#' keeps generic prediction on the double-precision, Torch-free scoring path,
+#' while the parent class preserves existing checkpoint compatibility. The
+#' input is currently an in-memory numeric matrix. Long fits poll for user
+#' interrupts and join all native worker threads before returning to R.
+#' @param x Observation-by-feature numeric matrix-like object. The compiled
+#'   backend materialises it once as a dense double matrix and makes one shared
+#'   native row-major copy for concurrent fits.
 #' @inheritParams torch_gmm_fit
-#' @return A serializable `torch_gmm` model.
+#' @return A serializable `cpp_gmm` model inheriting from `torch_gmm`.
 #' @useDynLib CellCharterR, .registration=TRUE
 #' @importFrom Rcpp evalCpp
 #' @export
@@ -27,12 +33,26 @@ cpp_gmm_fit <- function(x, n_clusters, max_iter = 100L, tolerance = 1e-3,
   num_threads <- .rc_positive_integer(num_threads, "num_threads")
   if (num_threads > 32L) { warning("Capping `num_threads` at 32.", call. = FALSE); num_threads <- 32L }
   if (n_clusters > nrow(x)) stop("`n_clusters` cannot exceed nrow(x).", call. = FALSE)
-  model <- .Call("C_cpp_gmm_fit", x, n_clusters, as.double(seed), max_iter,
-                 tolerance, covariance_regularization, num_threads, PACKAGE = "CellCharterR")
+  # Use the one-job form of the monitored native engine. This preserves the
+  # exact same fit kernel and output while allowing R's main thread to poll for
+  # Ctrl+C and cooperatively stop/join the row-shard workers.
+  model <- .Call(
+    "C_cpp_gmm_fit_many",
+    x,
+    n_clusters,
+    as.double(seed),
+    max_iter,
+    tolerance,
+    covariance_regularization,
+    1L,
+    num_threads,
+    FALSE,
+    PACKAGE = "CellCharterR"
+  )[[1L]]
   model <- .cpp_gmm_compatibility(model)
   model$runtime <- list(device = "cpu", backend = "compiled-cpp-double",
                         seed = seed, cpu_threads = num_threads)
-  class(model) <- "torch_gmm"
+  class(model) <- c("cpp_gmm", "torch_gmm")
   model
 }
 
@@ -45,13 +65,16 @@ cpp_gmm_fit <- function(x, n_clusters, max_iter = 100L, tolerance = 1e-3,
 #' @param seeds Integer seeds, recycled when length one.
 #' @param workers Maximum concurrent native worker threads.
 #' @param threads_per_fit Native row-shard threads within each independent fit.
+#' @param progress Whether to report native input preparation, completed fits,
+#'   and a heartbeat during long periods without a completed fit.
 #' @inheritParams cpp_gmm_fit
-#' @return A list of serializable `torch_gmm` models.
+#' @return A list of serializable `cpp_gmm` models inheriting from `torch_gmm`.
 #' @export
 cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), workers = 1L,
                              threads_per_fit = 1L,
                              max_iter = 100L, tolerance = 1e-3,
-                             covariance_regularization = 1e-6) {
+                             covariance_regularization = 1e-6,
+                             progress = interactive()) {
   x <- as.matrix(x)
   if (!is.numeric(x) || length(dim(x)) != 2L || !nrow(x) || !ncol(x) || any(!is.finite(x)))
     stop("`x` must be a finite, non-empty numeric matrix.", call. = FALSE)
@@ -72,8 +95,12 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
   tolerance <- .rc_nonnegative_number(tolerance, "tolerance", strictly_positive = TRUE)
   covariance_regularization <- .rc_nonnegative_number(
     covariance_regularization, "covariance_regularization", strictly_positive = TRUE)
+  if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
+    stop("`progress` must be TRUE or FALSE.", call. = FALSE)
+  }
   models <- .Call("C_cpp_gmm_fit_many", x, ks, as.double(seeds), max_iter,
                   tolerance, covariance_regularization, workers, threads_per_fit,
+                  progress,
                   PACKAGE = "CellCharterR")
   for (i in seq_along(models)) {
     models[[i]] <- .cpp_gmm_compatibility(models[[i]])
@@ -81,7 +108,7 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
                                 seed = seeds[[i]], cpu_threads = threads_per_fit,
                                 outer_workers = workers,
                                 threads_per_fit = threads_per_fit)
-    class(models[[i]]) <- "torch_gmm"
+    class(models[[i]]) <- c("cpp_gmm", "torch_gmm")
   }
   names(models) <- paste0("k", ks)
   models
@@ -111,41 +138,124 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
 
 #' Predict from a compiled GMM without requiring Torch
 #' @param model A model returned by [cpp_gmm_fit()].
-#' @param newdata Numeric observation-by-feature matrix.
-#' @param batch_size Maximum rows scored at once.
+#' @param newdata Numeric observation-by-feature matrix or `DelayedMatrix`.
+#' @param batch_size Maximum rows read and scored at once. Label prediction
+#'   retains only one `batch_size`-by-K score block in memory; posterior
+#'   prediction explicitly returns the complete observation-by-K matrix.
 #' @return Zero-based component labels.
 #' @export
 cpp_gmm_predict <- function(model, newdata, batch_size = 8192L) {
-  probability <- cpp_gmm_predict_proba(model, newdata, batch_size)
-  max.col(probability, ties.method = "first") - 1L
+  scoring <- .cpp_gmm_scoring_input(model, newdata, batch_size)
+  labels <- integer(scoring$reader$n)
+  if (!length(labels)) return(labels)
+  prepared <- .cpp_gmm_prepare_scoring(model)
+  for (start in seq.int(1L, scoring$reader$n, by = scoring$batch_size)) {
+    index <- start:min(scoring$reader$n, start + scoring$batch_size - 1L)
+    # Retain only this batch's N_batch-by-K scores. Label prediction never
+    # constructs or normalizes the complete N-by-K posterior matrix.
+    block <- .cpp_gmm_get_block(scoring$reader, index)
+    score <- .cpp_gmm_log_scores(block, prepared)
+    labels[index] <- max.col(score, ties.method = "first") - 1L
+  }
+  labels
+}
+
+#' Predict labels from a compiled GMM
+#'
+#' Dispatches compiled models to the double-precision compiled-model scorer
+#' without loading Torch or materialising a complete posterior matrix.
+#' @param object A model returned by [cpp_gmm_fit()].
+#' @inheritParams cpp_gmm_predict
+#' @param ... Additional arguments passed to [cpp_gmm_predict()].
+#' @return Zero-based component labels.
+#' @rdname cpp_gmm_predict
+#' @export
+predict.cpp_gmm <- function(object, newdata, ...) {
+  cpp_gmm_predict(object, newdata, ...)
+}
+
+.cpp_gmm_scoring_input <- function(model, newdata, batch_size) {
+  if (!inherits(model, "torch_gmm")) {
+    stop("`model` must inherit from torch_gmm.", call. = FALSE)
+  }
+  if (!is.matrix(newdata) && !inherits(newdata, "DelayedMatrix")) {
+    stop("`newdata` must be a numeric matrix or DelayedMatrix.", call. = FALSE)
+  }
+  dimensions <- dim(newdata)
+  if (length(dimensions) != 2L || is.na(dimensions[[1L]]) ||
+      is.na(dimensions[[2L]])) {
+    stop("`newdata` must have two valid dimensions.", call. = FALSE)
+  }
+  if (is.matrix(newdata) &&
+      (!is.numeric(newdata) || any(!is.finite(newdata)))) {
+    stop("`newdata` must be a finite numeric matrix-like object.", call. = FALSE)
+  }
+  batch_size <- .rc_positive_integer(batch_size, "batch_size")
+  if (dimensions[[2L]] != model$n_features) {
+    stop("Feature dimensions do not match the fitted model.", call. = FALSE)
+  }
+  reader <- list(
+    n = as.integer(dimensions[[1L]]),
+    p = as.integer(dimensions[[2L]]),
+    get = function(index) {
+      if (is.matrix(newdata)) {
+        newdata[index, , drop = FALSE]
+      } else {
+        as.matrix(newdata[index, , drop = FALSE])
+      }
+    }
+  )
+  list(reader = reader, batch_size = batch_size)
+}
+
+.cpp_gmm_get_block <- function(reader, index) {
+  block <- reader$get(index)
+  if (!is.matrix(block) || !is.numeric(block) || ncol(block) != reader$p ||
+      nrow(block) != length(index) || any(!is.finite(block))) {
+    stop("`newdata` must yield finite numeric matrix blocks.", call. = FALSE)
+  }
+  block
+}
+
+.cpp_gmm_prepare_scoring <- function(model) {
+  factors <- lapply(model$covariances, function(covariance) {
+    chol(covariance + diag(model$covariance_regularization, model$n_features))
+  })
+  constants <- vapply(seq_len(model$n_clusters), function(component) {
+    log(model$weights[[component]]) - 0.5 * (
+      model$n_features * log(2 * pi) + 2 * sum(log(diag(factors[[component]])))
+    )
+  }, numeric(1L))
+  list(
+    means = model$means,
+    factors = factors,
+    constants = constants,
+    n_clusters = model$n_clusters
+  )
+}
+
+.cpp_gmm_log_scores <- function(x, prepared) {
+  score <- vapply(seq_len(prepared$n_clusters), function(component) {
+    centered <- sweep(x, 2L, prepared$means[component, ], "-")
+    solved <- forwardsolve(t(prepared$factors[[component]]), t(centered))
+    prepared$constants[[component]] - 0.5 * colSums(solved * solved)
+  }, numeric(nrow(x)))
+  matrix(score, nrow = nrow(x), ncol = prepared$n_clusters)
 }
 
 #' @rdname cpp_gmm_predict
 #' @return `cpp_gmm_predict_proba()` returns posterior probabilities.
 #' @export
 cpp_gmm_predict_proba <- function(model, newdata, batch_size = 8192L) {
-  if (!inherits(model, "torch_gmm")) stop("`model` must inherit from torch_gmm.", call. = FALSE)
-  x <- as.matrix(newdata)
-  if (!is.numeric(x) || length(dim(x)) != 2L || any(!is.finite(x))) {
-    stop("`newdata` must be a finite numeric matrix-like object.", call. = FALSE)
-  }
-  batch_size <- .rc_positive_integer(batch_size, "batch_size")
-  if (ncol(x) != model$n_features) stop("Feature dimensions do not match the fitted model.", call. = FALSE)
-  out <- matrix(NA_real_, nrow(x), model$n_clusters)
-  if (!nrow(x)) return(out)
-  for (start in seq.int(1L, nrow(x), by = batch_size)) {
-    index <- start:min(nrow(x), start + batch_size - 1L)
-    score <- vapply(seq_len(model$n_clusters), function(component) {
-      covariance <- model$covariances[[component]] +
-        diag(model$covariance_regularization, model$n_features)
-      factor <- chol(covariance)
-      centered <- sweep(x[index, , drop = FALSE], 2L, model$means[component, ], "-")
-      solved <- forwardsolve(t(factor), t(centered))
-      log(model$weights[[component]]) - 0.5 * (
-        model$n_features * log(2 * pi) + 2 * sum(log(diag(factor))) +
-          colSums(solved * solved))
-    }, numeric(length(index)))
-    score <- matrix(score, nrow = length(index), ncol = model$n_clusters)
+  scoring <- .cpp_gmm_scoring_input(model, newdata, batch_size)
+  out <- matrix(NA_real_, scoring$reader$n, model$n_clusters)
+  if (!scoring$reader$n) return(out)
+  prepared <- .cpp_gmm_prepare_scoring(model)
+  for (start in seq.int(1L, scoring$reader$n, by = scoring$batch_size)) {
+    index <- start:min(scoring$reader$n, start + scoring$batch_size - 1L)
+    score <- .cpp_gmm_log_scores(
+      .cpp_gmm_get_block(scoring$reader, index), prepared
+    )
     maximum <- apply(score, 1L, max)
     probability <- exp(score - maximum)
     out[index, ] <- probability / rowSums(probability)
@@ -158,28 +268,19 @@ cpp_gmm_predict_proba <- function(model, newdata, batch_size = 8192L) {
 #' @return Mean per-observation log likelihood.
 #' @export
 cpp_gmm_log_likelihood <- function(model, newdata, batch_size = 8192L) {
-  if (!inherits(model, "torch_gmm")) stop("`model` must inherit from torch_gmm.", call. = FALSE)
-  x <- as.matrix(newdata)
-  if (!is.numeric(x) || length(dim(x)) != 2L || any(!is.finite(x))) {
-    stop("`newdata` must be a finite numeric matrix-like object.", call. = FALSE)
+  scoring <- .cpp_gmm_scoring_input(model, newdata, batch_size)
+  if (!scoring$reader$n) {
+    stop("`newdata` must contain at least one observation.", call. = FALSE)
   }
-  if (!nrow(x)) stop("`newdata` must contain at least one observation.", call. = FALSE)
-  batch_size <- .rc_positive_integer(batch_size, "batch_size")
-  if (ncol(x) != model$n_features) stop("Feature dimensions do not match the fitted model.", call. = FALSE)
+  prepared <- .cpp_gmm_prepare_scoring(model)
   total <- 0
-  for (start in seq.int(1L, nrow(x), by = batch_size)) {
-    index <- start:min(nrow(x), start + batch_size - 1L)
-    score <- vapply(seq_len(model$n_clusters), function(component) {
-      factor <- chol(model$covariances[[component]] +
-                       diag(model$covariance_regularization, model$n_features))
-      centered <- sweep(x[index, , drop = FALSE], 2L, model$means[component, ], "-")
-      solved <- forwardsolve(t(factor), t(centered))
-      log(model$weights[[component]]) - 0.5 * (model$n_features * log(2*pi) +
-        2 * sum(log(diag(factor))) + colSums(solved * solved))
-    }, numeric(length(index)))
-    score <- matrix(score, nrow = length(index), ncol = model$n_clusters)
+  for (start in seq.int(1L, scoring$reader$n, by = scoring$batch_size)) {
+    index <- start:min(scoring$reader$n, start + scoring$batch_size - 1L)
+    score <- .cpp_gmm_log_scores(
+      .cpp_gmm_get_block(scoring$reader, index), prepared
+    )
     maximum <- apply(score, 1L, max)
     total <- total + sum(maximum + log(rowSums(exp(score - maximum))))
   }
-  total / nrow(x)
+  total / scoring$reader$n
 }

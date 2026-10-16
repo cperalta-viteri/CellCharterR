@@ -524,6 +524,83 @@ test_that("Torch GMM rejects invalid fitting controls before EM", {
   )
   x[1, 1] <- NA_real_
   expect_error(torch_gmm_fit(x, 2), "non-finite")
+
+  outside_float32 <- matrix(c(0, 1, 1e40, 2), ncol = 2L)
+  expect_error(
+    torch_gmm_fit(outside_float32, 2L, device = "cpu"),
+    "outside the finite float32 range.*centre or rescale"
+  )
+})
+
+test_that("Torch CUDA OOM retry is bounded and restarts at smaller batches", {
+  calls <- integer()
+  result <- .rc_torch_oom_retry(
+    call = function(batch_size) {
+      calls <<- c(calls, batch_size)
+      if (batch_size > 8L) stop("CUDA out of memory")
+      batch_size
+    },
+    batch_size = 64L, device = "cuda", max_retries = 5L
+  )
+  expect_identical(result, 8L)
+  expect_identical(calls, c(64L, 32L, 16L, 8L))
+
+  calls <- integer()
+  expect_error(
+    .rc_torch_oom_retry(
+      call = function(batch_size) {
+        calls <<- c(calls, batch_size)
+        stop("CUDA out of memory")
+      },
+      batch_size = 64L, device = "cuda", max_retries = 2L
+    ),
+    "CUDA out of memory"
+  )
+  expect_identical(calls, c(64L, 32L, 16L))
+
+  calls <- integer()
+  expect_error(
+    .rc_torch_oom_retry(
+      call = function(batch_size) {
+        calls <<- c(calls, batch_size)
+        stop("CUDA out of memory")
+      },
+      batch_size = 64L, device = "cpu", max_retries = 5L
+    ),
+    "CUDA out of memory"
+  )
+  expect_identical(calls, 64L)
+})
+
+test_that("torch_gmm_fit applies complete-fit CUDA OOM retries", {
+  skip_if_not_installed("torch")
+  calls <- integer()
+  testthat::local_mocked_bindings(
+    torch_gmm_device = function(device) list(type = "cuda"),
+    .rc_torch_gmm_fit_once = function(x, n_clusters, batch_size, ...) {
+      calls <<- c(calls, batch_size)
+      if (batch_size > 8L) stop("CUDA out of memory")
+      list(batch_size = batch_size)
+    },
+    .rc_torch_cuda_cleanup = function() invisible(NULL),
+    .package = "CellCharterR"
+  )
+  result <- torch_gmm_fit(
+    matrix(seq_len(40), ncol = 2L), 2L,
+    batch_size = 32L, device = "cuda"
+  )
+  expect_identical(result$batch_size, 8L)
+  expect_identical(calls, c(32L, 16L, 8L))
+
+  calls <- integer()
+  expect_error(
+    torch_gmm_fit(
+      matrix(seq_len(40), ncol = 2L), 2L,
+      batch_size = 32L, device = "cuda", .oom_retries = 0L
+    ),
+    "CUDA out of memory"
+  )
+  expect_identical(calls, 32L)
 })
 
 test_that("Torch GMM helpers preserve the caller's R RNG state", {
@@ -560,4 +637,18 @@ test_that("Torch GMM calls restore the caller's thread setting", {
     device = "cpu", seed = 4L, num_threads = requested
   ))
   expect_identical(torch::torch_get_num_threads(), before)
+})
+
+test_that("GPU provenance follows CUDA_VISIBLE_DEVICES", {
+  query <- c(
+    "0, GPU-aaaaaaaa, NVIDIA A4000",
+    "1, GPU-bbbbbbbb, NVIDIA A100"
+  )
+  expect_identical(.rc_select_gpu_name(query, ""), "NVIDIA A4000")
+  expect_identical(.rc_select_gpu_name(query, "1"), "NVIDIA A100")
+  expect_identical(.rc_select_gpu_name(query, "GPU-bbbbbbbb"), "NVIDIA A100")
+  expect_identical(
+    .rc_select_gpu_name(query, "MIG-GPU-bbbbbbbb/1/0"),
+    "visible CUDA device MIG-GPU-bbbbbbbb/1/0"
+  )
 })

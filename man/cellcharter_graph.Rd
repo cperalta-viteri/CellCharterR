@@ -9,7 +9,8 @@ cellcharter_graph(
   spatial = "spatial",
   sample_col = "sample",
   graph_name = "cellcharter_graph",
-  percentile = 99
+  percentile = 99,
+  progress = interactive()
 )
 }
 \arguments{
@@ -26,6 +27,8 @@ coordinate representations.}
 \item{graph_name}{Name used in \code{colPairs(sce)}.}
 
 \item{percentile}{Global positive-edge distance percentile to retain.}
+
+\item{progress}{Whether to display sample-level graph-construction progress.}
 }
 \value{
 The updated \code{SingleCellExperiment}.
@@ -34,7 +37,9 @@ The updated \code{SingleCellExperiment}.
 Delaunay graphs are built independently for every physical sample, then one
 global long-edge cutoff is calculated across those graph blocks. The final
 symmetric graph is stored in \code{colPairs(sce, graph_name)}, so endpoints remain
-synchronized when the SCE is subset.
+synchronized when the SCE is subset. The recorded stage fingerprints the
+coordinates, sample assignments, and binary graph topology; changing any of
+them makes the stage stale and requires graph reconstruction.
 }
 \examples{
 example_sce <- SingleCellExperiment::SingleCellExperiment(

@@ -36,6 +36,20 @@ test_that("pure CUDA memory estimate is conservative and bounded", {
   expect_gt(small$estimated_bytes_per_observation, 0)
 })
 
+test_that("CUDA memory selection does not guess GPU zero for UUID selectors", {
+  available <- c("12000", "4000", "8000")
+  expect_identical(.cc_select_cuda_free_memory(available, ""), 12000)
+  expect_identical(.cc_select_cuda_free_memory(available, "0"), 12000)
+  expect_identical(.cc_select_cuda_free_memory(available, "1"), 4000)
+  expect_identical(
+    .cc_select_cuda_free_memory(available, "GPU-acde1234"), 4000
+  )
+  expect_identical(
+    .cc_select_cuda_free_memory(available, "MIG-acde1234/1/0"), 4000
+  )
+  expect_true(is.na(.cc_select_cuda_free_memory("not available", "0")))
+})
+
 test_that("autotuner validates dimensions and memory controls", {
   expect_error(torch_gmm_autotune_batch_size(0, 2, device = "cpu"), "n_features")
   expect_error(torch_gmm_autotune_batch_size(2, 0, device = "cpu"), "n_clusters")

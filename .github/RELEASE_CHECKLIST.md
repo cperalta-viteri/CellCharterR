@@ -46,10 +46,15 @@ verify SHA-256, and repeat the read-only checks documented in
 1. Register `christian_94_97@hotmail.com` on the Bioconductor Support Site.
 2. From a clean clone of the published repository, run:
 
-       R CMD build .
+       Rscript scripts/build_package_safely.R
        R CMD check --no-manual CellCharterR_0.99.0.tar.gz
        Rscript -e 'BiocCheck::BiocCheck("CellCharterR_0.99.0.tar.gz", new.package = TRUE)'
        Rscript -e 'BiocCheck::BiocCheckGitClone(".")'
+
+   The safe builder stages only standard package inputs before invoking
+   `R CMD build`. Use it instead of `R CMD build .` in a working tree that also
+   contains ignored large data, because R copies the source tree into `Rtmp`
+   before applying `.Rbuildignore`.
 
 3. Confirm the Linux CPU GitHub Actions check and Pages deployment are green.
 4. Confirm no unexplained ERROR or WARNING remains before submission.

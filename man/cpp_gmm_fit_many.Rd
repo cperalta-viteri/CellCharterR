@@ -12,12 +12,14 @@ cpp_gmm_fit_many(
   threads_per_fit = 1L,
   max_iter = 100L,
   tolerance = 0.001,
-  covariance_regularization = 1e-06
+  covariance_regularization = 1e-06,
+  progress = interactive()
 )
 }
 \arguments{
-\item{x}{observation-by-feature matrix or DelayedMatrix. Rows are read in
-chunks and never materialised jointly.}
+\item{x}{Observation-by-feature numeric matrix-like object. The compiled
+backend materialises it once as a dense double matrix and makes one shared
+native row-major copy for concurrent fits.}
 
 \item{n_clusters}{Integer vector of component counts, one per fit.}
 
@@ -32,9 +34,12 @@ chunks and never materialised jointly.}
 \item{tolerance}{stop when per-observation NLL change is below this value.}
 
 \item{covariance_regularization}{diagonal ridge added before Cholesky.}
+
+\item{progress}{Whether to report native input preparation, completed fits,
+and a heartbeat during long periods without a completed fit.}
 }
 \value{
-A list of serializable \code{torch_gmm} models.
+A list of serializable \code{cpp_gmm} models inheriting from \code{torch_gmm}.
 }
 \description{
 Worker threads share one immutable copy of \code{x}; fitting kernels do not call

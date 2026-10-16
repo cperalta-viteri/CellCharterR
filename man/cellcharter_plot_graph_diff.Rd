@@ -52,7 +52,8 @@ Uses a stored result from \code{\link[=cellcharter_diff_nhood_enrichment]{cellch
 panels with the same node positions. Positive effects appear in the first
 inferential condition and negative effects in the second. The permutation
 analysis is never recomputed. Matrix rows are source/central domains and
-columns are surrounding/neighbor domains.
+columns are surrounding/neighbor domains. For experiment input, stored graph,
+annotation, and parameter fingerprints are checked before plotting.
 }
 \examples{
 spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)

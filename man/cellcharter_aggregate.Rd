@@ -12,7 +12,8 @@ cellcharter_aggregate(
   output = "X_cellcharter",
   n_layers = 3L,
   filepath = NULL,
-  block_rows = 8192L
+  block_rows = 8192L,
+  progress = interactive()
 )
 }
 \arguments{
@@ -33,12 +34,17 @@ aggregated representation in memory and avoids an additional backing-file
 dependency. Supply a path only when available RAM is insufficient.}
 
 \item{block_rows}{HDF5 aggregation row budget.}
+
+\item{progress}{Whether to display sample- or block-level aggregation progress.}
 }
 \value{
 The updated \code{SingleCellExperiment}.
 }
 \description{
-Aggregate CellCharter neighborhoods on a SpatialExperiment
+Every nonzero graph edge must join observations from the same physical
+sample. Cross-sample edges are rejected rather than silently discarded. The
+recorded stage fingerprints the representation, graph topology, sample
+assignments, and aggregated output using bounded-memory blocks.
 }
 \examples{
 example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)

@@ -1,22 +1,9 @@
 .cc_diff_network_result <- function(x, result_name) {
   if (inherits(x, "SingleCellExperiment")) {
-    record <- S4Vectors::metadata(x)$CellCharterR$results[[result_name]]
-    if (is.null(record) || is.null(record$value)) {
-      stop(
-        "Experiment lacks stored differential neighborhood-enrichment result `",
-        result_name, "`; run `cellcharter_diff_nhood_enrichment()` first.",
-        call. = FALSE
-      )
-    }
-    identity <- .cc_validate_sce_identity(
-      x, context = paste0("Differential result `", result_name, "`")
+    record <- .cc_sce_require_result(
+      x, result_name,
+      context = "Stored differential neighborhood-enrichment result"
     )
-    if (!identical(record$n_cells, ncol(x)) ||
-        !identical(record$cell_order_sha256, identity$cell_order_sha256)) {
-      stop("Stored differential result `", result_name,
-           "` is stale after cell reordering or subsetting; recompute it.",
-           call. = FALSE)
-    }
     return(record$value)
   }
   if (is.list(x) && !is.null(x$value) && is.list(x$value)) x <- x$value
@@ -175,7 +162,8 @@
 #' panels with the same node positions. Positive effects appear in the first
 #' inferential condition and negative effects in the second. The permutation
 #' analysis is never recomputed. Matrix rows are source/central domains and
-#' columns are surrounding/neighbor domains.
+#' columns are surrounding/neighbor domains. For experiment input, stored graph,
+#' annotation, and parameter fingerprints are checked before plotting.
 #'
 #' @param x A `SingleCellExperiment`/`SpatialExperiment` containing a stored
 #'   differential result, its stored result record, or the raw result list.

@@ -30,9 +30,12 @@ cellcharter_autok_fit(
 \arguments{
 \item{x}{Observation-by-feature matrix accepted by \code{fit_fun}.}
 
-\item{n_clusters}{Two integer bounds for selectable K. The fitted grid is
-expanded by one at each boundary, as in a CellCharter Python tuple. An R
-list instead denotes an already-expanded consecutive grid.}
+\item{n_clusters}{A numeric vector of exactly two integer bounds for
+selectable K. The fitted grid is expanded by one at each boundary, as in
+a CellCharter Python tuple. Longer numeric vectors are rejected to prevent
+silently treating their endpoints as non-selectable sentinels. An R list
+instead denotes an already-expanded consecutive grid whose first and last
+values are the explicit sentinel K values.}
 
 \item{checkpoint_dir}{Directory for atomic per-fit and state checkpoints.}
 
@@ -55,12 +58,22 @@ Fowlkes--Mallows score.}
 
 \item{fit_args, predict_args}{Additional named arguments for the hooks.}
 
-\item{data_id}{Optional immutable representation checksum or provenance ID.
-It is combined with scientifically material fit/predict arguments and an
-explicit algorithm-compatibility version. Runtime-only controls (device,
-batch size, and thread count) and package upgrades do not invalidate a
-compatible completed fit; the exact implementation digest is retained as
-provenance.}
+\item{data_id}{Optional immutable upstream provenance ID. Independently of
+this value, AutoK computes a bounded-memory SHA-256 fingerprint of the
+numerical representation and combines it with scientifically material
+fit/predict arguments and an explicit algorithm-compatibility version.
+Compatible package upgrades do not invalidate a fit. Device, batch size,
+numeric backend, Torch version, and within-fit thread topology are recorded
+in a separate numerical-execution contract: they do not change scientific
+identity, but a committed campaign cannot resume with a different topology
+and silently mix numerically non-identical fits. If CUDA OOM recovery lowers
+the first fit's batch sizes, those effective values become the durable
+contract; a later fit that requires another reduction stops before its
+artifact is published. Automatic OOM retries apply only to the built-in
+Torch hooks; errors from custom hooks propagate without changing their
+arguments. A committed campaign with
+a different representation, fitting contract, or execution contract fails
+closed and is never overwritten during resume.}
 
 \item{resume}{Reuse matching fully committed runs. Historical stability is
 restored without recomputation; artifacts from an interrupted final run
@@ -80,8 +93,11 @@ substantially accelerate repeated GPU fits and never materialises assays.}
 \item{progress}{Whether to emit C++ round progress and estimated time remaining.}
 
 \item{checkpoint_mode}{Checkpoint granularity. \code{"fit"} writes the historical
-per-K artifacts; \code{"round"} writes one bundle after a complete C++ round;
-\code{"none"} performs no writes and retains every model and label vector in RAM.}
+per-K artifacts immediately and therefore runs C++ K values sequentially;
+an interruption loses at most the active K. \code{"round"} parallelizes K fits
+and writes one atomic bundle after the complete C++ round; an interrupted
+active round is recomputed. \code{"none"} performs no writes, parallelizes K
+fits, and retains every model and label vector in RAM.}
 }
 \value{
 A \code{cellcharter_autok} object containing stability, convergence

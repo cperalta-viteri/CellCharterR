@@ -16,6 +16,15 @@ test_that("neighboring-K edge scores are mirrored like CellCharter 0.2.0", {
   expect_equal(rownames(mirrored), c("2", "3"))
 })
 
+test_that("AutoK selectable bounds start at K equals two", {
+  expect_error(
+    .autok_k_grid(c(1L, 4L)),
+    "lower bound of at least 2"
+  )
+  expect_identical(.autok_k_grid(c(2L, 4L))$fit_k, 1:5)
+  expect_identical(.autok_k_grid(as.list(1L:5L))$requested_k, 2:4)
+})
+
 test_that("AutoK converges, selects lowest NLL, and resumes atomically", {
   checkpoint_dir <- tempfile("autok-")
   x <- matrix(seq_len(60), ncol = 3)
@@ -122,6 +131,16 @@ test_that("default AutoK checkpoints survive compatible implementation upgrades"
   expect_true(all(resumed$fit_index$resumed))
   expect_identical(resumed$data_id, first$data_id)
   expect_match(first$implementation_digest, "^[0-9a-f]{64}$")
+  expect_error(
+    cellcharter_autok_fit(
+      x, c(2L, 3L), checkpoint_dir, max_runs = 1L, seed = 9L,
+      fit_args = list(batch_size = 2L, max_iter = 2L, device = "cpu",
+                      num_threads = 1L),
+      predict_args = list(batch_size = 4L, device = "cpu"),
+      data_id = "same-input"
+    ),
+    "numerical execution contract"
+  )
 })
 
 test_that("default AutoK resume identity ignores runtime-only controls", {
@@ -137,6 +156,67 @@ test_that("default AutoK resume identity ignores runtime-only controls", {
   changed <- second
   changed$fit_args$max_iter <- 11L
   expect_false(identical(first, changed))
+
+  torch_a <- .autok_execution_contract(
+    "torch", list(batch_size = 4096L, device = "cpu", num_threads = 1L),
+    list(batch_size = 4096L, device = "cpu"), TRUE, 1L
+  )
+  torch_b <- .autok_execution_contract(
+    "torch", list(batch_size = 8192L, device = "cpu", num_threads = 2L),
+    list(batch_size = 4096L, device = "cpu"), TRUE, 1L
+  )
+  expect_false(identical(torch_a, torch_b))
+  expect_false(identical(
+    .autok_execution_contract("cpp", list(), list(), FALSE, 1L),
+    .autok_execution_contract("cpp", list(), list(), FALSE, 2L)
+  ))
+})
+
+test_that("Torch legacy migration rejects C++ checkpoint identities", {
+  checkpoint_dir <- tempfile("autok-cross-backend-")
+  dir.create(checkpoint_dir)
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  representation_sha256 <- paste(rep.int("a", 64L), collapse = "")
+  cpp_contract <- .autok_resume_contract(
+    "input", list(max_iter = 10L), list(), default_torch = FALSE,
+    implementation_digest = "unused",
+    algorithm = "cpp-full-covariance-em-v1.0.1",
+    representation_sha256 = representation_sha256
+  )
+  cpp_id <- digest::digest(
+    .cc_contract_canonical(cpp_contract), algo = "sha256", serialize = TRUE
+  )
+  state <- list(
+    data_id = cpp_id, compatible_data_ids = character(),
+    input_data_id = "input", fit_args = list(max_iter = 10L),
+    predict_args = list(), fit_k = 1:4, candidate_k = 2:3,
+    seed = 42L, n_obs = 8L, n_features = 2L,
+    representation_sha256 = representation_sha256,
+    backend = "cpp", resume_contract = cpp_contract
+  )
+  saveRDS(state, file.path(checkpoint_dir, "autok_state.rds"))
+  current <- state[c(
+    "input_data_id", "fit_args", "predict_args", "fit_k", "candidate_k",
+    "seed", "n_obs", "n_features", "representation_sha256"
+  )]
+  expect_identical(
+    .autok_legacy_data_id(checkpoint_dir, current), character()
+  )
+
+  torch_contract <- .autok_resume_contract(
+    "input", list(max_iter = 10L), list(), default_torch = TRUE,
+    implementation_digest = "unused",
+    representation_sha256 = representation_sha256
+  )
+  state$backend <- "torch"
+  state$resume_contract <- torch_contract
+  state$data_id <- digest::digest(
+    .cc_contract_canonical(torch_contract), algo = "sha256", serialize = TRUE
+  )
+  saveRDS(state, file.path(checkpoint_dir, "autok_state.rds"))
+  expect_identical(
+    .autok_legacy_data_id(checkpoint_dir, current), state$data_id
+  )
 })
 
 test_that("AutoK duration formatter is readable", {
@@ -160,6 +240,248 @@ test_that("AutoK retries CUDA OOM with a smaller batch", {
   expect_identical(result$args$batch_size, 1024L)
 })
 
+test_that("AutoK CUDA OOM retry can reach batch size one", {
+  observed <- integer()
+  result <- .autok_oom_retry(
+    function(args) {
+      observed <<- c(observed, args$batch_size)
+      if (args$batch_size > 1L) stop("CUDA out of memory")
+      "ok"
+    },
+    list(batch_size = 8L), stage = "minimum-batch-test"
+  )
+  expect_identical(observed, c(8L, 4L, 2L, 1L))
+  expect_identical(result$args$batch_size, 1L)
+})
+
+test_that("first-fit OOM batches become the durable Torch execution contract", {
+  skip_if_not_installed("torch")
+  checkpoint_dir <- tempfile("autok-oom-contract-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  fake_fit <- function(x, n_clusters, seed, batch_size, ...) {
+    if (batch_size > 2L) stop("CUDA out of memory")
+    list(k = n_clusters, seed = seed, nll = n_clusters)
+  }
+  fake_predict <- function(model, newdata, batch_size, ...) {
+    if (batch_size > 4L) stop("CUDA out of memory")
+    rep.int(0L, nrow(newdata))
+  }
+  testthat::local_mocked_bindings(
+    .autok_default_fit = fake_fit,
+    .autok_default_predict = fake_predict,
+    .package = "CellCharterR"
+  )
+  x <- matrix(seq_len(24), ncol = 3L)
+  first <- cellcharter_autok_fit(
+    x, c(2L, 2L), checkpoint_dir, max_runs = 1L,
+    fit_args = list(batch_size = 8L, device = "cpu", num_threads = 1L),
+    predict_args = list(batch_size = 8L, device = "cpu"),
+    progress = FALSE
+  )
+  expect_identical(first$execution_contract$fit_batch_size, 2L)
+  expect_identical(first$execution_contract$predict_batch_size, 4L)
+  first_artifact <- readRDS(.autok_checkpoint_path(checkpoint_dir, 1L, 1L))
+  expect_identical(first_artifact$execution_contract, first$execution_contract)
+
+  resumed <- cellcharter_autok_fit(
+    x, c(2L, 2L), checkpoint_dir, max_runs = 1L,
+    fit_args = list(batch_size = 2L, device = "cpu", num_threads = 1L),
+    predict_args = list(batch_size = 4L, device = "cpu"),
+    progress = FALSE
+  )
+  expect_true(all(resumed$fit_index$resumed))
+  expect_error(
+    cellcharter_autok_fit(
+      x, c(2L, 2L), checkpoint_dir, max_runs = 1L,
+      fit_args = list(batch_size = 8L, device = "cpu", num_threads = 1L),
+      predict_args = list(batch_size = 8L, device = "cpu"),
+      progress = FALSE
+    ),
+    "numerical execution contract"
+  )
+})
+
+test_that("a later OOM cannot publish a mixed-batch AutoK campaign", {
+  skip_if_not_installed("torch")
+  checkpoint_dir <- tempfile("autok-later-oom-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  fake_fit <- function(x, n_clusters, seed, batch_size, ...) {
+    if (n_clusters == 2L && batch_size > 4L) stop("CUDA out of memory")
+    list(k = n_clusters, seed = seed, nll = n_clusters)
+  }
+  fake_predict <- function(model, newdata, batch_size, ...) {
+    rep.int(0L, nrow(newdata))
+  }
+  testthat::local_mocked_bindings(
+    .autok_default_fit = fake_fit,
+    .autok_default_predict = fake_predict,
+    .package = "CellCharterR"
+  )
+  expect_error(
+    cellcharter_autok_fit(
+      matrix(seq_len(24), ncol = 3L), c(2L, 2L), checkpoint_dir,
+      max_runs = 1L,
+      fit_args = list(batch_size = 8L, device = "cpu", num_threads = 1L),
+      predict_args = list(batch_size = 8L, device = "cpu"),
+      progress = FALSE
+    ),
+    "changed the numerical execution contract"
+  )
+  expect_true(file.exists(.autok_checkpoint_path(checkpoint_dir, 1L, 1L)))
+  expect_false(file.exists(.autok_checkpoint_path(checkpoint_dir, 2L, 1L)))
+})
+
+test_that("custom AutoK hooks never receive silent OOM batch retries", {
+  checkpoint_dir <- tempfile("autok-custom-oom-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  fit_hook <- function(x, n_clusters, seed, batch_size, ...) {
+    if (n_clusters == 2L) stop("CUDA out of memory")
+    list(k = n_clusters, nll = n_clusters)
+  }
+  predict_hook <- function(model, newdata, batch_size, ...) {
+    rep.int(0L, nrow(newdata))
+  }
+  expect_error(
+    cellcharter_autok_fit(
+      matrix(seq_len(24), ncol = 3L), c(2L, 2L), checkpoint_dir,
+      max_runs = 1L, fit_fun = fit_hook, predict_fun = predict_hook,
+      nll_fun = function(model) model$nll,
+      fit_args = list(batch_size = 8L),
+      predict_args = list(batch_size = 8L), progress = FALSE
+    ),
+    "CUDA out of memory"
+  )
+  first <- readRDS(.autok_checkpoint_path(checkpoint_dir, 1L, 1L))
+  expect_identical(first$effective_fit_batch_size, 8L)
+  expect_false(file.exists(.autok_checkpoint_path(checkpoint_dir, 2L, 1L)))
+})
+
+test_that("hashed legacy artifacts still undergo one-time execution validation", {
+  skip_if_not_installed("torch")
+  checkpoint_dir <- tempfile("autok-hashed-legacy-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  fake_fit <- function(x, n_clusters, seed, batch_size, ...) {
+    list(k = n_clusters, seed = seed, nll = n_clusters)
+  }
+  fake_predict <- function(model, newdata, batch_size, ...) {
+    rep.int(0L, nrow(newdata))
+  }
+  testthat::local_mocked_bindings(
+    .autok_default_fit = fake_fit,
+    .autok_default_predict = fake_predict,
+    .package = "CellCharterR"
+  )
+  x <- matrix(seq_len(24), ncol = 3L)
+  invisible(cellcharter_autok_fit(
+    x, c(2L, 2L), checkpoint_dir, max_runs = 1L,
+    fit_args = list(batch_size = 8L, device = "cpu", num_threads = 1L),
+    predict_args = list(batch_size = 8L, device = "cpu"), progress = FALSE
+  ))
+
+  state_path <- file.path(checkpoint_dir, "autok_state.rds")
+  state <- readRDS(state_path)
+  artifact_path <- state$fit_index$path[[1L]]
+  artifact <- readRDS(artifact_path)
+  artifact$execution_contract <- NULL
+  artifact$effective_fit_batch_size <- 4L
+  saveRDS(artifact, artifact_path)
+  state$fit_index$bytes[[1L]] <- as.numeric(file.info(artifact_path)$size)
+  state$fit_index$sha256[[1L]] <- .autok_file_sha256(artifact_path)
+  state$fit_index$execution_contract_sha256 <- NULL
+  saveRDS(state, state_path)
+
+  expect_error(
+    cellcharter_autok_fit(
+      x, c(2L, 2L), checkpoint_dir, max_runs = 1L,
+      fit_args = list(batch_size = 8L, device = "cpu", num_threads = 1L),
+      predict_args = list(batch_size = 8L, device = "cpu"), progress = FALSE
+    ),
+    "cannot prove the requested numerical execution contract"
+  )
+})
+
+test_that("Torch legacy state without an execution contract fails closed", {
+  state <- list(
+    backend = "torch",
+    resume_contract = list(algorithm = "torch-full-covariance-em-v1"),
+    fit_args = list(batch_size = 8L, device = "auto"),
+    predict_args = list(batch_size = 8L, device = "auto")
+  )
+  expect_null(.autok_saved_execution_contract(state))
+})
+
+test_that("direct AutoK model loading verifies integrity and repairs legacy C++ class", {
+  path <- tempfile(fileext = ".rds")
+  on.exit(unlink(path), add = TRUE)
+  legacy_model <- structure(
+    list(runtime = list(backend = "compiled-cpp-double"), n_clusters = 2L),
+    class = "torch_gmm"
+  )
+  saveRDS(list(model = legacy_model, backend = "cpp"), path)
+  row <- data.frame(
+    k = 2L, path = path, bytes = as.numeric(file.info(path)$size),
+    sha256 = .autok_file_sha256(path), stringsAsFactors = FALSE
+  )
+  object <- structure(list(
+    candidate_k = 2L, stability_mean = 1, best_k = 2L, best_index = row
+  ), class = "cellcharter_autok")
+
+  restored <- cellcharter_autok_model(object)
+  expect_s3_class(restored, "cpp_gmm")
+  expect_true(inherits(restored, "torch_gmm"))
+
+  object$best_index$sha256 <- paste(rep.int("0", 64L), collapse = "")
+  expect_error(cellcharter_autok_model(object), "SHA-256 integrity")
+})
+
+test_that("C++ fit checkpoint mode publishes each K before starting the next", {
+  checkpoint_dir <- tempfile("autok-cpp-per-fit-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  calls <- 0L
+  testthat::local_mocked_bindings(
+    cpp_gmm_fit = function(x, n_clusters, seed, num_threads, ...) {
+      calls <<- calls + 1L
+      if (calls == 2L) stop("synthetic interruption after first K")
+      structure(list(
+        labels = rep.int(0L, nrow(x)), nll = as.numeric(n_clusters),
+        nll_ = as.numeric(n_clusters), runtime = list(backend = "compiled-cpp-double")
+      ), class = c("cpp_gmm", "torch_gmm"))
+    },
+    .package = "CellCharterR"
+  )
+
+  expect_error(
+    cellcharter_autok_fit(
+      matrix(seq_len(24), ncol = 3L), c(2L, 2L), checkpoint_dir,
+      max_runs = 1L, backend = "cpp", checkpoint_mode = "fit",
+      progress = FALSE
+    ),
+    "synthetic interruption"
+  )
+  first <- .autok_checkpoint_path(checkpoint_dir, 1L, 1L)
+  second <- .autok_checkpoint_path(checkpoint_dir, 2L, 1L)
+  expect_true(file.exists(first))
+  expect_false(file.exists(second))
+  expect_identical(readRDS(first)$k, 1L)
+})
+
+test_that("AutoK disables nested direct-fit OOM retries", {
+  observed <- NULL
+  testthat::local_mocked_bindings(
+    torch_gmm_fit = function(...) {
+      observed <<- list(...)
+      "model"
+    },
+    .package = "CellCharterR"
+  )
+  expect_identical(
+    .autok_default_fit(matrix(1, 1L, 1L), 1L, 2L, batch_size = 64L),
+    "model"
+  )
+  expect_identical(observed$.oom_retries, 0L)
+  expect_identical(observed$batch_size, 64L)
+})
+
 test_that("AutoK rejects a checkpoint from another representation", {
   checkpoint_dir <- tempfile("autok-mismatch-")
   x <- matrix(seq_len(24), ncol = 3)
@@ -178,6 +500,74 @@ test_that("AutoK rejects a checkpoint from another representation", {
       nll_fun = function(model) model$nll, data_id = "second"
     ),
     "does not match current `data_id`"
+  )
+})
+
+test_that("AutoK binds resume identity to same-shaped representation contents", {
+  checkpoint_dir <- tempfile("autok-content-identity-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  x <- matrix(seq_len(24), ncol = 3)
+  fit_hook <- function(x, n_clusters, seed, ...) list(k = n_clusters, nll = n_clusters)
+  predict_hook <- function(model, newdata, ...) rep.int(0L, nrow(newdata))
+
+  first <- cellcharter_autok_fit(
+    x, c(2L, 3L), checkpoint_dir, max_runs = 1L,
+    fit_fun = fit_hook, predict_fun = predict_hook,
+    nll_fun = function(model) model$nll, data_id = "same-provenance",
+    progress = FALSE
+  )
+  changed <- x
+  changed[[1L]] <- changed[[1L]] + 0.5
+  expect_false(identical(
+    first$representation_sha256,
+    .autok_representation_sha256(changed)
+  ))
+  expect_error(
+    cellcharter_autok_fit(
+      changed, c(2L, 3L), checkpoint_dir, max_runs = 1L,
+      fit_fun = fit_hook, predict_fun = predict_hook,
+      nll_fun = function(model) model$nll, data_id = "same-provenance",
+      progress = FALSE
+    ),
+    "representation contents"
+  )
+})
+
+test_that("representation fingerprints are storage-backend independent", {
+  x <- matrix(seq_len(30), ncol = 3,
+              dimnames = list(paste0("spot", 1:10), paste0("f", 1:3)))
+  delayed <- DelayedArray::DelayedArray(x)
+  expect_identical(
+    .autok_representation_sha256(x, target_block_values = 7L),
+    .autok_representation_sha256(delayed, target_block_values = 7L)
+  )
+})
+
+test_that("committed fit artifacts have cryptographic integrity guards", {
+  checkpoint_dir <- tempfile("autok-artifact-integrity-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  x <- matrix(seq_len(24), ncol = 3)
+  fit_hook <- function(x, n_clusters, seed, ...) list(k = n_clusters, nll = n_clusters)
+  predict_hook <- function(model, newdata, ...) rep.int(0L, nrow(newdata))
+  first <- cellcharter_autok_fit(
+    x, c(2L, 3L), checkpoint_dir, max_runs = 1L,
+    fit_fun = fit_hook, predict_fun = predict_hook,
+    nll_fun = function(model) model$nll, progress = FALSE
+  )
+  expect_true(all(grepl("^[0-9a-f]{64}$", first$fit_index$sha256)))
+
+  path <- first$fit_index$path[[1L]]
+  bytes <- readBin(path, what = "raw", n = file.info(path)$size)
+  position <- max(1L, length(bytes) - 10L)
+  bytes[[position]] <- as.raw(bitwXor(as.integer(bytes[[position]]), 1L))
+  writeBin(bytes, path)
+  expect_error(
+    cellcharter_autok_fit(
+      x, c(2L, 3L), checkpoint_dir, max_runs = 1L,
+      fit_fun = fit_hook, predict_fun = predict_hook,
+      nll_fun = function(model) model$nll, progress = FALSE
+    ),
+    "SHA-256 integrity"
   )
 })
 

@@ -329,12 +329,13 @@ cellcharter_global_distance_cutoff <- function(
 #' @param block_rows maximum representation rows realised at once and maximum
 #'   focal rows whose aggregate features are held for one write. Sparse graph
 #'   frontier memory additionally depends on graph degree and requested hops.
+#' @param progress whether to display block-level write progress.
 #' @return An HDF5-backed `DelayedMatrix` with an `aggregation_provenance`
 #'   attribute recording the row budget and estimated dense workspace.
 #' @keywords internal
 .cc_aggregate_hdf5 <- function(x, adjacency_by_sample, rows_by_sample,
                                filepath, name = "X_cellcharter", n_layers = 3L,
-                               block_rows = 8192L) {
+                               block_rows = 8192L, progress = FALSE) {
   if (!requireNamespace("HDF5Array", quietly = TRUE)) {
     stop("Install HDF5Array for disk-backed output.", call. = FALSE)
   }
@@ -352,6 +353,9 @@ cellcharter_global_distance_cutoff <- function(
     stop("`name` must be one non-empty HDF5 dataset name.", call. = FALSE)
   }
   block_rows <- .cc_aggregation_block_rows(block_rows)
+  if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
+    stop("`progress` must be TRUE or FALSE.", call. = FALSE)
+  }
   layers <- .cc_layers(n_layers)
   sample_names <- names(rows_by_sample)
   if (!is.list(adjacency_by_sample) || !is.list(rows_by_sample) ||
@@ -388,6 +392,12 @@ cellcharter_global_distance_cutoff <- function(
     dim = c(nrow(x), n_features), filepath = filepath, name = name,
     type = "double"
   )
+  total_blocks <- sum(vapply(
+    rows_by_sample, function(rows) ceiling(length(rows) / block_rows), numeric(1)
+  ))
+  bar <- if (progress) utils::txtProgressBar(0L, total_blocks, style = 3L) else NULL
+  if (!is.null(bar)) on.exit(close(bar), add = TRUE)
+  completed_blocks <- 0L
   for (sample_id in names(rows_by_sample)) {
     rows <- rows_by_sample[[sample_id]]
     graph <- adjacency_by_sample[[sample_id]]
@@ -410,6 +420,8 @@ cellcharter_global_distance_cutoff <- function(
           target, viewport, aggregate[block_positions, , drop = FALSE]
         )
       }
+      completed_blocks <- completed_blocks + 1L
+      if (!is.null(bar)) utils::setTxtProgressBar(bar, completed_blocks)
     }
   }
   answer <- HDF5Array::HDF5Array(filepath, name)

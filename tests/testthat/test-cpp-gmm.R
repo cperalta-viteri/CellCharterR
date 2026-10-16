@@ -52,13 +52,64 @@ test_that("compiled GMM fits are deterministic across outer worker counts", {
   }
 })
 
+test_that("compiled multi-fit progress is optional and numerically inert", {
+  x <- cpp_gmm_fixture()
+  arguments <- list(
+    x = x, n_clusters = 2:4, seeds = 101:103, workers = 3L,
+    threads_per_fit = 1L, max_iter = 12L, tolerance = 1e-6
+  )
+
+  expect_output(
+    quiet <- do.call(cpp_gmm_fit_many, c(arguments, list(progress = FALSE))),
+    NA
+  )
+  expect_output(
+    visible <- do.call(cpp_gmm_fit_many, c(arguments, list(progress = TRUE))),
+    "3/3 jobs finished",
+    fixed = TRUE
+  )
+  for (i in seq_along(quiet)) {
+    expect_identical(visible[[i]]$labels, quiet[[i]]$labels)
+    expect_equal(visible[[i]]$nll, quiet[[i]]$nll, tolerance = 0)
+    expect_equal(visible[[i]]$means, quiet[[i]]$means, tolerance = 0)
+    expect_equal(visible[[i]]$covariances, quiet[[i]]$covariances, tolerance = 0)
+  }
+  expect_error(
+    do.call(cpp_gmm_fit_many, c(arguments, list(progress = NA))),
+    "progress"
+  )
+})
+
+test_that("compiled progress path joins all workers after native fit failures", {
+  x <- matrix(rep(c(-1e308, 1e308), 100L), nrow = 100L, ncol = 2L)
+  expect_output(
+    expect_error(
+      cpp_gmm_fit_many(
+        x, 2:4, seeds = 1:3, workers = 3L, threads_per_fit = 1L,
+        max_iter = 2L, progress = TRUE
+      ),
+      "Native GMM job 1 failed.*Cholesky factorization failed"
+    ),
+    "3/3 jobs finished",
+    fixed = TRUE
+  )
+})
+
 test_that("compiled GMM stored labels, likelihood, and parameters are coherent", {
   x <- cpp_gmm_fixture()
   ridge <- 1e-5
   model <- cpp_gmm_fit(x, 3L, max_iter = 50L, tolerance = 1e-8,
                        covariance_regularization = ridge, seed = 27L)
 
+  expect_s3_class(model, "cpp_gmm")
+  expect_s3_class(model, "torch_gmm")
   expect_identical(model$labels, cpp_gmm_predict(model, x, batch_size = 17L))
+  expect_identical(model$labels, predict(model, x, batch_size = 17L))
+  probability <- cpp_gmm_predict_proba(model, x, batch_size = 13L)
+  expect_identical(
+    cpp_gmm_predict(model, x, batch_size = 11L),
+    max.col(probability, ties.method = "first") - 1L
+  )
   expect_equal(model$nll, -cpp_gmm_log_likelihood(model, x, batch_size = 19L),
                tolerance = 1e-10)
   expect_true(all(is.finite(model$weights)))
@@ -72,6 +123,114 @@ test_that("compiled GMM stored labels, likelihood, and parameters are coherent",
     expect_silent(chol(regularized))
     expect_gt(min(eigen(regularized, symmetric = TRUE, only.values = TRUE)$values), 0)
   }
+})
+
+test_that("compiled label prediction is genuinely batch bounded", {
+  means <- cbind(seq(-7, 7), seq(-3.5, 3.5, length.out = 15L))
+  model <- structure(list(
+    means = means,
+    covariances = rep(list(diag(2L)), nrow(means)),
+    weights = rep(1 / nrow(means), nrow(means)),
+    n_features = 2L,
+    n_clusters = nrow(means),
+    covariance_regularization = 1e-6
+  ), class = c("cpp_gmm", "torch_gmm"))
+  set.seed(920)
+  x <- matrix(stats::rnorm(40002L), ncol = 2L)
+
+  observed_batch_rows <- integer()
+  original_scores <- CellCharterR:::.cpp_gmm_log_scores
+  testthat::local_mocked_bindings(
+    .cpp_gmm_log_scores = function(x, prepared) {
+      observed_batch_rows <<- c(observed_batch_rows, nrow(x))
+      original_scores(x, prepared)
+    },
+    cpp_gmm_predict_proba = function(...) {
+      stop("label prediction attempted to construct the full posterior")
+    },
+    .package = "CellCharterR"
+  )
+
+  labels <- cpp_gmm_predict(model, x, batch_size = 37L)
+  expect_length(labels, nrow(x))
+  expect_true(all(labels %in% 0:14))
+  expect_lte(max(observed_batch_rows), 37L)
+  expect_gt(length(observed_batch_rows), 1L)
+})
+
+test_that("compiled scoring reads DelayedMatrix inputs in bounded row blocks", {
+  means <- rbind(c(-2, 0), c(0, 2), c(2, -1))
+  model <- structure(list(
+    means = means,
+    covariances = list(diag(2L), diag(c(1.5, 0.75)), diag(c(0.5, 2))),
+    weights = c(0.2, 0.5, 0.3),
+    n_features = 2L,
+    n_clusters = 3L,
+    covariance_regularization = 1e-6
+  ), class = c("cpp_gmm", "torch_gmm"))
+  set.seed(921)
+  x <- matrix(stats::rnorm(514L), ncol = 2L)
+  delayed <- DelayedArray::DelayedArray(x)
+
+  expected_labels <- cpp_gmm_predict(model, x, batch_size = 23L)
+  expected_probability <- cpp_gmm_predict_proba(model, x, batch_size = 23L)
+  expected_likelihood <- cpp_gmm_log_likelihood(model, x, batch_size = 23L)
+  observed_batch_rows <- integer()
+  original_get_block <- CellCharterR:::.cpp_gmm_get_block
+  testthat::local_mocked_bindings(
+    .cpp_gmm_get_block = function(reader, index) {
+      observed_batch_rows <<- c(observed_batch_rows, length(index))
+      original_get_block(reader, index)
+    },
+    .package = "CellCharterR"
+  )
+
+  expect_identical(
+    cpp_gmm_predict(model, delayed, batch_size = 23L), expected_labels
+  )
+  expect_equal(
+    cpp_gmm_predict_proba(model, delayed, batch_size = 23L),
+    expected_probability,
+    tolerance = 0
+  )
+  expect_equal(
+    cpp_gmm_log_likelihood(model, delayed, batch_size = 23L),
+    expected_likelihood,
+    tolerance = 0
+  )
+  expect_lte(max(observed_batch_rows), 23L)
+  expect_identical(
+    length(observed_batch_rows),
+    as.integer(3L * ceiling(nrow(x) / 23L))
+  )
+
+  delayed_bad <- DelayedArray::DelayedArray(rbind(x[1:3, ], c(NA_real_, 0)))
+  expect_error(
+    cpp_gmm_predict(model, delayed_bad, batch_size = 2L),
+    "finite numeric matrix blocks"
+  )
+})
+
+test_that("generic prediction preserves double precision for compiled models", {
+  model <- structure(list(
+    means = matrix(c(1e8, 1e8 + 4), ncol = 1L),
+    covariances = list(matrix(1), matrix(1)),
+    weights = c(0.5, 0.5),
+    n_features = 1L,
+    n_clusters = 2L,
+    covariance_regularization = 1e-8
+  ), class = c("cpp_gmm", "torch_gmm"))
+  x <- matrix(c(1e8 + 0.25, 1e8 + 3.75), ncol = 1L)
+
+  testthat::local_mocked_bindings(
+    torch_gmm_predict = function(...) stop("Torch prediction was dispatched"),
+    .package = "CellCharterR"
+  )
+  expect_identical(predict(model, x, batch_size = 1L), c(0L, 1L))
+  expect_identical(
+    predict(model, x, batch_size = 1L),
+    cpp_gmm_predict(model, x, batch_size = 2L)
+  )
 })
 
 test_that("compiled scoring validates non-finite and empty inputs", {
@@ -156,5 +315,120 @@ test_that("round-checkpoint C++ AutoK resume is computationally equivalent", {
   for (k in first$fit_k) {
     expect_identical(cellcharter_autok_model(resumed, k)$labels,
                      cellcharter_autok_model(first, k)$labels)
+  }
+})
+
+test_that("incompatible C++ campaigns fail closed without overwriting artifacts", {
+  x <- cpp_gmm_fixture()
+  checkpoint_dir <- tempfile("cpp-autok-fail-closed-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  arguments <- list(
+    x = x, n_clusters = 2:3, checkpoint_dir = checkpoint_dir,
+    max_runs = 1L, convergence_tol = 0, seed = 59L,
+    backend = "cpp", workers = 2L, checkpoint_mode = "round",
+    fit_args = list(max_iter = 2L, tolerance = 1e-6), progress = FALSE
+  )
+  invisible(do.call(cellcharter_autok_fit, arguments))
+  files <- list.files(checkpoint_dir, recursive = TRUE, full.names = TRUE)
+  before <- vapply(files, .autok_file_sha256, character(1L))
+
+  arguments$x[[1L]] <- arguments$x[[1L]] + 0.125
+  expect_error(
+    do.call(cellcharter_autok_fit, arguments),
+    "Existing artifacts were not modified"
+  )
+  expect_identical(
+    unname(vapply(files, .autok_file_sha256, character(1L))),
+    unname(before)
+  )
+})
+
+test_that("C++ round checkpoints survive an observability-only wrapper upgrade", {
+  x <- cpp_gmm_fixture()
+  checkpoint_dir <- tempfile("cpp-autok-progress-upgrade-")
+  arguments <- list(
+    x = x, n_clusters = 2:3, checkpoint_dir = checkpoint_dir,
+    max_runs = 2L, convergence_tol = 0, seed = 63L,
+    backend = "cpp", workers = 2L, checkpoint_mode = "round",
+    fit_args = list(max_iter = 20L, tolerance = 1e-6), progress = FALSE
+  )
+  original <- do.call(cellcharter_autok_fit, arguments)
+
+  state_path <- file.path(checkpoint_dir, "autok_state.rds")
+  state <- readRDS(state_path)
+  previous_contract <- state$resume_contract
+  previous_contract$algorithm <- paste0(
+    "cpp-full-covariance-em-v1.0.1:", paste(rep("a", 64L), collapse = "")
+  )
+  previous_id <- digest::digest(
+    .cc_contract_canonical(previous_contract), algo = "sha256", serialize = TRUE
+  )
+  checkpoint_paths <- unique(state$fit_index$path)
+  for (path in checkpoint_paths) {
+    bundle <- readRDS(path)
+    bundle$data_id <- previous_id
+    bundle$artifacts <- lapply(bundle$artifacts, function(artifact) {
+      artifact$data_id <- previous_id
+      artifact
+    })
+    saveRDS(bundle, path)
+  }
+  state$resume_contract <- previous_contract
+  state$data_id <- previous_id
+  state$fit_index$bytes <- as.numeric(file.info(state$fit_index$path)$size)
+  # This fixture emulates a checkpoint written before cryptographic artifact
+  # guards were introduced; the resume path must validate and add them once.
+  state$fit_index$sha256 <- NULL
+  saveRDS(state, state_path)
+
+  expect_message(
+    resumed <- do.call(cellcharter_autok_fit, arguments),
+    "observability-only package upgrade"
+  )
+  expect_true(all(resumed$fit_index$resumed))
+  expect_identical(resumed$best_k, original$best_k)
+  expect_equal(resumed$stability, original$stability, tolerance = 0)
+
+  resumed_again <- do.call(cellcharter_autok_fit, arguments)
+  expect_true(all(resumed_again$fit_index$resumed))
+  expect_identical(resumed_again$best_k, original$best_k)
+})
+
+test_that("SPE clustering adapter attaches labels from C++ memory and round artifacts", {
+  for (mode in c("none", "round")) {
+    spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
+    checkpoint_dir <- tempfile(paste0("cpp-sce-", mode, "-"))
+    spe <- cellcharter_cluster(
+      spe,
+      representation = "X_cellcharter_tiny",
+      candidate_k = c(2L, 2L),
+      checkpoint_dir = checkpoint_dir,
+      domain_col = paste0("cpp_domain_", mode),
+      max_runs = 2L,
+      convergence_tol = 0,
+      seed = 71L,
+      backend = "cpp",
+      workers = 2L,
+      threads_per_fit = 1L,
+      checkpoint_mode = mode,
+      resume = FALSE,
+      fit_args = list(max_iter = 10L, tolerance = 1e-5),
+      progress = FALSE
+    )
+
+    expect_s4_class(spe, "SpatialExperiment")
+    expect_false(anyNA(spe[[paste0("cpp_domain_", mode)]]))
+    expect_length(spe[[paste0("cpp_domain_", mode)]], ncol(spe))
+    stage <- S4Vectors::metadata(spe)$CellCharterR$stages[[
+      paste0("clustering:cpp_domain_", mode)
+    ]]
+    if (identical(mode, "none")) {
+      expect_null(stage$parameters$checkpoint_dir)
+      expect_null(stage$parameters$selected_artifact)
+      expect_false(dir.exists(checkpoint_dir))
+    } else {
+      expect_true(dir.exists(checkpoint_dir))
+      expect_true(file.exists(stage$parameters$selected_artifact))
+    }
   }
 })

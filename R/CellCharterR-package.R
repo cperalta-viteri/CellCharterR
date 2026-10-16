@@ -15,3 +15,7 @@
 #'
 #' @keywords internal
 "_PACKAGE"
+
+utils::globalVariables(c(
+  "annotation_y", "block", "curve_group", "enrichment_z", "se", "zone"
+))

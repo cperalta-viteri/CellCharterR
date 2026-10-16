@@ -46,7 +46,8 @@ Draws a CellCharter-style dot plot that focuses on positive log2
 observed-to-expected enrichment. Non-positive values remain in the returned
 statistical result but are omitted from the plot. The input can be a
 clustered \code{SpatialExperiment}, a result returned by the enrichment kernel,
-or an enrichment matrix.
+or an enrichment matrix. For experiment input, stored scientific-input and
+parameter fingerprints are checked before plotting.
 }
 \examples{
 spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)

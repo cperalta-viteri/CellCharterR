@@ -15,7 +15,8 @@ torch_gmm_fit(
   seed = 1L,
   num_threads = NULL,
   initialization_method = c("legacy", "torch"),
-  validate_input = TRUE
+  validate_input = TRUE,
+  .oom_retries = 10L
 )
 }
 \arguments{
@@ -45,6 +46,9 @@ initializer or \code{"torch"} for the accelerated full-data Torch initializer.}
 
 \item{validate_input}{Whether to scan every input block for finite values
 before fitting. AutoK may perform this scan once for the whole campaign.}
+
+\item{.oom_retries}{Internal maximum number of complete-fit CUDA OOM retries.
+AutoK sets this to zero because it owns campaign-level batch-size retries.}
 }
 \value{
 A \code{torch_gmm} model.  Only mixture parameters are retained in memory.

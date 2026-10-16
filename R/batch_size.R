@@ -1,3 +1,20 @@
+.cc_select_cuda_free_memory <- function(mib, visible) {
+  mib <- suppressWarnings(as.numeric(trimws(mib)))
+  mib <- mib[is.finite(mib) & mib > 0]
+  if (!length(mib)) return(NA_real_)
+
+  visible <- strsplit(visible, ",", fixed = TRUE)[[1L]][1L]
+  if (!length(visible) || is.na(visible) || !nzchar(visible)) return(mib[[1L]])
+  index <- suppressWarnings(as.integer(visible)) + 1L
+  if (is.finite(index) && index >= 1L && index <= length(mib)) {
+    return(mib[[index]])
+  }
+  # UUID and MIG selectors cannot be mapped reliably from a memory-only query.
+  # The minimum across reported devices is conservative; selecting GPU 0 here
+  # could dangerously overestimate memory on the visible device.
+  min(mib)
+}
+
 .cc_cuda_free_memory <- function() {
   executable <- Sys.which("nvidia-smi")
   if (!nzchar(executable)) return(NA_real_)
@@ -10,10 +27,9 @@
   ), silent = TRUE)
   if (inherits(output, "try-error") || !length(output)) return(NA_real_)
 
-  visible <- strsplit(Sys.getenv("CUDA_VISIBLE_DEVICES", ""), ",", fixed = TRUE)[[1L]][1L]
-  index <- suppressWarnings(as.integer(visible)) + 1L
-  if (!is.finite(index) || index < 1L || index > length(output)) index <- 1L
-  mib <- suppressWarnings(as.numeric(trimws(output[[index]])))
+  mib <- .cc_select_cuda_free_memory(
+    output, Sys.getenv("CUDA_VISIBLE_DEVICES", "")
+  )
   if (length(mib) != 1L || !is.finite(mib) || mib <= 0) return(NA_real_)
   mib * 1024^2
 }

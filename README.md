@@ -200,7 +200,29 @@ opaque third-party metadata references and externally backed spatial images
 are rejected during saving with an actionable location rather than silently
 producing a non-portable analysis.
 
-## Experimental R Torch clustering
+## Experimental clustering backends
+
+### Compiled multicore CPU backend
+
+CellCharterR also provides an experimental C++17 full-covariance GMM backend
+for large AutoK searches. On the full mouse-spleen aggregated representation
+(707,474 spots and 40 features), an AutoK search over candidate `K = 2..20`
+converged after five rounds in **38 minutes 20 seconds** on Linux using eight
+concurrent fits with four threads per fit. A standalone K=20 fit took 154.5
+seconds with four threads and 567.4 seconds with one thread, with identical
+labels and negligible floating-point differences. Extrapolating from those
+measurements, the same complete five-round search would take approximately
+**18--20 hours on one comparable CPU core**; this is an estimate, not a
+measured single-core AutoK run.
+
+Parallel execution uses standard C++17 threads rather than Unix process
+forking. It is therefore designed to compile on Linux, macOS, and Windows with
+the corresponding R C++ toolchain. The current benchmark and validation are
+Linux-only, however, so macOS and Windows multicore behavior should be treated
+as unverified until platform-specific CI is added. Runtime will depend on CPU,
+memory bandwidth, candidate K range, convergence behavior, and thread count.
+
+### R Torch backend
 
 The GMM is an expectation-maximisation (EM) algorithm. Its E-step evaluates
 Gaussian probabilities and its M-step has closed-form weighted means and

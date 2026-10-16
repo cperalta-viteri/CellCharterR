@@ -2,6 +2,8 @@ Package: CellCharterR
 Title: Disk-Backed R Implementation of CellCharter Spatial Domains
 Version: 0.99.0
 Authors@R: c(person(given = "Christian", family = "Peralta Viteri", role = c("aut", "cre"), email = "christian_94_97@hotmail.com"))
+Author: Christian Peralta Viteri [aut, cre]
+Maintainer: Christian Peralta Viteri <christian_94_97@hotmail.com>
 Description: Implements a reproducible, disk-backed workflow for identifying
     spatial domains in SpatialExperiment and SingleCellExperiment data. It
     constructs sample-local

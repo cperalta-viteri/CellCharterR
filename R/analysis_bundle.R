@@ -1,8 +1,9 @@
-# Portable completed-analysis directorys.  Large rectangular data are rebuilt from
-# analysis-owned HDF5 datasets; the RDS files contain structure and small results
-# only and therefore never serialize an HDF5 seed pointing outside the bundle.
+# Portable completed-analysis directories. Assays are rebuilt from
+# analysis-owned HDF5 datasets; native annotations, coordinates, embeddings,
+# graphs, and results are stored as RDS payloads. No serialized HDF5 seed points
+# outside the directory.
 
-.cc_analysis_version <- 1L
+.cc_analysis_version <- 2L
 
 .cc_analysis_progress <- function(enabled, step, message) {
   if (isTRUE(enabled)) message(sprintf("CellCharterR analysis [%s] %s", step, message))
@@ -52,6 +53,159 @@
        dimnames = dimnames(x), class = class(x))
 }
 
+.cc_analysis_realize_matrix <- function(x, id, progress, block_mib = 64) {
+  if (!inherits(x, "DelayedArray")) return(x)
+  if (length(dim(x)) != 2L) {
+    stop("Delayed component `", id, "` is not two-dimensional.", call. = FALSE)
+  }
+  nr <- nrow(x); nc <- ncol(x)
+  .cc_analysis_progress(
+    progress, "materialize",
+    sprintf("%s [%s x %s] as an ordinary matrix", id, nr, nc)
+  )
+  if (!nr || !nc) return(as.matrix(x))
+  # Probe one row to preserve integer/logical storage where possible, then fill
+  # the result in bounded row blocks. This avoids `as.matrix()` creating a
+  # second cohort-wide temporary object for legacy delayed metadata/embeddings.
+  probe <- as.matrix(x[1L, , drop = FALSE])
+  answer <- matrix(vector(typeof(probe), as.double(nr) * as.double(nc)),
+                   nrow = nr, ncol = nc)
+  bytes_per_value <- max(1, utils::object.size(probe) / max(1, length(probe)))
+  rows_per_block <- max(
+    1L,
+    min(nr, floor(block_mib * 1024^2 / max(1, nc * bytes_per_value)))
+  )
+  for (start in seq.int(1L, nr, by = rows_per_block)) {
+    end <- min(nr, start + rows_per_block - 1L)
+    answer[start:end, ] <- as.matrix(x[start:end, , drop = FALSE])
+  }
+  dimnames(answer) <- dimnames(x)
+  answer
+}
+
+.cc_analysis_write_native_matrix <- function(x, directory, id, progress) {
+  if (inherits(x, "DelayedArray")) {
+    # Preserve bounded-memory saving for legacy/delayed embeddings. The loader
+    # realizes this analysis-owned copy into the canonical native reducedDim;
+    # it never follows the original seed path.
+    spec <- .cc_analysis_write_matrix(x, directory, id, progress)
+    spec$format <- "native-on-load-hdf5-v1"
+    return(spec)
+  }
+  value <- .cc_analysis_realize_matrix(x, id, progress)
+  if (!is.matrix(value) || !is.numeric(value)) {
+    stop("Reduced dimension `", id,
+         "` must materialize to an ordinary numeric matrix.", call. = FALSE)
+  }
+  file <- file.path(directory, paste0(.cc_analysis_safe_name(id), ".rds"))
+  .cc_analysis_progress(
+    progress, "write", sprintf("%s [%s x %s] native matrix", id,
+                               nrow(value), ncol(value))
+  )
+  saveRDS(value, file, version = 3, compress = FALSE)
+  list(format = "native-matrix-rds-v1", file = basename(file),
+       dim = as.integer(dim(value)), dimnames = dimnames(value))
+}
+
+.cc_analysis_materialize_value <- function(x, breadcrumb, progress) {
+  if (inherits(x, "DelayedArray")) {
+    if (length(dim(x)) == 2L) {
+      value <- .cc_analysis_realize_matrix(x, breadcrumb, progress)
+      if (ncol(value) == 1L) return(drop(value))
+      return(value)
+    }
+    .cc_analysis_progress(progress, "materialize", breadcrumb)
+    return(as.vector(as.array(x)))
+  }
+  if (methods::is(x, "DataFrame") || is.data.frame(x)) {
+    for (i in seq_along(x)) {
+      child <- if (!is.null(names(x)) && nzchar(names(x)[i])) names(x)[i] else i
+      x[[i]] <- .cc_analysis_materialize_value(
+        x[[i]], paste0(breadcrumb, "$", child), progress
+      )
+    }
+    return(x)
+  }
+  if (is.list(x) && !base::isS4(x)) {
+    for (i in seq_along(x)) {
+      child <- if (!is.null(names(x)) && nzchar(names(x)[i])) names(x)[i] else i
+      x[[i]] <- .cc_analysis_materialize_value(
+        x[[i]], paste0(breadcrumb, "$", child), progress
+      )
+    }
+  }
+  x
+}
+
+.cc_analysis_copy_uns <- function(locator, directory, progress) {
+  if (!.cc_analysis_is_anndata_uns_locator(locator)) return(locator)
+  source <- normalizePath(locator$filepath, mustWork = TRUE)
+  token <- substr(digest::digest(
+    paste(source, locator$group, sep = "\n"), algo = "sha256"
+  ), 1L, 16L)
+  relative <- .cc_analysis_canonical_path(
+    file.path("artifacts", paste0("anndata-uns-", token, ".h5"))
+  )
+  destination <- file.path(directory, relative)
+  if (!file.exists(destination)) {
+    dir.create(dirname(destination), recursive = TRUE, showWarnings = FALSE)
+    .cc_analysis_progress(
+      progress, "copy",
+      paste0("AnnData ", locator$group, " hierarchy (without the full H5AD clone)")
+    )
+    rhdf5::h5createFile(destination)
+    source_id <- rhdf5::H5Fopen(source)
+    destination_id <- rhdf5::H5Fopen(destination, flags = "H5F_ACC_RDWR")
+    copy_error <- NULL
+    tryCatch(
+      rhdf5::H5Ocopy(source_id, locator$group, destination_id, locator$group),
+      error = function(e) copy_error <<- e,
+      finally = {
+        rhdf5::H5Fclose(destination_id)
+        rhdf5::H5Fclose(source_id)
+      }
+    )
+    if (!is.null(copy_error)) {
+      unlink(destination)
+      stop("Could not copy AnnData `", locator$group,
+           "` into the portable analysis: ", conditionMessage(copy_error),
+           call. = FALSE)
+    }
+  }
+  locator$filepath <- structure(
+    relative, class = c("cellcharter_bundle_path", "character")
+  )
+  locator
+}
+
+.cc_analysis_prepare_import_metadata <- function(x, directory, progress) {
+  if (!is.list(x)) return(x)
+  if (.cc_analysis_is_anndata_uns_locator(x$anndata_uns)) {
+    x$anndata_uns <- .cc_analysis_copy_uns(x$anndata_uns, directory, progress)
+  }
+  if (is.list(x$transitionR)) {
+    transition <- x$transitionR
+    # These paths point at the import directory, not at scientific results.
+    # Copying either would duplicate the complete H5AD (potentially hundreds
+    # of GiB) after the assay and /uns have already been exported.
+    if (is.character(transition$arrays_file) && length(transition$arrays_file) == 1L) {
+      transition$source_arrays_basename <- basename(transition$arrays_file)
+    }
+    if (is.character(transition$bundle_dir) && length(transition$bundle_dir) == 1L) {
+      transition$source_bundle_basename <- basename(transition$bundle_dir)
+    }
+    transition$arrays_file <- NULL
+    transition$bundle_dir <- NULL
+    transition$complete_h5ad_clone <- FALSE
+    transition$portable_analysis <- TRUE
+    if (.cc_analysis_is_anndata_uns_locator(x$anndata_uns)) {
+      transition$uns_file <- x$anndata_uns$filepath
+    }
+    x$transitionR <- transition
+  }
+  x
+}
+
 .cc_analysis_is_absolute <- function(x) {
   grepl("^[/\\\\]", x) | grepl("^[A-Za-z]:[/\\\\]", x) |
     grepl("^~([/\\\\]|$)", x)
@@ -64,6 +218,46 @@
     "(^|_)(path|file|filepath|directory|dir|checkpoint|artifact|backing)(_|$)",
     key, ignore.case = TRUE
   )
+}
+
+.cc_analysis_is_anndata_uns_locator <- function(x) {
+  is.list(x) && !is.data.frame(x) &&
+    all(c("filepath", "group", "entries") %in% names(x)) &&
+    is.character(x$filepath) && length(x$filepath) == 1L &&
+    !is.na(x$filepath) && nzchar(x$filepath) &&
+    is.character(x$group) && length(x$group) == 1L &&
+    !is.na(x$group) && startsWith(x$group, "/") &&
+    (is.null(x$entries) || is.character(x$entries))
+}
+
+.cc_analysis_is_anndata_mapping <- function(x) {
+  is.list(x) && !is.data.frame(x) &&
+    all(c("obs", "var", "obsm", "obsp", "uns") %in% names(x))
+}
+
+.cc_analysis_child_path_role <- function(parent, key) {
+  # These roles describe package-owned schemas, not arbitrary similarly named
+  # third-party metadata. In particular, `checkpoint_mode` is an AutoK option,
+  # while the H5AD importer deliberately stores /uns in its cloned arrays file.
+  if (inherits(parent, "cellcharter_autok") &&
+      identical(key, "checkpoint_mode")) {
+    return("literal")
+  }
+  if (.cc_analysis_is_anndata_uns_locator(parent) &&
+      identical(key, "filepath")) {
+    return("owned")
+  }
+  if (.cc_analysis_is_anndata_uns_locator(parent) &&
+      identical(key, "group")) {
+    return("literal")
+  }
+  if (.cc_analysis_is_anndata_mapping(parent) &&
+      identical(key, "obsm")) {
+    # Values such as /obsm/spatial are HDF5 dataset identifiers inside the
+    # relocated arrays file, not host filesystem paths.
+    return("literal")
+  }
+  "auto"
 }
 
 .cc_analysis_new_registry <- function() {
@@ -93,12 +287,19 @@
 
 .cc_analysis_pack_paths <- function(
     x, directory, key = NULL, breadcrumb = "metadata", owned = FALSE,
-    registry = .cc_analysis_new_registry()) {
+    registry = .cc_analysis_new_registry(), path_role = "auto") {
   if (inherits(x, "cellcharter_bundle_path") ||
       inherits(x, "cellcharter_bundle_paths")) return(x)
   if (is.environment(x) || typeof(x) == "externalptr" || inherits(x, "connection")) {
     stop("Unsupported opaque external reference at `", breadcrumb,
          "`; remove it or provide a portable representation before saving.", call. = FALSE)
+  }
+  if (inherits(x, "cellcharter_autok") &&
+      identical(x$checkpoint_mode, "none")) {
+    # A no-checkpoint fit is self-contained through embedded_best_artifacts.
+    # Its checkpoint_dir was only a required call argument and is not a
+    # portable dependency of the completed result.
+    x$checkpoint_dir <- NULL
   }
   if (inherits(x, "cellcharter_autok") && !is.null(x$checkpoint_dir) &&
       file.exists(x$checkpoint_dir)) {
@@ -131,7 +332,8 @@
       x[[i]] <- .cc_analysis_pack_paths(
         x[[i]], directory, child_key,
         paste0(breadcrumb, "$", if (is.null(child_key)) i else child_key),
-        owned = owned, registry = registry
+        owned = owned, registry = registry,
+        path_role = .cc_analysis_child_path_role(x, child_key)
       )
     }
     return(x)
@@ -145,7 +347,8 @@
       x[[i]] <- .cc_analysis_pack_paths(
         x[[i]], directory, child_key,
         paste0(breadcrumb, "$", if (is.null(child_key)) i else child_key),
-        owned = child_owned, registry = registry
+        owned = child_owned, registry = registry,
+        path_role = .cc_analysis_child_path_role(x, child_key)
       )
     }
     return(x)
@@ -155,7 +358,7 @@
       packed <- .cc_analysis_pack_paths(
         methods::slot(x, slot_name), directory, slot_name,
         paste0(breadcrumb, "@", slot_name), owned = owned,
-        registry = registry
+        registry = registry, path_role = "auto"
       )
       tryCatch(
         methods::slot(x, slot_name) <- packed,
@@ -168,6 +371,8 @@
     return(x)
   }
   if (!is.character(x)) return(x)
+  if (identical(path_role, "literal")) return(x)
+  if (identical(path_role, "owned")) owned <- TRUE
   pathish <- .cc_analysis_pathish_key(key)
   absolute <- !is.na(x) & .cc_analysis_is_absolute(x)
   if (any(absolute) && !owned) {
@@ -306,7 +511,7 @@
     return(NULL)
   }
   if (!inherits(x, "GRanges")) {
-    stop("Portable analysis directorys currently support `GRanges` rowRanges, not `",
+    stop("Portable analysis directories currently support `GRanges` rowRanges, not `",
          paste(class(x), collapse = "/"), "`.", call. = FALSE)
   }
   .cc_analysis_validate_embedded(S4Vectors::mcols(x), "rowRanges@mcols")
@@ -373,10 +578,14 @@
     x, directory, prefix, progress, artifact_root = directory,
     registry = .cc_analysis_new_registry()) {
   dir.create(directory, recursive = TRUE, showWarnings = FALSE)
-  .cc_analysis_validate_embedded(SummarizedExperiment::rowData(x),
-                               paste0(prefix, "$rowData"))
-  .cc_analysis_validate_embedded(SummarizedExperiment::colData(x),
-                               paste0(prefix, "$colData"))
+  row_data <- .cc_analysis_materialize_value(
+    SummarizedExperiment::rowData(x), paste0(prefix, "$rowData"), progress
+  )
+  col_data <- .cc_analysis_materialize_value(
+    SummarizedExperiment::colData(x), paste0(prefix, "$colData"), progress
+  )
+  .cc_analysis_validate_embedded(row_data, paste0(prefix, "$rowData"))
+  .cc_analysis_validate_embedded(col_data, paste0(prefix, "$colData"))
   assay_names <- SummarizedExperiment::assayNames(x)
   assays <- lapply(seq_along(assay_names), function(i) {
     .cc_analysis_write_matrix(SummarizedExperiment::assay(x, i, withDimnames = FALSE),
@@ -386,15 +595,20 @@
 
   rd_names <- SingleCellExperiment::reducedDimNames(x)
   reduced <- lapply(seq_along(rd_names), function(i) {
-    .cc_analysis_write_matrix(SingleCellExperiment::reducedDim(x, i, withDimnames = FALSE),
-                            directory, paste0(prefix, "_reduced_", i), progress)
+    .cc_analysis_write_native_matrix(
+      SingleCellExperiment::reducedDim(x, i, withDimnames = FALSE),
+      directory, paste0(prefix, "_reduced_", i), progress
+    )
   })
   names(reduced) <- rd_names
 
   # Register this experiment's checkpoint roots before descending into
   # alternative experiments, allowing all children to reuse their artifacts.
+  raw_metadata <- .cc_analysis_prepare_import_metadata(
+    S4Vectors::metadata(x), artifact_root, progress
+  )
   packed_metadata <- .cc_analysis_pack_paths(
-    S4Vectors::metadata(x), artifact_root, registry = registry
+    raw_metadata, artifact_root, registry = registry
   )
 
   alt_names <- SingleCellExperiment::altExpNames(x)
@@ -413,10 +627,10 @@
 
   structure <- list(
     class = class(x), dim = as.integer(dim(x)), dimnames = dimnames(x),
-    rowData = SummarizedExperiment::rowData(x),
+    rowData = row_data,
     rowRanges = if (methods::is(x, "RangedSummarizedExperiment"))
       .cc_analysis_pack_ranges(SummarizedExperiment::rowRanges(x)) else NULL,
-    colData = SummarizedExperiment::colData(x),
+    colData = col_data,
     metadata = packed_metadata,
     spatialCoords = if (methods::is(x, "SpatialExperiment"))
       SpatialExperiment::spatialCoords(x) else NULL,
@@ -446,6 +660,30 @@
   ans
 }
 
+.cc_analysis_read_reduced <- function(spec, directory, id) {
+  if (identical(spec$format, "native-on-load-hdf5-v1")) {
+    return(.cc_analysis_realize_matrix(
+      .cc_analysis_read_matrix(spec, directory, id), id, progress = FALSE
+    ))
+  }
+  if (!identical(spec$format, "native-matrix-rds-v1")) {
+    # Backward compatibility with version-1 analysis directories that stored
+    # reduced dimensions as HDF5Array objects.
+    return(.cc_analysis_read_matrix(spec, directory, id))
+  }
+  path <- .cc_analysis_resolve(directory, spec$file, mustWork = FALSE)
+  if (!file.exists(path)) {
+    stop("Analysis component `", id, "` is missing: ", path, call. = FALSE)
+  }
+  answer <- readRDS(path)
+  if (!is.matrix(answer) || !is.numeric(answer) ||
+      !identical(as.integer(dim(answer)), as.integer(spec$dim))) {
+    stop("Native reduced dimension `", id, "` is invalid.", call. = FALSE)
+  }
+  dimnames(answer) <- spec$dimnames
+  answer
+}
+
 .cc_analysis_load_sce <- function(directory, id = "root", artifact_root = directory) {
   structure_file <- file.path(directory, "structure.rds")
   if (!file.exists(structure_file)) stop("Missing analysis structure: ", structure_file, call. = FALSE)
@@ -469,8 +707,10 @@
   dimnames(ans) <- z$dimnames
 
   for (i in seq_along(z$reducedDims)) {
-    value <- .cc_analysis_read_matrix(z$reducedDims[[i]], directory,
-                                    paste0(id, "/reducedDim/", names(z$reducedDims)[i]))
+    value <- .cc_analysis_read_reduced(
+      z$reducedDims[[i]], directory,
+      paste0(id, "/reducedDim/", names(z$reducedDims)[i])
+    )
     if (nrow(value) != ncol(ans)) stop("Reduced dimension row count does not match cells.", call. = FALSE)
     SingleCellExperiment::reducedDim(ans, names(z$reducedDims)[i]) <- value
   }
@@ -497,7 +737,7 @@
                       no.. = TRUE, include.dirs = TRUE)
   links <- nzchar(Sys.readlink(paths))
   if (any(links)) {
-    stop("Analysis directorys cannot contain symbolic-link payloads: ",
+    stop("Analysis directories cannot contain symbolic-link payloads: ",
          paths[which(links)[1L]], call. = FALSE)
   }
   invisible(TRUE)
@@ -537,9 +777,12 @@
 
 #' Save a portable completed CellCharterR analysis
 #'
-#' Large assays and embeddings are copied blockwise into analysis-owned HDF5
-#' files. The returned directory can be moved independently of its source H5AD
-#' and original backing files.
+#' Large assays are copied blockwise into analysis-owned HDF5 files. Reduced
+#' dimensions, annotations, coordinates, and graphs are saved as native R/
+#' Bioconductor objects, so the loaded object keeps only its assays disk-backed.
+#' The returned directory can be moved independently of its source H5AD and
+#' original backing files. AnnData `/uns` content is copied separately without
+#' duplicating the complete source H5AD clone.
 #'
 #' @param spe A `SingleCellExperiment` or `SpatialExperiment`.
 #' @param output_dir Destination directory, which must not exist unless
@@ -635,9 +878,15 @@ cellcharter_load_analysis <- function(path, validate = TRUE) {
     stop("Analysis manifest checksum mismatch; the bundle is modified or corrupt.", call. = FALSE)
   }
   manifest <- readRDS(manifest_file)
-  if (!identical(manifest$format, "CellCharterR-analysis-directory"))
+  supported_formats <- c(
+    "CellCharterR-analysis-directory",
+    # Public releases before the API rename used this format label.  The v1
+    # payload schema is otherwise readable by the current loader.
+    "CellCharterR-analysis-bundle"
+  )
+  if (!manifest$format %in% supported_formats)
     stop("Directory is not a CellCharterR analysis directory.", call. = FALSE)
-  if (!identical(as.integer(manifest$format_version), .cc_analysis_version))
+  if (!(as.integer(manifest$format_version) %in% c(1L, .cc_analysis_version)))
     stop("Unsupported analysis-directory format version: ", manifest$format_version, call. = FALSE)
   if (isTRUE(validate)) .cc_analysis_validate_files(manifest, root)
   ans <- .cc_analysis_load_sce(file.path(root, "object"))

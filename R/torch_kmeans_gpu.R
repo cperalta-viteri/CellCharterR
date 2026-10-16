@@ -3,9 +3,17 @@
 # existing AutoK checkpoints retain their original numerical contract.
 
 .rc_torch_squared_distances <- function(x, centers) {
-  distances <- x$pow(2)$sum(dim = 2, keepdim = TRUE) +
-    centers$pow(2)$sum(dim = 2)$unsqueeze(1) -
-    2 * torch::torch_matmul(x, centers$t())
+  # Expanding ||x-c||^2 as ||x||^2 + ||c||^2 - 2x'c catastrophically
+  # cancels when a representation has a large common offset. Subtracting one
+  # centre first leaves every pairwise difference unchanged while keeping the
+  # products near the scale of the data spread. This retains the bounded BxK
+  # workspace of the expanded formula (a BxKxP difference tensor would not).
+  origin <- centers[1L, , drop = FALSE]
+  x_centered <- x - origin
+  centers_centered <- centers - origin
+  distances <- x_centered$pow(2)$sum(dim = 2, keepdim = TRUE) +
+    centers_centered$pow(2)$sum(dim = 2)$unsqueeze(1) -
+    2 * torch::torch_matmul(x_centered, centers_centered$t())
   torch::torch_clamp(distances, min = 0)
 }
 
@@ -90,11 +98,18 @@
 
 .rc_torch_kmeans_tolerance <- function(reader, batch_size, device,
                                         relative_tolerance) {
-  total <- torch::torch_zeros(reader$p, dtype = torch::torch_float32(), device = device)
-  total_sq <- torch::torch_zeros(reader$p, dtype = torch::torch_float32(), device = device)
+  # Compute variance after translating by the first observation. Variance is
+  # translation invariant, but E[x^2]-E[x]^2 in raw float32 is not numerically
+  # stable for large offsets. Float64 accumulators also keep this one-time
+  # tolerance calculation stable for large cohorts.
+  origin <- .rc_device_block(reader, 1L, device)
+  total <- torch::torch_zeros(reader$p, dtype = torch::torch_float64(), device = device)
+  total_sq <- torch::torch_zeros(reader$p, dtype = torch::torch_float64(), device = device)
   for (start in .rc_chunk_starts(reader$n, batch_size)) {
     idx <- .rc_chunk_index(start, reader$n, batch_size)
-    xb <- .rc_device_block(reader, idx, device)
+    xb <- (.rc_device_block(reader, idx, device) - origin)$to(
+      dtype = torch::torch_float64()
+    )
     total$add_(xb$sum(dim = 1))
     total_sq$add_(xb$pow(2)$sum(dim = 1))
   }
@@ -124,7 +139,7 @@
 
   for (iter in seq_len(max_iter)) {
     counts <- torch::torch_zeros(k, dtype = torch::torch_float32(), device = device)
-    sums <- torch::torch_zeros(
+    deltas <- torch::torch_zeros(
       c(k, reader$p), dtype = torch::torch_float32(), device = device
     )
     farthest_d2 <- numeric()
@@ -138,7 +153,12 @@
         dtype = torch::torch_float32()
       )
       counts$add_(membership$sum(dim = 1))
-      sums$add_(torch::torch_matmul(membership$t(), xb))
+      # Accumulate deviations from the current assigned centre, not raw
+      # coordinates. The resulting centre update is algebraically identical
+      # but does not lose within-cluster variation when all values share a
+      # large offset.
+      assigned <- centers$index_select(1L, nearest$label)
+      deltas$add_(torch::torch_matmul(membership$t(), xb - assigned))
 
       # Retain only K rows for deterministic empty-cluster recovery.
       nearest_cpu <- as.numeric(torch::as_array(
@@ -159,7 +179,7 @@
       # Torch drops the indexed count to a scalar when K = 1. Reshape
       # explicitly so the singleton AutoK boundary retains a K x 1 divisor.
       divisor <- counts[nonempty]$reshape(c(length(nonempty), 1L))
-      updated[nonempty, ] <- sums[nonempty, ] / divisor
+      updated[nonempty, ] <- centers[nonempty, ] + deltas[nonempty, ] / divisor
     }
     empty <- which(counts_cpu == 0)
     if (length(empty)) {

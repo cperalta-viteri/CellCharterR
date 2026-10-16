@@ -11,7 +11,8 @@
   filepath,
   name = "X_cellcharter",
   n_layers = 3L,
-  block_rows = 8192L
+  block_rows = 8192L,
+  progress = FALSE
 )
 }
 \arguments{
@@ -30,6 +31,8 @@
 \item{block_rows}{maximum representation rows realised at once and maximum
 focal rows whose aggregate features are held for one write. Sparse graph
 frontier memory additionally depends on graph degree and requested hops.}
+
+\item{progress}{whether to display block-level write progress.}
 }
 \value{
 An HDF5-backed \code{DelayedMatrix} with an \code{aggregation_provenance}

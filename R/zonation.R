@@ -44,6 +44,22 @@
        orientation = orientation)
 }
 
+.cc_zonation_score_sha256 <- function(sce, scores, assay_name) {
+  .cc_validate_sce_identity(sce, reduced_dims = NULL)
+  if (scores %in% SingleCellExperiment::altExpNames(sce)) {
+    alternative <- SingleCellExperiment::altExp(sce, scores)
+    if (!assay_name %in% SummarizedExperiment::assayNames(alternative)) {
+      stop("altExp `", scores, "` lacks assay `", assay_name, "`.", call. = FALSE)
+    }
+    value <- SummarizedExperiment::assay(alternative, assay_name)
+  } else if (scores %in% SingleCellExperiment::reducedDimNames(sce)) {
+    value <- SingleCellExperiment::reducedDim(sce, scores, withDimnames = TRUE)
+  } else {
+    stop("SCE lacks AUCell score source `", scores, "`.", call. = FALSE)
+  }
+  .autok_representation_sha256(value)
+}
+
 .cc_zonation_positive_composition <- function(x, threshold) {
   x[x <= 0] <- 0
   totals <- rowSums(x)
@@ -176,7 +192,8 @@ cellcharter_assign_dominant_program <- function(
 #' ordered, mutually exclusive zones defined from AUCell programs. Scores are
 #' standardized separately within each patient/block. The strongest positive
 #' zone program assigns each spot; spots without a positive zone score remain
-#' unassigned. This analysis does not use spatial distance or a graph.
+#' unassigned. This analysis does not use spatial distance or a graph. Stored
+#' score, block, and parameter fingerprints prevent plotting stale results.
 #'
 #' @param sce A `SpatialExperiment` or compatible `SingleCellExperiment`.
 #' @param scores Name of an AUCell `altExp` (programs by spots) or legacy
@@ -357,6 +374,11 @@ cellcharter_zonation <- function(
       sample_size = as.integer(sample_size),
       n_iterations = as.integer(n_iterations),
       score_threshold = score_threshold, seed = as.integer(seed)
+    ),
+    list(
+      scores = list(kind = "zonation_scores", scores = scores,
+                    assay_name = assay_name),
+      block = list(kind = "colData", name = block)
     )
   )
 }
@@ -365,17 +387,12 @@ cellcharter_zonation <- function(
   if (!inherits(x, "SingleCellExperiment")) {
     stop("`x` must be a SingleCellExperiment or SpatialExperiment.", call. = FALSE)
   }
-  record <- .cc_sce_metadata(x)$results[[result_name]]
-  if (is.null(record) || !identical(record$value$schema, "cellcharter_zonation_v1")) {
+  record <- .cc_sce_require_result(
+    x, result_name, context = "Stored zonation result"
+  )
+  if (!identical(record$value$schema, "cellcharter_zonation_v1")) {
     stop("SCE lacks stored zonation result `", result_name,
          "`; run `cellcharter_zonation()` first.", call. = FALSE)
-  }
-  identity <- .cc_validate_sce_identity(x)
-  if (!identical(record$n_cells, ncol(x)) ||
-      !identical(record$cell_order_sha256, identity$cell_order_sha256)) {
-    stop("Stored zonation result `", result_name,
-         "` is stale after spot reordering or subsetting; recompute it.",
-         call. = FALSE)
   }
   record
 }
@@ -390,7 +407,7 @@ cellcharter_zonation <- function(
                                             logical(1))]
     if (length(conflicts)) {
       stop("Annotation `", column, "` is not constant within block(s): ",
-           paste(head(conflicts, 5L), collapse = ", "), call. = FALSE)
+           paste(utils::head(conflicts, 5L), collapse = ", "), call. = FALSE)
     }
     mapping <- vapply(split_values, `[[`, character(1), 1L)
     answer[[column]] <- unname(mapping[answer$block])
@@ -616,10 +633,10 @@ cellcharter_plot_zonation <- function(
       title = title,
       subtitle = if (compare == "none") NULL else
         paste0(test_kind, "; ", p_adjust_method,
-               " adjustment across all displayed program × zone tests"),
+               " adjustment across all displayed program x zone tests"),
       caption = paste0(
         "Authors-style equal-depth zonation; blocks are independent units. ",
-        "Zones with ≤", parameters$min_spots_per_zone, " spots were excluded."
+        "Zones with <=", parameters$min_spots_per_zone, " spots were excluded."
       )
     ) +
     ggplot2::theme_bw(base_size = 15) +

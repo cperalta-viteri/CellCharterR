@@ -35,7 +35,9 @@ chunk. This bounds temporary memory for very large experiments.}
 The updated \code{SingleCellExperiment}.
 }
 \description{
-Attach CellCharter cell-type enrichment to an SCE
+The stored result fingerprints its group and domain annotations and analysis
+parameters. Experiment-aware plotting rejects the result if those inputs
+subsequently change.
 }
 \examples{
 example_sce <- cellcharter_mouse_spleen_tiny(with_results = TRUE)

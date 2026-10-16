@@ -104,7 +104,11 @@ test_that("plot_graph_diff extracts and validates a stored experiment result", {
   )
   S4Vectors::metadata(spe)$CellCharterR <- metadata
   direct <- .cc_diff_nhood_network_data(.diff_network_fixture())
-  stored <- attr(cellcharter_plot_graph_diff(spe), "cellcharter_network_data")
+  expect_warning(
+    plot <- cellcharter_plot_graph_diff(spe),
+    "unverified legacy freshness"
+  )
+  stored <- attr(plot, "cellcharter_network_data")
   for (column in names(direct)) {
     expect_equal(stored[[column]], direct[[column]], info = column)
   }

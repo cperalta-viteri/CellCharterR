@@ -15,8 +15,9 @@ cpp_gmm_fit(
 )
 }
 \arguments{
-\item{x}{observation-by-feature matrix or DelayedMatrix. Rows are read in
-chunks and never materialised jointly.}
+\item{x}{Observation-by-feature numeric matrix-like object. The compiled
+backend materialises it once as a dense double matrix and makes one shared
+native row-major copy for concurrent fits.}
 
 \item{n_clusters}{number of mixture components.}
 
@@ -32,7 +33,7 @@ chunks and never materialised jointly.}
 current setting.}
 }
 \value{
-A serializable \code{torch_gmm} model.
+A serializable \code{cpp_gmm} model inheriting from \code{torch_gmm}.
 }
 \description{
 This experimental accelerated CPU backend uses double precision, centered
@@ -40,6 +41,9 @@ two-pass covariance updates, and a private deterministic C++ random-number
 generator. Its K-means++ initialization is not RNG-identical to the pinned
 sklearn initializer, so fitted solutions require empirical parity checks and
 are not described as exact seeded CellCharter reproductions. Its result
-has class \code{torch_gmm}, so the existing prediction and checkpoint interfaces
-can consume it. The input is currently an in-memory numeric matrix.
+inherits from both \code{cpp_gmm} and \code{torch_gmm}: the dedicated \code{cpp_gmm} class
+keeps generic prediction on the double-precision, Torch-free scoring path,
+while the parent class preserves existing checkpoint compatibility. The
+input is currently an in-memory numeric matrix. Long fits poll for user
+interrupts and join all native worker threads before returning to R.
 }

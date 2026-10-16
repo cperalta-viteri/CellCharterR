@@ -1,17 +1,52 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
+#include <exception>
 #include <future>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#include <R_ext/Print.h>
+#include <R_ext/Utils.h>
 
 namespace {
+// Cancellation is cooperative because R's API, including interrupt checks,
+// may only be called by the main thread.  The main thread polls through
+// R_ToplevelExec(), which contains R's longjmp, then workers observe this flag
+// at bounded row/iteration boundaries and unwind using ordinary C++.
+class FitCancelled : public std::exception {
+ public:
+  const char* what() const noexcept override { return "native GMM fit cancelled"; }
+};
+
+class CholeskyFailure : public std::runtime_error {
+ public:
+  explicit CholeskyFailure(const std::string& message)
+    : std::runtime_error(message) {}
+};
+
+void check_r_interrupt(void*) {
+  R_CheckUserInterrupt();
+}
+
+bool r_interrupt_pending() {
+  return R_ToplevelExec(check_r_interrupt, nullptr) == FALSE;
+}
+
+inline void cancellation_point(const std::atomic<bool>* cancelled) {
+  if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed)) {
+    throw FitCancelled();
+  }
+}
+
 struct Data { int n, p; std::vector<double> x; };
 struct Fit {
   int k, p, iterations; bool converged;
@@ -23,6 +58,20 @@ struct Fit {
   std::vector<int> initialization_collapsed;
   int early_wait = 0;
   double early_best = std::numeric_limits<double>::infinity();
+};
+
+struct ThreadJoiner {
+  std::vector<std::thread>& threads;
+  ~ThreadJoiner() {
+    for (std::thread& thread : threads) {
+      if (thread.joinable()) thread.join();
+    }
+  }
+};
+
+struct CompletionEvent {
+  int index;
+  double elapsed_seconds;
 };
 
 inline double &at(std::vector<double>& a, int cols, int i, int j) {
@@ -70,7 +119,7 @@ std::vector<std::vector<double> > factors(const Fit& f) {
   std::vector<std::vector<double> > out(f.k);
   for (int c = 0; c < f.k; ++c)
     if (!cholesky(&f.covs[static_cast<size_t>(c) * f.p * f.p], f.p, f.reg, out[c]))
-      throw std::runtime_error("Cholesky factorization failed");
+      throw CholeskyFailure("Cholesky factorization failed");
   return out;
 }
 
@@ -91,15 +140,34 @@ double responsibilities(const Data& d, int row, const Fit& f,
   return log_norm;
 }
 
-std::vector<double> kmeans_pp(const Data& d, int k, uint64_t seed) {
+// std::uniform_*_distribution is permitted to map an engine's bits
+// differently across standard-library implementations. Use the standardized
+// mt19937_64 sequence directly so a seed has the same meaning on every
+// supported compiler/runtime.
+uint64_t bounded_random(std::mt19937_64& rng, uint64_t bound) {
+  const uint64_t limit = std::numeric_limits<uint64_t>::max() -
+    (std::numeric_limits<uint64_t>::max() % bound);
+  uint64_t value;
+  do { value = rng(); } while (value >= limit);
+  return value % bound;
+}
+
+double unit_random(std::mt19937_64& rng) {
+  return static_cast<double>(rng() >> 11) * (1.0 / 9007199254740992.0);
+}
+
+std::vector<double> kmeans_pp(const Data& d, int k, uint64_t seed,
+                              const std::atomic<bool>* cancelled = nullptr) {
   std::mt19937_64 rng(seed); // private RNG: does not consume or mutate R's RNG.
-  std::uniform_int_distribution<int> first(0, d.n - 1);
   std::vector<double> means(static_cast<size_t>(k) * d.p);
-  std::copy_n(&d.x[static_cast<size_t>(first(rng)) * d.p], d.p, means.begin());
+  const int first = static_cast<int>(bounded_random(rng, static_cast<uint64_t>(d.n)));
+  std::copy_n(&d.x[static_cast<size_t>(first) * d.p], d.p, means.begin());
   std::vector<double> distance(d.n, std::numeric_limits<double>::infinity());
   for (int c = 1; c < k; ++c) {
+    cancellation_point(cancelled);
     double sum = 0.0;
     for (int i = 0; i < d.n; ++i) {
+      if ((i & 1023) == 0) cancellation_point(cancelled);
       double current = 0.0;
       for (int j = 0; j < d.p; ++j) {
         double z = d.x[static_cast<size_t>(i) * d.p + j] - means[static_cast<size_t>(c - 1) * d.p + j];
@@ -109,8 +177,7 @@ std::vector<double> kmeans_pp(const Data& d, int k, uint64_t seed) {
     }
     int selected = c % d.n;
     if (sum > 0.0 && std::isfinite(sum)) {
-      std::uniform_real_distribution<double> draw(0.0, sum);
-      double target = draw(rng), cumulative = 0.0;
+      double target = unit_random(rng) * sum, cumulative = 0.0;
       for (int i = 0; i < d.n; ++i) if ((cumulative += distance[i]) >= target) { selected = i; break; }
     }
     std::copy_n(&d.x[static_cast<size_t>(selected) * d.p], d.p,
@@ -120,9 +187,11 @@ std::vector<double> kmeans_pp(const Data& d, int k, uint64_t seed) {
   // assignments are summarized again below rather than treated as soft EM.
   std::vector<int> assignment(d.n, 0);
   for (int iteration = 0; iteration < 30; ++iteration) {
+    cancellation_point(cancelled);
     std::vector<double> sums(static_cast<size_t>(k) * d.p, 0.0), counts(k, 0.0);
     bool changed = false;
     for (int i = 0; i < d.n; ++i) {
+      if ((i & 1023) == 0) cancellation_point(cancelled);
       int best = 0; double best_distance = std::numeric_limits<double>::infinity();
       for (int c = 0; c < k; ++c) {
         double value = 0.0; for (int j = 0; j < d.p; ++j) {
@@ -141,15 +210,18 @@ std::vector<double> kmeans_pp(const Data& d, int k, uint64_t seed) {
 }
 
 Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
-             double tolerance, double reg, int threads_per_fit) {
+             double tolerance, double reg, int threads_per_fit,
+             const std::atomic<bool>* cancelled = nullptr) {
+  cancellation_point(cancelled);
   Fit f; f.k = k; f.p = d.p; f.reg = reg; f.iterations = 0; f.converged = false;
   f.tolerance = tolerance;
   const double collapse_threshold = 1e-6;
-  std::vector<double> centers = kmeans_pp(d, k, seed);
+  std::vector<double> centers = kmeans_pp(d, k, seed, cancelled);
   f.means.assign(static_cast<size_t>(k) * d.p, 0.0); f.weights.assign(k, 0.0);
   f.covs.assign(static_cast<size_t>(k) * d.p * d.p, 0.0);
   std::vector<int> hard(d.n, 0); f.initialization_counts.assign(k, 0.0);
   for (int i = 0; i < d.n; ++i) {
+    if ((i & 1023) == 0) cancellation_point(cancelled);
     double best_distance = std::numeric_limits<double>::infinity(); int best = 0;
     for (int c = 0; c < k; ++c) { double value=0.0; for(int j=0;j<d.p;++j) {
       double z=d.x[static_cast<size_t>(i)*d.p+j]-centers[static_cast<size_t>(c)*d.p+j]; value+=z*z; }
@@ -168,6 +240,7 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
   double initial_total=std::accumulate(f.weights.begin(),f.weights.end(),0.0); for(double& w:f.weights) w/=initial_total;
   // Center before multiplying: this is stable for large coordinate offsets.
   for(int i=0;i<d.n;++i) { int c=hard[i]; if(f.initialization_counts[c]<collapse_threshold) continue;
+    if ((i & 1023) == 0) cancellation_point(cancelled);
     for(int a=0;a<d.p;++a) for(int b=0;b<=a;++b) f.covs[(static_cast<size_t>(c)*d.p+a)*d.p+b] +=
       (d.x[static_cast<size_t>(i)*d.p+a]-f.means[static_cast<size_t>(c)*d.p+a]) *
       (d.x[static_cast<size_t>(i)*d.p+b]-f.means[static_cast<size_t>(c)*d.p+b]); }
@@ -181,6 +254,7 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
   std::vector<double> r(k), nk(k), sums(static_cast<size_t>(k) * d.p);
   const int nt = std::max(1, std::min(threads_per_fit, d.n));
   for (int iteration = 0; iteration < max_iter; ++iteration) {
+    cancellation_point(cancelled);
     const std::vector<std::vector<double> > chol = factors(f);
     std::fill(nk.begin(), nk.end(), 0.0); std::fill(sums.begin(), sums.end(), 0.0);
     double ll = 0.0;
@@ -189,13 +263,20 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
     std::vector<std::vector<double> > local_nk(nt,std::vector<double>(k,0.0));
     std::vector<std::vector<double> > local_sums(nt,std::vector<double>(sums.size(),0.0));
     std::vector<double> local_ll(nt,0.0); std::vector<std::thread> pass1;
+    std::vector<std::exception_ptr> pass1_errors(nt);
+    pass1.reserve(nt); ThreadJoiner pass1_joiner{pass1};
     for(int t=0;t<nt;++t) pass1.emplace_back([&,t](){
-      int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt);
-      std::vector<double> lr(k);
-      for(int i=begin;i<end;++i){ local_ll[t]+=responsibilities(d,i,f,chol,lr);
-        for(int c=0;c<k;++c){ local_nk[t][c]+=lr[c]; for(int j=0;j<d.p;++j) local_sums[t][static_cast<size_t>(c)*d.p+j]+=lr[c]*d.x[static_cast<size_t>(i)*d.p+j]; }}
+      try {
+        int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt);
+        std::vector<double> lr(k);
+        for(int i=begin;i<end;++i){
+          cancellation_point(cancelled);
+          local_ll[t]+=responsibilities(d,i,f,chol,lr);
+          for(int c=0;c<k;++c){ local_nk[t][c]+=lr[c]; for(int j=0;j<d.p;++j) local_sums[t][static_cast<size_t>(c)*d.p+j]+=lr[c]*d.x[static_cast<size_t>(i)*d.p+j]; }}
+      } catch(...) { pass1_errors[t]=std::current_exception(); }
     });
-    for(auto& thread:pass1) thread.join();
+    for(auto& thread:pass1) if(thread.joinable()) thread.join();
+    for(const auto& error:pass1_errors) if(error) std::rethrow_exception(error);
     for(int t=0;t<nt;++t){ ll+=local_ll[t]; for(int c=0;c<k;++c) nk[c]+=local_nk[t][c]; for(size_t q=0;q<sums.size();++q) sums[q]+=local_sums[t][q]; }
     std::vector<double> new_means(sums.size()), new_weights(k);
     std::vector<bool> collapsed(k, false);
@@ -216,13 +297,21 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
     // Pass two recomputes the same old-parameter responsibilities and forms
     // covariance from (x-new_mean)(x-new_mean)', avoiding E[xx']-mu mu'.
     std::vector<std::vector<double> > local_covs(nt,std::vector<double>(new_covs.size(),0.0)); std::vector<std::thread> pass2;
+    std::vector<std::exception_ptr> pass2_errors(nt);
+    pass2.reserve(nt); ThreadJoiner pass2_joiner{pass2};
     for(int t=0;t<nt;++t) pass2.emplace_back([&,t](){
-      int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt); std::vector<double> lr(k);
-      for(int i=begin;i<end;++i){ responsibilities(d,i,f,chol,lr); for(int c=0;c<k;++c) for(int a=0;a<d.p;++a){
-        double za=d.x[static_cast<size_t>(i)*d.p+a]-new_means[static_cast<size_t>(c)*d.p+a];
-        for(int b=0;b<=a;++b) local_covs[t][(static_cast<size_t>(c)*d.p+a)*d.p+b]+=lr[c]*za*(d.x[static_cast<size_t>(i)*d.p+b]-new_means[static_cast<size_t>(c)*d.p+b]); }}
+      try {
+        int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt); std::vector<double> lr(k);
+        for(int i=begin;i<end;++i){
+          cancellation_point(cancelled);
+          responsibilities(d,i,f,chol,lr); for(int c=0;c<k;++c) for(int a=0;a<d.p;++a){
+          double za=d.x[static_cast<size_t>(i)*d.p+a]-new_means[static_cast<size_t>(c)*d.p+a];
+          for(int b=0;b<=a;++b) local_covs[t][(static_cast<size_t>(c)*d.p+a)*d.p+b]+=lr[c]*za*(d.x[static_cast<size_t>(i)*d.p+b]-new_means[static_cast<size_t>(c)*d.p+b]); }}
+      } catch(...) { pass2_errors[t]=std::current_exception(); }
     });
-    for(auto& thread:pass2) thread.join(); for(int t=0;t<nt;++t) for(size_t q=0;q<new_covs.size();++q) new_covs[q]+=local_covs[t][q];
+    for(auto& thread:pass2) if(thread.joinable()) thread.join();
+    for(const auto& error:pass2_errors) if(error) std::rethrow_exception(error);
+    for(int t=0;t<nt;++t) for(size_t q=0;q<new_covs.size();++q) new_covs[q]+=local_covs[t][q];
     for (int c = 0; c < k; ++c) for (int a = 0; a < d.p; ++a) for (int b = 0; b <= a; ++b) {
       double value=collapsed[c] ? (a==b ? 1.0 : 0.0) :
         new_covs[(static_cast<size_t>(c)*d.p+a)*d.p+b]/nk[c];
@@ -235,22 +324,37 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
     else if (++wait >= 2) { f.converged = true; break; }
   }
   const auto chol = factors(f); double ll = 0.0;
+  cancellation_point(cancelled);
   f.labels.resize(d.n);
   std::vector<double> final_ll(nt,0.0); std::vector<std::thread> scoring;
-  for(int t=0;t<nt;++t) scoring.emplace_back([&,t](){ int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt); std::vector<double> lr(k);
-    for(int i=begin;i<end;++i){ final_ll[t]+=responsibilities(d,i,f,chol,lr); f.labels[i]=static_cast<int>(std::max_element(lr.begin(),lr.end())-lr.begin()); }});
-  for(auto& thread:scoring) thread.join(); for(int t=0;t<nt;++t) ll+=final_ll[t];
+  std::vector<std::exception_ptr> scoring_errors(nt);
+  scoring.reserve(nt); ThreadJoiner scoring_joiner{scoring};
+  for(int t=0;t<nt;++t) scoring.emplace_back([&,t](){
+    try {
+      int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt); std::vector<double> lr(k);
+      for(int i=begin;i<end;++i){
+        cancellation_point(cancelled);
+        final_ll[t]+=responsibilities(d,i,f,chol,lr); f.labels[i]=static_cast<int>(std::max_element(lr.begin(),lr.end())-lr.begin()); }
+    } catch(...) { scoring_errors[t]=std::current_exception(); }
+  });
+  for(auto& thread:scoring) if(thread.joinable()) thread.join();
+  for(const auto& error:scoring_errors) if(error) std::rethrow_exception(error);
+  for(int t=0;t<nt;++t) ll+=final_ll[t];
   f.nll = -ll / d.n;
   f.early_wait = wait; f.early_best = best;
   return f;
 }
 
 Fit fit_restart(const Data& d, int k, uint64_t seed, int max_iter,
-                double tolerance, double requested_reg, int threads_per_fit) {
+                double tolerance, double requested_reg, int threads_per_fit,
+                const std::atomic<bool>* cancelled = nullptr) {
   std::string error;
   for (int attempt = 0; attempt < 8; ++attempt) try {
-    return fit_once(d, k, seed, max_iter, tolerance, requested_reg * std::pow(10.0, attempt), threads_per_fit);
-  } catch (const std::runtime_error& e) { error = e.what(); }
+    cancellation_point(cancelled);
+    return fit_once(d, k, seed, max_iter, tolerance,
+                    requested_reg * std::pow(10.0, attempt), threads_per_fit,
+                    cancelled);
+  } catch (const CholeskyFailure& e) { error = e.what(); }
   throw std::runtime_error("GMM failed after 8 regularization attempts: " + error);
 }
 
@@ -265,10 +369,23 @@ Data import_matrix(const Rcpp::NumericMatrix& x) {
 
 Rcpp::List export_fit(const Fit& f, double requested_reg, uint64_t seed) {
   Rcpp::NumericMatrix means(f.k, f.p);
-  for (int c = 0; c < f.k; ++c) for (int j = 0; j < f.p; ++j) means(c,j) = f.means[static_cast<size_t>(c)*f.p+j];
+  for (int c = 0; c < f.k; ++c) {
+    for (int j = 0; j < f.p; ++j) {
+      means(c, j) = f.means[static_cast<size_t>(c) * f.p + j];
+    }
+  }
   Rcpp::List covs(f.k);
-  for (int c = 0; c < f.k; ++c) { Rcpp::NumericMatrix m(f.p,f.p); for(int a=0;a<f.p;++a) for(int b=0;b<f.p;++b)
-    m(a,b)=f.covs[(static_cast<size_t>(c)*f.p+a)*f.p+b]; covs[c]=m; }
+  for (int c = 0; c < f.k; ++c) {
+    Rcpp::NumericMatrix matrix(f.p, f.p);
+    for (int row = 0; row < f.p; ++row) {
+      for (int column = 0; column < f.p; ++column) {
+        matrix(row, column) = f.covs[
+          (static_cast<size_t>(c) * f.p + row) * f.p + column
+        ];
+      }
+    }
+    covs[c] = matrix;
+  }
   return Rcpp::List::create(Rcpp::_["means"]=means, Rcpp::_["covariances"]=covs,
     Rcpp::_["weights"]=f.weights, Rcpp::_["n_features"]=f.p, Rcpp::_["n_clusters"]=f.k,
     Rcpp::_["nll"]=f.nll, Rcpp::_["iterations"]=f.iterations, Rcpp::_["converged"]=f.converged,
@@ -292,19 +409,114 @@ extern "C" SEXP C_cpp_gmm_fit(SEXP xs, SEXP ks, SEXP seeds, SEXP maxs, SEXP tols
   END_RCPP
 }
 
-extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SEXP tols, SEXP regs, SEXP workerss, SEXP threadss) {
+extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SEXP tols, SEXP regs, SEXP workerss, SEXP threadss, SEXP progresss) {
   BEGIN_RCPP
+  const bool progress=Rcpp::as<bool>(progresss);
+  const auto native_started=std::chrono::steady_clock::now();
   Data d=import_matrix(Rcpp::as<Rcpp::NumericMatrix>(xs)); Rcpp::IntegerVector ks(kss); Rcpp::NumericVector seeds(seedss);
   int jobs=ks.size(), workers=std::max(1,Rcpp::as<int>(workerss)), max_iter=Rcpp::as<int>(maxs);
   double tol=Rcpp::as<double>(tols), reg=Rcpp::as<double>(regs); int threads_per_fit=std::max(1,Rcpp::as<int>(threadss));
-  std::vector<Fit> fits(jobs); std::vector<std::string> errors(jobs); std::atomic<int> next(0);
-  auto work=[&]() { for (;;) { int i=next.fetch_add(1); if(i>=jobs) break; try {
-    fits[i]=fit_restart(d,ks[i],static_cast<uint64_t>(seeds[i]),max_iter,tol,reg,threads_per_fit);
-  } catch(const std::exception& e) { errors[i]=e.what(); } } };
-  std::vector<std::thread> pool; for(int w=0;w<std::min(workers,jobs);++w) pool.emplace_back(work);
-  for(auto& thread:pool) thread.join();
+  std::vector<int> native_ks(jobs);
+  std::vector<uint64_t> native_seeds(jobs);
+  for(int i=0;i<jobs;++i) {
+    native_ks[i]=ks[i];
+    native_seeds[i]=static_cast<uint64_t>(seeds[i]);
+  }
+  if(progress) {
+    const double copy_seconds=std::chrono::duration<double>(
+      std::chrono::steady_clock::now()-native_started).count();
+    Rprintf("CellCharterR C++ GMM: native input copy complete in %.1fs; starting %d fits.\n",
+            copy_seconds,jobs);
+    R_FlushConsole();
+  }
+  std::vector<Fit> fits(jobs); std::vector<std::string> errors(jobs);
+  std::atomic<int> next(0);
+  std::atomic<bool> cancelled(false);
+  std::atomic<int> workers_finished(0);
+  std::mutex progress_mutex;
+  std::condition_variable progress_condition;
+  std::vector<CompletionEvent> completion_events(jobs);
+  int published_events=0;
+  auto work=[&]() {
+    for (;;) {
+      if (cancelled.load(std::memory_order_relaxed)) break;
+      int i=next.fetch_add(1);
+      if(i>=jobs || cancelled.load(std::memory_order_relaxed)) break;
+      const auto fit_started=std::chrono::steady_clock::now();
+      try {
+        fits[i]=fit_restart(d,native_ks[i],native_seeds[i],max_iter,tol,reg,
+                            threads_per_fit,&cancelled);
+      } catch(const FitCancelled&) {
+        // Interruption is reported once by the main R thread after every
+        // worker has unwound and joined.
+      } catch(const std::exception& e) {
+        errors[i]=e.what();
+      } catch(...) {
+        errors[i]="unknown native exception";
+      }
+      const double fit_seconds=std::chrono::duration<double>(
+        std::chrono::steady_clock::now()-fit_started).count();
+      {
+        std::lock_guard<std::mutex> lock(progress_mutex);
+        completion_events[published_events++]=CompletionEvent{i,fit_seconds};
+      }
+      progress_condition.notify_one();
+    }
+    workers_finished.fetch_add(1);
+    progress_condition.notify_one();
+  };
+  std::vector<std::thread> pool;
+  const int pool_size=std::min(workers,jobs);
+  pool.reserve(pool_size);
+  ThreadJoiner joiner{pool};
+  for(int w=0;w<pool_size;++w) pool.emplace_back(work);
+
+  // Poll even when progress is disabled. Calling R_CheckUserInterrupt() from a
+  // worker is unsafe, while blocking the R main thread in join() makes a long
+  // native round effectively uninterruptible. R_ToplevelExec() contains the
+  // interrupt longjmp; cancellation then follows normal C++ unwinding.
+  int reported=0;
+  bool interrupted=false;
+  auto last_heartbeat=native_started;
+  for(;;) {
+    std::unique_lock<std::mutex> lock(progress_mutex);
+    progress_condition.wait_for(lock,std::chrono::milliseconds(100),[&](){
+      return published_events>reported || workers_finished.load()>=pool_size;
+    });
+    while(reported<published_events) {
+      CompletionEvent event=completion_events[reported];
+      ++reported;
+      if(progress) {
+        lock.unlock();
+        Rprintf("CellCharterR C++ GMM: %d/%d jobs finished; K=%d; fit %.1fs.\n",
+                reported,jobs,native_ks[event.index],event.elapsed_seconds);
+        R_FlushConsole();
+        lock.lock();
+      }
+    }
+    const bool all_workers_finished=workers_finished.load()>=pool_size;
+    lock.unlock();
+
+    if(!interrupted && r_interrupt_pending()) {
+      interrupted=true;
+      cancelled.store(true,std::memory_order_relaxed);
+      progress_condition.notify_all();
+    }
+    const auto now=std::chrono::steady_clock::now();
+    if(progress && !interrupted &&
+       std::chrono::duration_cast<std::chrono::seconds>(now-last_heartbeat).count()>=60) {
+      const double elapsed=std::chrono::duration<double>(now-native_started).count();
+      Rprintf("CellCharterR C++ GMM: still fitting; %d/%d jobs finished; elapsed %.1fs.\n",
+              reported,jobs,elapsed);
+      R_FlushConsole();
+      last_heartbeat=now;
+    }
+    if(all_workers_finished) break;
+  }
+  for(auto& thread:pool) if(thread.joinable()) thread.join();
+  if(interrupted) Rcpp::stop("Native C++ GMM fitting interrupted by user.");
   for(int i=0;i<jobs;++i) if(!errors[i].empty()) Rcpp::stop("Native GMM job %d failed: %s",i+1,errors[i]);
-  Rcpp::List out(jobs); for(int i=0;i<jobs;++i) out[i]=export_fit(fits[i],reg,static_cast<uint64_t>(seeds[i]));
+  Rcpp::List out(jobs); for(int i=0;i<jobs;++i) out[i]=export_fit(fits[i],reg,native_seeds[i]);
   return out;
   END_RCPP
 }
