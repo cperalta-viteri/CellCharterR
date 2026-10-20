@@ -457,12 +457,15 @@ cellcharter_zonation <- function(
 #' Plots compact block-level results from [cellcharter_zonation()]. It can
 #' compare two groups (for example High versus Low risk), compare metadata
 #' strata within one group (for example oral sites among High-risk patients),
-#' or display descriptive curves without inference.
+#' compare the displayed programs within each zone, or display descriptive
+#' curves without inference.
 #'
 #' @param x An experiment containing a stored zonation result.
 #' @param result_name Stored result name.
 #' @param programs Programs to display. `NULL` displays every non-zone program.
-#' @param compare One of `"groups"`, `"strata"`, or `"none"`.
+#' @param compare One of `"groups"`, `"strata"`, `"programs"`, or `"none"`.
+#'   `"programs"` performs a block-paired Friedman test among the displayed
+#'   programs separately within each zone and requires `facet = FALSE`.
 #' @param group `colData` column defining groups.
 #' @param group_levels Optional ordered group levels to retain.
 #' @param within_group For `compare = "strata"`, one group value to retain.
@@ -471,8 +474,12 @@ cellcharter_zonation <- function(
 #' @param show_individual Draw faint block/patient trajectories.
 #' @param show_significance Add adjusted q-values to the plot.
 #' @param p_adjust_method Method passed to [stats::p.adjust()].
-#' @param colours Optional named colour vector for comparison levels.
-#' @param facet_ncol Number of facet columns.
+#' @param colours Optional named colour vector for comparison levels. With
+#'   `facet = FALSE` and `compare = "none"` or `"programs"`, name colours by
+#'   program instead.
+#' @param facet Whether to draw one facet per program. Set to `FALSE` to overlay
+#'   all requested programs in one panel.
+#' @param facet_ncol Number of facet columns; ignored when `facet = FALSE`.
 #' @param title Optional title.
 #' @return A `ggplot` object. Block-level data, summaries, and tests are
 #'   attached as `cellcharter_zonation_data`, `cellcharter_zonation_summary`,
@@ -480,15 +487,18 @@ cellcharter_zonation <- function(
 #' @export
 cellcharter_plot_zonation <- function(
     x, result_name = "zonation", programs = NULL,
-    compare = c("groups", "strata", "none"), group = NULL,
+    compare = c("groups", "strata", "programs", "none"), group = NULL,
     group_levels = NULL, within_group = NULL,
     stratify_by = NULL, strata = NULL, show_individual = TRUE,
     show_significance = TRUE, p_adjust_method = "BH", colours = NULL,
-    facet_ncol = 3L, title = NULL) {
+    facet = TRUE, facet_ncol = 3L, title = NULL) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     stop("Install `ggplot2` to plot zonation.", call. = FALSE)
   }
   compare <- match.arg(compare)
+  if (!is.logical(facet) || length(facet) != 1L || is.na(facet)) {
+    stop("`facet` must be TRUE or FALSE.", call. = FALSE)
+  }
   record <- .cc_zonation_result(x, result_name)
   result <- record$value
   parameters <- record$parameters
@@ -497,6 +507,14 @@ cellcharter_plot_zonation <- function(
   if (!is.character(programs) || !length(programs) ||
       !all(programs %in% result$composition_programs)) {
     stop("`programs` must name programs stored in the zonation result.", call. = FALSE)
+  }
+  if (compare == "programs" && facet) {
+    stop("`compare = 'programs'` requires `facet = FALSE` so the programs share one panel.",
+         call. = FALSE)
+  }
+  if (compare == "programs" && length(programs) < 2L) {
+    stop("`compare = 'programs'` requires at least two displayed programs.",
+         call. = FALSE)
   }
   columns <- unique(c(group, stratify_by))
   columns <- columns[!is.na(columns) & nzchar(columns)]
@@ -537,6 +555,10 @@ cellcharter_plot_zonation <- function(
       stop("Strata comparison requires at least two retained strata.", call. = FALSE)
     }
     test_kind <- "Kruskal-Wallis"
+  } else if (compare == "programs") {
+    data$curve_group <- "All blocks"
+    levels_used <- "All blocks"
+    test_kind <- "Block-paired Friedman"
   } else {
     if (!is.null(group)) {
       data$curve_group <- as.character(data[[group]])
@@ -565,8 +587,54 @@ cellcharter_plot_zonation <- function(
   summary$zone <- factor(summary$zone, levels = result$zone_programs, ordered = TRUE)
   summary$program <- factor(summary$program, levels = programs)
 
+  overlay_by_program <- !facet && compare %in% c("none", "programs")
+  colour_levels <- if (overlay_by_program) programs else levels_used
+  data$plot_colour <- factor(
+    if (overlay_by_program) as.character(data$program) else as.character(data$curve_group),
+    levels = colour_levels
+  )
+  summary$plot_colour <- factor(
+    if (overlay_by_program) as.character(summary$program) else as.character(summary$curve_group),
+    levels = colour_levels
+  )
+  data$plot_group <- interaction(
+    data$block, data$curve_group, data$program, drop = TRUE
+  )
+  summary$plot_group <- interaction(
+    summary$curve_group, summary$program, drop = TRUE
+  )
+
   tests <- NULL
-  if (compare != "none") {
+  if (compare == "programs") {
+    tests <- do.call(rbind, lapply(split(data, data$zone), function(z) {
+      # Retain only blocks with one finite value for every displayed program;
+      # these are the repeated-measure units in the Friedman test.
+      availability <- table(z$block, factor(z$program, levels = programs))
+      complete_blocks <- rownames(availability)[rowSums(availability == 1L) == length(programs)]
+      paired <- z[z$block %in% complete_blocks, , drop = FALSE]
+      if (length(complete_blocks) < 3L) {
+        warning("Zone `", as.character(z$zone[[1L]]),
+                "` has fewer than three complete blocks for the program comparison; ",
+                "the zone was not tested.", call. = FALSE)
+        statistic <- NA_real_
+        p_value <- NA_real_
+        reason <- "fewer than three complete blocks"
+      } else {
+        test <- stats::friedman.test(
+          enrichment_z ~ program | block,
+          data = paired
+        )
+        statistic <- unname(test$statistic)
+        p_value <- test$p.value
+        reason <- NA_character_
+      }
+      data.frame(
+        zone = as.character(z$zone[[1L]]), statistic = statistic,
+        p_value = p_value, reason = reason,
+        n_blocks = length(complete_blocks), stringsAsFactors = FALSE
+      )
+    }))
+  } else if (compare != "none") {
     test_keys <- interaction(data$program, data$zone, drop = TRUE)
     tests <- do.call(rbind, lapply(split(data, test_keys), function(z) {
       counts <- table(factor(z$curve_group, levels = levels_used))
@@ -607,6 +675,8 @@ cellcharter_plot_zonation <- function(
       for (level in levels_used) row[[paste0("n_", make.names(level))]] <- unname(counts[[level]])
       row
     }))
+  }
+  if (!is.null(tests)) {
     tests$q_value <- stats::p.adjust(tests$p_value, method = p_adjust_method)
     tests$significance <- cut(
       tests$q_value, c(-Inf, 0.001, 0.01, 0.05, Inf),
@@ -614,43 +684,69 @@ cellcharter_plot_zonation <- function(
     )
     tests$label <- sprintf("q=%.2g %s", tests$q_value, tests$significance)
     tests$label[!is.finite(tests$q_value)] <- "not tested"
-    tests$program <- factor(tests$program, levels = programs)
     tests$zone <- factor(tests$zone, levels = result$zone_programs, ordered = TRUE)
     tests$annotation_y <- max(data$enrichment_z) + 0.15 * diff(range(data$enrichment_z))
+    if (compare != "programs") {
+      tests$program <- factor(tests$program, levels = programs)
+    }
+    if (!facet && compare != "programs" && length(programs) > 1L) {
+      step <- max(0.12, 0.1 * diff(range(data$enrichment_z)))
+      tests$annotation_y <- tests$annotation_y +
+        (match(as.character(tests$program), programs) - 1L) * step
+      tests$label <- paste0(as.character(tests$program), ": ", tests$label)
+    }
   }
 
   if (is.null(colours)) {
     palette <- c("#7F0000", "#08306B", "#009E73", "#CC79A7", "#6A3D9A",
                  "#E69F00", "#56B4E9", "#000000")
-    colours <- stats::setNames(palette[seq_along(levels_used)], levels_used)
-  } else if (is.null(names(colours)) || !all(levels_used %in% names(colours))) {
-    stop("`colours` must be named for every retained comparison level.", call. = FALSE)
+    if (length(colour_levels) > length(palette)) {
+      palette <- grDevices::hcl.colors(length(colour_levels), "Dark 3")
+    }
+    colours <- stats::setNames(palette[seq_along(colour_levels)], colour_levels)
+  } else if (is.null(names(colours)) || !all(colour_levels %in% names(colours))) {
+    stop(
+      "`colours` must be named for every ",
+      if (overlay_by_program) "displayed program." else "retained comparison level.",
+      call. = FALSE
+    )
   }
   plot <- ggplot2::ggplot(
     data,
-    ggplot2::aes(x = zone, y = enrichment_z, colour = curve_group)
+    ggplot2::aes(x = zone, y = enrichment_z, colour = plot_colour)
   ) + ggplot2::geom_hline(yintercept = 0, colour = "grey70", linetype = 2)
   if (isTRUE(show_individual)) {
     plot <- plot + ggplot2::geom_line(
-      ggplot2::aes(group = interaction(block, curve_group)),
+      ggplot2::aes(group = plot_group),
       alpha = 0.15, linewidth = 0.35, na.rm = TRUE
+    )
+  }
+  summary_line_mapping <- if (!facet && !overlay_by_program &&
+                              compare != "none" && length(programs) > 1L) {
+    ggplot2::aes(
+      x = zone, y = mean, colour = plot_colour,
+      group = plot_group, linetype = program
+    )
+  } else {
+    ggplot2::aes(
+      x = zone, y = mean, colour = plot_colour, group = plot_group
     )
   }
   plot <- plot +
     ggplot2::geom_line(
       data = summary,
-      ggplot2::aes(x = zone, y = mean, colour = curve_group, group = curve_group),
+      summary_line_mapping,
       inherit.aes = FALSE, linewidth = 1.2
     ) +
     ggplot2::geom_point(
       data = summary,
-      ggplot2::aes(x = zone, y = mean, colour = curve_group),
+      ggplot2::aes(x = zone, y = mean, colour = plot_colour),
       inherit.aes = FALSE, size = 2.4
     ) +
     ggplot2::geom_errorbar(
       data = summary,
       ggplot2::aes(x = zone, ymin = mean - se, ymax = mean + se,
-                   colour = curve_group),
+                   colour = plot_colour),
       inherit.aes = FALSE, width = 0.07, linewidth = 0.5, na.rm = TRUE
     )
   if (isTRUE(show_significance) && !is.null(tests)) {
@@ -660,9 +756,11 @@ cellcharter_plot_zonation <- function(
       inherit.aes = FALSE, colour = "black", size = 2.8, fontface = "bold"
     )
   }
+  if (facet) {
+    plot <- plot + ggplot2::facet_wrap(~program, ncol = as.integer(facet_ncol))
+  }
   plot <- plot +
-    ggplot2::facet_wrap(~program, ncol = as.integer(facet_ncol)) +
-    ggplot2::scale_colour_manual(values = colours[levels_used], drop = FALSE) +
+    ggplot2::scale_colour_manual(values = colours[colour_levels], drop = FALSE) +
     ggplot2::labs(
       x = "Ordered score-defined zone",
       y = if (is.null(parameters$block)) {
@@ -670,11 +768,29 @@ cellcharter_plot_zonation <- function(
       } else {
         "Within-block program enrichment z-score"
       },
-      colour = if (compare == "strata") stratify_by else if (!is.null(group)) group else NULL,
+      colour = if (overlay_by_program) {
+        "Program"
+      } else if (compare == "strata") {
+        stratify_by
+      } else if (!is.null(group)) {
+        group
+      } else {
+        NULL
+      },
+      linetype = if (!facet && !overlay_by_program &&
+                    compare != "none" && length(programs) > 1L) {
+        "Program"
+      } else {
+        NULL
+      },
       title = title,
-      subtitle = if (compare == "none") NULL else
+      subtitle = if (compare == "none") NULL else if (compare == "programs") {
+        paste0(test_kind, " test within each zone; ", p_adjust_method,
+               " adjustment across displayed zones")
+      } else {
         paste0(test_kind, "; ", p_adjust_method,
-               " adjustment across all displayed program x zone tests"),
+               " adjustment across all displayed program x zone tests")
+      },
       caption = paste0(
         if (is.null(parameters$block)) {
           "Authors-style equal-depth zonation; all spots form one descriptive block. "

@@ -8,7 +8,7 @@ cellcharter_plot_zonation(
   x,
   result_name = "zonation",
   programs = NULL,
-  compare = c("groups", "strata", "none"),
+  compare = c("groups", "strata", "programs", "none"),
   group = NULL,
   group_levels = NULL,
   within_group = NULL,
@@ -18,6 +18,7 @@ cellcharter_plot_zonation(
   show_significance = TRUE,
   p_adjust_method = "BH",
   colours = NULL,
+  facet = TRUE,
   facet_ncol = 3L,
   title = NULL
 )
@@ -29,7 +30,10 @@ cellcharter_plot_zonation(
 
 \item{programs}{Programs to display. \code{NULL} displays every non-zone program.}
 
-\item{compare}{One of \code{"groups"}, \code{"strata"}, or \code{"none"}.}
+\item{compare}{One of \code{"groups"}, \code{"strata"}, \code{"programs"}, or
+\code{"none"}. \code{"programs"} performs a block-paired Friedman test among
+the displayed programs separately within each zone and requires
+\code{facet = FALSE}.}
 
 \item{group}{\code{colData} column defining groups.}
 
@@ -47,9 +51,14 @@ cellcharter_plot_zonation(
 
 \item{p_adjust_method}{Method passed to \code{\link[stats:p.adjust]{stats::p.adjust()}}.}
 
-\item{colours}{Optional named colour vector for comparison levels.}
+\item{colours}{Optional named colour vector for comparison levels. With
+\code{facet = FALSE} and \code{compare = "none"} or \code{"programs"}, name
+colours by program instead.}
 
-\item{facet_ncol}{Number of facet columns.}
+\item{facet}{Whether to draw one facet per program. Set to \code{FALSE} to
+overlay all requested programs in one panel.}
+
+\item{facet_ncol}{Number of facet columns; ignored when \code{facet = FALSE}.}
 
 \item{title}{Optional title.}
 }

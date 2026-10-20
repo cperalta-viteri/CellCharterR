@@ -247,6 +247,32 @@ test_that("zonation plot supports group and within-group strata comparisons", {
   expect_equal(nrow(attr(strata_plot, "cellcharter_zonation_tests")), 6L)
 })
 
+test_that("zonation plot overlays and compares programs within each zone", {
+  skip_if_not_installed("ggplot2")
+  spe <- cellcharter_zonation(
+    make_zonation_spe(), block = "patient", min_spots_per_zone = 2L,
+    sample_size = 2L, n_iterations = 3L
+  )
+  programs <- c("Pre-EMT", "Early-EMT", "Late-EMT")
+  plot <- cellcharter_plot_zonation(
+    spe, programs = programs, compare = "programs", facet = FALSE,
+    show_individual = FALSE
+  )
+  expect_s3_class(plot, "ggplot")
+  expect_s3_class(plot$facet, "FacetNull")
+  tests <- attr(plot, "cellcharter_zonation_tests")
+  expect_equal(nrow(tests), 3L)
+  expect_identical(as.character(tests$zone), programs)
+  expect_true(all(tests$n_blocks == 8L))
+  expect_true(all(is.finite(tests$q_value)))
+  expect_error(
+    cellcharter_plot_zonation(
+      spe, programs = programs, compare = "programs", facet = TRUE
+    ),
+    "requires `facet = FALSE`"
+  )
+})
+
 test_that("stored zonation results reject stale experiments", {
   skip_if_not_installed("ggplot2")
   spe <- cellcharter_zonation(
