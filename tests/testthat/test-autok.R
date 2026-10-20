@@ -180,7 +180,7 @@ test_that("Torch legacy migration rejects C++ checkpoint identities", {
   cpp_contract <- .autok_resume_contract(
     "input", list(max_iter = 10L), list(), default_torch = FALSE,
     implementation_digest = "unused",
-    algorithm = "cpp-full-covariance-em-v1.0.1",
+    algorithm = "cpp-full-covariance-em-v1.3.0",
     representation_sha256 = representation_sha256
   )
   cpp_id <- digest::digest(
@@ -463,6 +463,62 @@ test_that("C++ fit checkpoint mode publishes each K before starting the next", {
   expect_true(file.exists(first))
   expect_false(file.exists(second))
   expect_identical(readRDS(first)$k, 1L)
+})
+
+test_that("C++ AutoK ranks repetitions by the reference monitored NLL", {
+  x <- matrix(seq_len(48), ncol = 4L)
+  testthat::local_mocked_bindings(
+    cpp_gmm_fit_many = function(x, n_clusters, seeds, ...) {
+      lapply(seq_along(n_clusters), function(i) {
+        k <- n_clusters[[i]]
+        selection_nll <- as.numeric(seeds[[i]] - 9L)
+        structure(list(
+          labels = (seq_len(nrow(x)) - 1L) %% k,
+          selection_nll = selection_nll,
+          nll = 3 - selection_nll,
+          nll_history = selection_nll,
+          runtime = list(device = "cpu", backend = "compiled-cpp-double")
+        ), class = c("cpp_gmm", "torch_gmm"))
+      })
+    },
+    .package = "CellCharterR"
+  )
+
+  fit <- cellcharter_autok_fit(
+    x, c(2L, 2L), tempfile("autok-selection-nll-"),
+    max_runs = 2L, convergence_tol = 0, seed = 10L,
+    backend = "cpp", workers = 1L, checkpoint_mode = "none",
+    progress = FALSE
+  )
+
+  expect_true(all(fit$best_index$run == 1L))
+  expect_true(all(fit$best_index$nll == 1))
+  for (artifact in fit$embedded_best_artifacts) {
+    expect_equal(artifact$nll, 1, tolerance = 0)
+    expect_equal(artifact$final_nll, 2, tolerance = 0)
+    expect_equal(artifact$model$selection_nll, 1, tolerance = 0)
+    expect_equal(artifact$model$nll, 2, tolerance = 0)
+  }
+})
+
+test_that("C++ numerical ABI rejects older checkpoint identities", {
+  for (version in c("v1.0.1", "v1.1.0", "v1.2.0")) {
+    previous <- list(
+      algorithm = paste0(
+        "cpp-full-covariance-em-", version, ":",
+        paste(rep.int("a", 64L), collapse = "")
+      ),
+      representation_sha256 = "representation",
+      input_data_id = "input",
+      fit_args = list(),
+      predict_args = list()
+    )
+    state <- list(resume_contract = previous, data_id = "legacy-data-id")
+    expect_identical(
+      .autok_cpp_observability_compatible_id(state, previous),
+      character()
+    )
+  }
 })
 
 test_that("AutoK disables nested direct-fit OOM retries", {

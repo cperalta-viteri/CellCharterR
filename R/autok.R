@@ -179,7 +179,7 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 .autok_cpp_observability_compatible_id <- function(state, current_contract) {
   if (is.null(state$resume_contract) || is.null(state$data_id)) return(character())
   previous <- state$resume_contract
-  token <- "cpp-full-covariance-em-v1.0.1"
+  token <- "cpp-full-covariance-em-v1.3.0"
   if (!is.character(previous$algorithm) || length(previous$algorithm) != 1L ||
       !startsWith(previous$algorithm, token)) return(character())
   if (is.null(previous$representation_sha256) ||
@@ -921,7 +921,7 @@ cellcharter_autok_fit <- function(
     # token beside the public wrappers and bump it whenever numerical semantics
     # in src/cpp_gmm.cpp change, so stale native fits cannot be resumed.
     implementation_functions <- list(
-      cpp_backend_abi = function() "cpp-full-covariance-em-v1.0.1"
+      cpp_backend_abi = function() "cpp-full-covariance-em-v1.3.0"
     )
   }
   # The public defaults are deliberately small wrappers.  Hash their
@@ -968,7 +968,7 @@ cellcharter_autok_fit <- function(
   resume_contract <- .autok_resume_contract(
     input_data_id, fit_args, predict_args, default_torch, implementation_digest,
     algorithm = if (identical(backend, "cpp")) {
-      "cpp-full-covariance-em-v1.0.1"
+      "cpp-full-covariance-em-v1.3.0"
     } else NULL,
     representation_sha256 = representation_sha256
   )
@@ -1375,18 +1375,24 @@ cellcharter_autok_fit <- function(
           fit_elapsed <- cpp_round_elapsed / length(cpp_round)
         }
         labels <- model$labels
-        nll <- model$nll %||% model$nll_
+        selection_nll <- model$selection_nll %||% model$nll_ %||% model$nll
         if (length(labels) != n_obs || anyNA(labels)) {
           stop("C++ GMM model must contain one non-missing `$labels` value per observation.")
         }
-        if (length(nll) != 1L || !is.numeric(nll) || !is.finite(nll)) {
-          stop("C++ GMM model must contain one finite numeric `$nll` value.")
+        if (length(selection_nll) != 1L || !is.numeric(selection_nll) ||
+            !is.finite(selection_nll)) {
+          stop("C++ GMM model must contain one finite selection NLL.")
+        }
+        if (length(model$nll) != 1L || !is.numeric(model$nll) ||
+            !is.finite(model$nll)) {
+          stop("C++ GMM model must contain one finite final `$nll` value.")
         }
         artifact <- list(
           format_version = 2L, k = as.integer(k), run = as.integer(run),
           seed = run_seed, n_obs = as.integer(n_obs), n_features = as.integer(n_features),
           data_id = data_id, representation_sha256 = representation_sha256,
-          nll = as.numeric(nll), model = model, labels = labels,
+          nll = as.numeric(selection_nll), final_nll = as.numeric(model$nll),
+          model = model, labels = labels,
           backend = "cpp", workers = workers, threads_per_fit = threads_per_fit,
           execution_contract = execution_contract,
           representation_cache = list(mode = "ram", format_version = 2L)

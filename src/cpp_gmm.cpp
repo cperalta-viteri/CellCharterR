@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 #include <R_ext/Print.h>
+#include <R_ext/BLAS.h>
 #include <R_ext/Utils.h>
 
 namespace {
@@ -47,12 +48,22 @@ inline void cancellation_point(const std::atomic<bool>* cancelled) {
   }
 }
 
-struct Data { int n, p; std::vector<double> x; };
+struct Data {
+  int n, p;
+  std::vector<double> x;
+  std::vector<double> centered;
+  // `x` stays unshifted so seeded K-means++ choices retain the established
+  // implementation's exact distance/cumulative-sum path. EM uses `centered`
+  // so likelihood and component-centred covariance updates are translation
+  // stable.
+  std::vector<double> center;
+};
 struct Fit {
   int k, p, iterations; bool converged;
   double reg, nll;
   double tolerance;
   std::vector<double> means, covs, weights, history;
+  std::vector<double> center;
   std::vector<int> labels;
   std::vector<double> initialization_counts;
   std::vector<int> initialization_collapsed;
@@ -99,22 +110,6 @@ bool cholesky(const double* covariance, int p, double ridge,
   return true;
 }
 
-double component_log_density(const Data& d, int row, const Fit& f, int c,
-                             const std::vector<double>& lower,
-                             std::vector<double>& solved) {
-  double quad = 0.0, logdet = 0.0;
-  for (int j = 0; j < f.p; ++j) {
-    double v = d.x[static_cast<size_t>(row) * f.p + j] -
-      f.means[static_cast<size_t>(c) * f.p + j];
-    for (int q = 0; q < j; ++q) v -= atc(lower, f.p, j, q) * solved[q];
-    solved[j] = v / atc(lower, f.p, j, j);
-    quad += solved[j] * solved[j];
-    logdet += std::log(atc(lower, f.p, j, j));
-  }
-  return std::log(f.weights[c]) - 0.5 *
-    (f.p * std::log(2.0 * 3.14159265358979323846) + 2.0 * logdet + quad);
-}
-
 std::vector<std::vector<double> > factors(const Fit& f) {
   std::vector<std::vector<double> > out(f.k);
   for (int c = 0; c < f.k; ++c)
@@ -123,20 +118,73 @@ std::vector<std::vector<double> > factors(const Fit& f) {
   return out;
 }
 
+struct ScoringCache {
+  std::vector<std::vector<double> > precision_lower;
+  std::vector<double> log_weights;
+  std::vector<double> gaussian_bases;
+};
+
+std::vector<double> invert_lower(const std::vector<double>& lower, int p) {
+  std::vector<double> inverse(static_cast<size_t>(p)*p,0.0);
+  for(int column=0;column<p;++column) {
+    for(int row=column;row<p;++row) {
+      double value=row==column ? 1.0 : 0.0;
+      for(int q=column;q<row;++q)
+        value-=atc(lower,p,row,q)*atc(inverse,p,q,column);
+      at(inverse,p,row,column)=value/atc(lower,p,row,row);
+    }
+  }
+  return inverse;
+}
+
+ScoringCache make_scoring_cache(const Fit& f) {
+  ScoringCache out;
+  const auto chol=factors(f);
+  out.precision_lower.resize(f.k);
+  out.log_weights.resize(f.k);
+  out.gaussian_bases.resize(f.k);
+  const double gaussian_constant =
+    f.p * std::log(2.0 * 3.14159265358979323846);
+  for (int c=0;c<f.k;++c) {
+    double logdet=0.0;
+    for (int j=0;j<f.p;++j)
+      logdet+=std::log(atc(chol[c],f.p,j,j));
+    // PyCave likewise precomputes a precision-Cholesky factor. This removes
+    // the dependent triangular solve and scalar divisions from every
+    // observation/component score while retaining the same quadratic form.
+    out.precision_lower[c]=invert_lower(chol[c],f.p);
+    out.log_weights[c]=std::log(f.weights[c]);
+    out.gaussian_bases[c]=gaussian_constant+2.0*logdet;
+  }
+  return out;
+}
+
 double responsibilities(const Data& d, int row, const Fit& f,
-                        const std::vector<std::vector<double> >& chol,
-                        std::vector<double>& values) {
-  double maximum = -std::numeric_limits<double>::infinity();
-  thread_local std::vector<double> solved;
-  solved.resize(f.p);
-  for (int c = 0; c < f.k; ++c) {
-    values[c] = component_log_density(d, row, f, c, chol[c], solved);
-    maximum = std::max(maximum, values[c]);
+                        const ScoringCache& cache,
+                        std::vector<double>& values,
+                        std::vector<double>& solved) {
+  const double* observation=&d.centered[static_cast<size_t>(row)*f.p];
+  double maximum=-std::numeric_limits<double>::infinity();
+  for(int c=0;c<f.k;++c) {
+    double quad=0.0;
+    for(int j=0;j<f.p;++j)
+      solved[j]=observation[j]-f.means[static_cast<size_t>(c)*f.p+j];
+    for(int j=0;j<f.p;++j) {
+      double transformed=0.0;
+      for(int q=0;q<=j;++q)
+        transformed+=atc(cache.precision_lower[c],f.p,j,q)*solved[q];
+      quad+=transformed*transformed;
+    }
+    values[c]=cache.log_weights[c]-0.5*(cache.gaussian_bases[c]+quad);
+    maximum=std::max(maximum,values[c]);
   }
   double total = 0.0;
-  for (int c = 0; c < f.k; ++c) total += std::exp(values[c] - maximum);
+  for (int c=0;c<f.k;++c) {
+    values[c]=std::exp(values[c]-maximum);
+    total+=values[c];
+  }
   const double log_norm = maximum + std::log(total);
-  for (int c = 0; c < f.k; ++c) values[c] = std::exp(values[c] - log_norm);
+  for (int c=0;c<f.k;++c) values[c]/=total;
   return log_norm;
 }
 
@@ -209,12 +257,80 @@ std::vector<double> kmeans_pp(const Data& d, int k, uint64_t seed,
   return means;
 }
 
+std::vector<double> covariance_from_posterior(
+    const Data& d, int k, const std::vector<double>& posterior,
+    const std::vector<double>& nk, const std::vector<double>& means,
+    const std::vector<bool>& collapsed, int threads,
+    const std::atomic<bool>* cancelled) {
+  std::vector<double> output(static_cast<size_t>(k)*d.p*d.p,0.0);
+  std::atomic<int> next_component(0);
+  const int nt=std::max(1,std::min(threads,k));
+  const int block_rows=16384;
+  std::vector<std::thread> pool;
+  std::vector<std::exception_ptr> errors(nt);
+  pool.reserve(nt);
+  ThreadJoiner joiner{pool};
+  for(int t=0;t<nt;++t) pool.emplace_back([&,t](){
+    try {
+      std::vector<double> weighted(static_cast<size_t>(block_rows)*d.p);
+      std::vector<double> cross(static_cast<size_t>(d.p)*d.p);
+      for(;;) {
+        const int c=next_component.fetch_add(1);
+        if(c>=k) break;
+        cancellation_point(cancelled);
+        double* target=&output[static_cast<size_t>(c)*d.p*d.p];
+        if(collapsed[c]) {
+          for(int j=0;j<d.p;++j) target[static_cast<size_t>(j)*d.p+j]=1.0;
+          continue;
+        }
+        std::fill(cross.begin(),cross.end(),0.0);
+        bool first=true;
+        for(int begin=0;begin<d.n;begin+=block_rows) {
+          cancellation_point(cancelled);
+          const int rows=std::min(block_rows,d.n-begin);
+          for(int i=0;i<rows;++i) {
+            const double scale=std::sqrt(
+              posterior[static_cast<size_t>(begin+i)*k+c]);
+            const double* source=&d.centered[static_cast<size_t>(begin+i)*d.p];
+            double* destination=&weighted[static_cast<size_t>(i)*d.p];
+            // Form component-centred residuals before the rank-k update.
+            // Computing E[xx'] - mean mean' would be algebraically equivalent
+            // in exact arithmetic, but catastrophically cancels when a
+            // component is far from the cohort-wide centre.
+            const double* component_mean=
+              &means[static_cast<size_t>(c)*d.p];
+            for(int j=0;j<d.p;++j)
+              destination[j]=scale*(source[j]-component_mean[j]);
+          }
+          const char uplo='L',trans='N';
+          const double alpha=1.0,beta=first ? 0.0 : 1.0;
+          F77_CALL(dsyrk)(&uplo,&trans,&d.p,&rows,&alpha,weighted.data(),
+                          &d.p,&beta,cross.data(),&d.p FCONE FCONE);
+          first=false;
+        }
+        for(int a=0;a<d.p;++a) for(int b=0;b<=a;++b) {
+          // `cross` is column-major and already contains the weighted outer
+          // products of component-centred residuals.
+          const double value=cross[static_cast<size_t>(a)+
+            static_cast<size_t>(b)*d.p]/nk[c];
+          target[static_cast<size_t>(a)*d.p+b]=value;
+          target[static_cast<size_t>(b)*d.p+a]=value;
+        }
+      }
+    } catch(...) { errors[t]=std::current_exception(); }
+  });
+  for(auto& thread:pool) if(thread.joinable()) thread.join();
+  for(const auto& error:errors) if(error) std::rethrow_exception(error);
+  return output;
+}
+
 Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
              double tolerance, double reg, int threads_per_fit,
              const std::atomic<bool>* cancelled = nullptr) {
   cancellation_point(cancelled);
   Fit f; f.k = k; f.p = d.p; f.reg = reg; f.iterations = 0; f.converged = false;
   f.tolerance = tolerance;
+  f.center = d.center;
   const double collapse_threshold = 1e-6;
   std::vector<double> centers = kmeans_pp(d, k, seed, cancelled);
   f.means.assign(static_cast<size_t>(k) * d.p, 0.0); f.weights.assign(k, 0.0);
@@ -250,80 +366,84 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
     f.covs[(static_cast<size_t>(c)*d.p+a)*d.p+b]=value;
     f.covs[(static_cast<size_t>(c)*d.p+b)*d.p+a]=value;
   }
+  // Initialization above deliberately follows the established unshifted
+  // arithmetic. EM then proceeds in a shared centered coordinate system.
+  for(int c=0;c<k;++c) for(int j=0;j<d.p;++j)
+    f.means[static_cast<size_t>(c)*d.p+j]-=d.center[j];
   double best = std::numeric_limits<double>::infinity(); int wait = 0;
-  std::vector<double> r(k), nk(k), sums(static_cast<size_t>(k) * d.p);
+  std::vector<double> nk(k), sums(static_cast<size_t>(k) * d.p);
+  std::vector<double> posterior(static_cast<size_t>(d.n)*k);
   const int nt = std::max(1, std::min(threads_per_fit, d.n));
   for (int iteration = 0; iteration < max_iter; ++iteration) {
     cancellation_point(cancelled);
-    const std::vector<std::vector<double> > chol = factors(f);
+    const ScoringCache scoring_cache=make_scoring_cache(f);
     std::fill(nk.begin(), nk.end(), 0.0); std::fill(sums.begin(), sums.end(), 0.0);
     double ll = 0.0;
     // Fixed contiguous shards plus shard-order reduction are deterministic for
     // a fixed topology. Worker threads never call the R API.
     std::vector<std::vector<double> > local_nk(nt,std::vector<double>(k,0.0));
-    std::vector<std::vector<double> > local_sums(nt,std::vector<double>(sums.size(),0.0));
+    // Feature-major storage makes the component dimension contiguous while
+    // each thread writes only to its private deterministic shard.
+    std::vector<std::vector<double> > local_sums(
+      nt, std::vector<double>(static_cast<size_t>(d.p) * k, 0.0));
     std::vector<double> local_ll(nt,0.0); std::vector<std::thread> pass1;
     std::vector<std::exception_ptr> pass1_errors(nt);
     pass1.reserve(nt); ThreadJoiner pass1_joiner{pass1};
     for(int t=0;t<nt;++t) pass1.emplace_back([&,t](){
       try {
         int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt);
-        std::vector<double> lr(k);
+        std::vector<double> lr(k),solved(d.p);
         for(int i=begin;i<end;++i){
-          cancellation_point(cancelled);
-          local_ll[t]+=responsibilities(d,i,f,chol,lr);
-          for(int c=0;c<k;++c){ local_nk[t][c]+=lr[c]; for(int j=0;j<d.p;++j) local_sums[t][static_cast<size_t>(c)*d.p+j]+=lr[c]*d.x[static_cast<size_t>(i)*d.p+j]; }}
+          if ((i & 1023) == 0) cancellation_point(cancelled);
+          local_ll[t]+=responsibilities(
+            d,i,f,scoring_cache,lr,solved);
+          for(int c=0;c<k;++c) {
+            posterior[static_cast<size_t>(i)*k+c]=lr[c];
+            local_nk[t][c]+=lr[c];
+          }
+          const double* row=&d.centered[static_cast<size_t>(i)*d.p];
+          for(int a=0;a<d.p;++a) {
+            double* feature_sum=&local_sums[t][static_cast<size_t>(a)*k];
+            const double xa=row[a];
+            for(int c=0;c<k;++c) feature_sum[c]+=lr[c]*xa;
+          }
+        }
       } catch(...) { pass1_errors[t]=std::current_exception(); }
     });
     for(auto& thread:pass1) if(thread.joinable()) thread.join();
     for(const auto& error:pass1_errors) if(error) std::rethrow_exception(error);
-    for(int t=0;t<nt;++t){ ll+=local_ll[t]; for(int c=0;c<k;++c) nk[c]+=local_nk[t][c]; for(size_t q=0;q<sums.size();++q) sums[q]+=local_sums[t][q]; }
+    for(int t=0;t<nt;++t){
+      ll+=local_ll[t];
+      for(int c=0;c<k;++c) nk[c]+=local_nk[t][c];
+      for(int j=0;j<d.p;++j) for(int c=0;c<k;++c)
+        sums[static_cast<size_t>(c)*d.p+j] +=
+          local_sums[t][static_cast<size_t>(j)*k+c];
+    }
     std::vector<double> new_means(sums.size()), new_weights(k);
     std::vector<bool> collapsed(k, false);
     for (int c = 0; c < k; ++c) {
       if (nk[c] < 1e-6) {
         collapsed[c] = true;
         int selected = static_cast<int>((seed + iteration + c) % d.n);
-        std::copy_n(&d.x[static_cast<size_t>(selected) * d.p], d.p,
+        std::copy_n(&d.centered[static_cast<size_t>(selected) * d.p], d.p,
                     new_means.begin() + static_cast<size_t>(c) * d.p);
         nk[c] = 1e-6;
       } else for (int j = 0; j < d.p; ++j)
-        new_means[static_cast<size_t>(c) * d.p + j] = sums[static_cast<size_t>(c) * d.p + j] / nk[c];
+        new_means[static_cast<size_t>(c) * d.p + j] =
+          sums[static_cast<size_t>(c) * d.p + j] / nk[c];
       new_weights[c] = std::max(nk[c] / d.n, 1e-15);
     }
     double weight_sum = std::accumulate(new_weights.begin(), new_weights.end(), 0.0);
     for (double& w : new_weights) w /= weight_sum;
-    std::vector<double> new_covs(f.covs.size(), 0.0);
-    // Pass two recomputes the same old-parameter responsibilities and forms
-    // covariance from (x-new_mean)(x-new_mean)', avoiding E[xx']-mu mu'.
-    std::vector<std::vector<double> > local_covs(nt,std::vector<double>(new_covs.size(),0.0)); std::vector<std::thread> pass2;
-    std::vector<std::exception_ptr> pass2_errors(nt);
-    pass2.reserve(nt); ThreadJoiner pass2_joiner{pass2};
-    for(int t=0;t<nt;++t) pass2.emplace_back([&,t](){
-      try {
-        int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt); std::vector<double> lr(k);
-        for(int i=begin;i<end;++i){
-          cancellation_point(cancelled);
-          responsibilities(d,i,f,chol,lr); for(int c=0;c<k;++c) for(int a=0;a<d.p;++a){
-          double za=d.x[static_cast<size_t>(i)*d.p+a]-new_means[static_cast<size_t>(c)*d.p+a];
-          for(int b=0;b<=a;++b) local_covs[t][(static_cast<size_t>(c)*d.p+a)*d.p+b]+=lr[c]*za*(d.x[static_cast<size_t>(i)*d.p+b]-new_means[static_cast<size_t>(c)*d.p+b]); }}
-      } catch(...) { pass2_errors[t]=std::current_exception(); }
-    });
-    for(auto& thread:pass2) if(thread.joinable()) thread.join();
-    for(const auto& error:pass2_errors) if(error) std::rethrow_exception(error);
-    for(int t=0;t<nt;++t) for(size_t q=0;q<new_covs.size();++q) new_covs[q]+=local_covs[t][q];
-    for (int c = 0; c < k; ++c) for (int a = 0; a < d.p; ++a) for (int b = 0; b <= a; ++b) {
-      double value=collapsed[c] ? (a==b ? 1.0 : 0.0) :
-        new_covs[(static_cast<size_t>(c)*d.p+a)*d.p+b]/nk[c];
-      new_covs[(static_cast<size_t>(c)*d.p+a)*d.p+b]=value;
-      new_covs[(static_cast<size_t>(c)*d.p+b)*d.p+a]=value;
-    }
+    std::vector<double> new_covs=covariance_from_posterior(
+      d,k,posterior,nk,new_means,collapsed,nt,cancelled);
     f.means.swap(new_means); f.weights.swap(new_weights); f.covs.swap(new_covs);
     f.iterations = iteration + 1; f.history.push_back(-ll / d.n);
     if (f.history.back() < best - tolerance) { best = f.history.back(); wait = 0; }
     else if (++wait >= 2) { f.converged = true; break; }
   }
-  const auto chol = factors(f); double ll = 0.0;
+  const auto scoring_cache=make_scoring_cache(f);
+  double ll = 0.0;
   cancellation_point(cancelled);
   f.labels.resize(d.n);
   std::vector<double> final_ll(nt,0.0); std::vector<std::thread> scoring;
@@ -331,10 +451,13 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
   scoring.reserve(nt); ThreadJoiner scoring_joiner{scoring};
   for(int t=0;t<nt;++t) scoring.emplace_back([&,t](){
     try {
-      int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt); std::vector<double> lr(k);
+      int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt); std::vector<double> lr(k),solved(d.p);
       for(int i=begin;i<end;++i){
-        cancellation_point(cancelled);
-        final_ll[t]+=responsibilities(d,i,f,chol,lr); f.labels[i]=static_cast<int>(std::max_element(lr.begin(),lr.end())-lr.begin()); }
+        if ((i & 1023) == 0) cancellation_point(cancelled);
+        final_ll[t]+=responsibilities(
+          d,i,f,scoring_cache,lr,solved);
+        f.labels[i]=static_cast<int>(
+          std::max_element(lr.begin(),lr.end())-lr.begin()); }
     } catch(...) { scoring_errors[t]=std::current_exception(); }
   });
   for(auto& thread:scoring) if(thread.joinable()) thread.join();
@@ -359,10 +482,22 @@ Fit fit_restart(const Data& d, int k, uint64_t seed, int max_iter,
 }
 
 Data import_matrix(const Rcpp::NumericMatrix& x) {
-  Data d; d.n = x.nrow(); d.p = x.ncol(); d.x.resize(static_cast<size_t>(d.n) * d.p);
+  Data d; d.n = x.nrow(); d.p = x.ncol();
+  d.x.resize(static_cast<size_t>(d.n) * d.p);
+  d.centered.resize(static_cast<size_t>(d.n) * d.p);
+  d.center.assign(d.p, 0.0);
+  for (int j=0;j<d.p;++j) {
+    long double total=0.0L;
+    for (int i=0;i<d.n;++i) {
+      double value=x(i,j);
+      if (!std::isfinite(value)) Rcpp::stop("`x` contains non-finite values.");
+      total+=static_cast<long double>(value);
+    }
+    d.center[j]=static_cast<double>(total/static_cast<long double>(d.n));
+  }
   for (int i = 0; i < d.n; ++i) for (int j = 0; j < d.p; ++j) {
-    double value = x(i, j); if (!std::isfinite(value)) Rcpp::stop("`x` contains non-finite values.");
-    d.x[static_cast<size_t>(i) * d.p + j] = value;
+    d.x[static_cast<size_t>(i) * d.p + j] = x(i,j);
+    d.centered[static_cast<size_t>(i) * d.p + j] = x(i,j)-d.center[j];
   }
   return d;
 }
@@ -371,7 +506,7 @@ Rcpp::List export_fit(const Fit& f, double requested_reg, uint64_t seed) {
   Rcpp::NumericMatrix means(f.k, f.p);
   for (int c = 0; c < f.k; ++c) {
     for (int j = 0; j < f.p; ++j) {
-      means(c, j) = f.means[static_cast<size_t>(c) * f.p + j];
+      means(c, j) = f.means[static_cast<size_t>(c) * f.p + j] + f.center[j];
     }
   }
   Rcpp::List covs(f.k);
@@ -418,10 +553,18 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
   double tol=Rcpp::as<double>(tols), reg=Rcpp::as<double>(regs); int threads_per_fit=std::max(1,Rcpp::as<int>(threadss));
   std::vector<int> native_ks(jobs);
   std::vector<uint64_t> native_seeds(jobs);
+  std::vector<int> job_order(jobs);
   for(int i=0;i<jobs;++i) {
     native_ks[i]=ks[i];
     native_seeds[i]=static_cast<uint64_t>(seeds[i]);
+    job_order[i]=i;
   }
+  // Independent fits are returned in canonical caller order, but starting the
+  // largest K first prevents one expensive fit from becoming a serial tail
+  // after the other worker threads have gone idle.
+  std::stable_sort(job_order.begin(),job_order.end(),[&](int left,int right){
+    return native_ks[left]>native_ks[right];
+  });
   if(progress) {
     const double copy_seconds=std::chrono::duration<double>(
       std::chrono::steady_clock::now()-native_started).count();
@@ -440,8 +583,9 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
   auto work=[&]() {
     for (;;) {
       if (cancelled.load(std::memory_order_relaxed)) break;
-      int i=next.fetch_add(1);
-      if(i>=jobs || cancelled.load(std::memory_order_relaxed)) break;
+      int position=next.fetch_add(1);
+      if(position>=jobs || cancelled.load(std::memory_order_relaxed)) break;
+      int i=job_order[position];
       const auto fit_started=std::chrono::steady_clock::now();
       try {
         fits[i]=fit_restart(d,native_ks[i],native_seeds[i],max_iter,tol,reg,

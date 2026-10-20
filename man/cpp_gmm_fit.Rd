@@ -17,7 +17,9 @@ cpp_gmm_fit(
 \arguments{
 \item{x}{Observation-by-feature numeric matrix-like object. The compiled
 backend materialises it once as a dense double matrix and makes one shared
-native row-major copy for concurrent fits.}
+native row-major copy plus a centered copy shared by concurrent fits. Each
+active fit additionally stores one observation-by-component double-precision
+posterior matrix.}
 
 \item{n_clusters}{number of mixture components.}
 
@@ -36,9 +38,13 @@ current setting.}
 A serializable \code{cpp_gmm} model inheriting from \code{torch_gmm}.
 }
 \description{
-This experimental accelerated CPU backend uses double precision, centered
-two-pass covariance updates, and a private deterministic C++ random-number
-generator. Its K-means++ initialization is not RNG-identical to the pinned
+This accelerated CPU backend uses double precision, a globally centered
+full-covariance EM update, and a private deterministic C++ random-number
+generator. During each fit it caches one observation-by-component posterior
+matrix and accumulates covariance sufficient statistics in row blocks with
+the linked BLAS. Gaussian scoring precomputes the precision-Cholesky factor
+once per component and EM iteration. Its K-means++ initialization is not
+RNG-identical to the pinned
 sklearn initializer, so fitted solutions require empirical parity checks and
 are not described as exact seeded CellCharter reproductions. Its result
 inherits from both \code{cpp_gmm} and \code{torch_gmm}: the dedicated \code{cpp_gmm} class

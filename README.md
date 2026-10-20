@@ -218,31 +218,44 @@ producing a non-portable analysis.
 ### Compiled multicore CPU backend
 
 CellCharterR provides a supported C++17 full-covariance GMM backend for large
-AutoK searches. It is the recommended backend for new CPU analyses. On the full
-mouse-spleen aggregated representation (707,474 spatial spots and 40
-features), an AutoK search over candidate `K = 2..20`
-converged after five rounds in **38 minutes 20 seconds** on Linux using eight
-concurrent fits with four threads per fit. A standalone K=20 fit took 154.5
-seconds with four threads and 567.4 seconds with one thread, with identical
-labels and negligible floating-point differences. Extrapolating from those
-measurements, the same complete five-round search would take approximately
-**18--20 hours on one comparable CPU core**; this is an estimate, not a
-measured single-core AutoK run.
+AutoK searches. It is the production clustering path and is CPU-only; the R
+Torch CPU/CUDA backend remains experimental.
 
-The preserved before/after workflow comparison uses the same first five AutoK
-rounds over the expanded `K = 1..21` grid: 105 GMM fits in total.
+The optimized native path materializes the representation once into a data
+object shared by all concurrently running fits. It retains the unshifted values
+for the established deterministic initializer and a globally centered copy for
+the full-covariance EM calculations. Each concurrent fit caches one `N`-by-`K`
+posterior matrix and reuses it for the M-step instead of recomputing posterior
+probabilities. Covariances are accumulated from component-centered residuals
+in row blocks with the BLAS `DSYRK` symmetric rank-k kernel. Jobs are
+started in descending K order to reduce the long-fit tail, while returned fits
+remain in the caller's canonical K order.
 
-| Implementation | Spatial spots | Features | AutoK rounds | Fits | Observed wall time |
-|---|---:|---:|---:|---:|---:|
-| Previous R Torch CUDA, sequential K fits (RTX A4000) | 707,474 | 40 | 5 | 105 | at least 49 h 47 min 25 s |
-| Compiled C++ CPU, 8 workers x 4 threads | 707,474 | 40 | 5 | 105 | 38 min 20 s |
+These choices make peak memory depend on concurrency: in addition to the
+shared representation, each active fit owns one `N`-by-`K` double-precision
+posterior. Choose `workers` with both RAM and CPU bandwidth in mind.
 
-That is an observed wall-time reduction of at least **77.9-fold**. The legacy
-duration is a conservative lower bound reconstructed from the first and last
-completed checkpoint timestamps, so it omits time before the first checkpoint;
-the C++ duration was recorded end to end by the runner. This is a real workflow
-comparison, not a controlled microbenchmark: the numerical engines and
-initializers differ, so the timing does not imply identical fitted parameters.
+The full CPU qualification used the real mouse-spleen representation: 707,474
+spots by 40 features, candidate `K = 2..20`, `max_runs = 10`, and
+`convergence_tol = 0.01`. With 8 fit workers and 4 threads per fit, the
+optimized implementation converged after six AutoK rounds (126 fits) in
+889.675 seconds (14 minutes 49.675 seconds), selected K=10, and reached a peak
+process RSS of 3.596 GiB. The run was fresh, CPU-only, and used no intermediate
+checkpoints.
+
+| Compiled-C++ implementation | Spatial spots | Features | Candidate K | AutoK rounds | Fits | Observed wall time |
+|---|---:|---:|---:|---:|---:|---:|
+| Pre-optimization baseline | 707,474 | 40 | 2..20 | 5 | 105 | 2300.1 s |
+| Optimized v1.3 qualification | 707,474 | 40 | 2..20 | 6 | 126 | **889.675 s** |
+
+The observed complete-workflow speedup is 2.585x even though the optimized run
+performed 20% more fits. Normalized per fit, throughput improved 3.102x
+(21.906 versus 7.061 seconds per fit). This is an observed workflow comparison,
+not an identical-numerics A/B: the older baseline used numerical ABI v1.0 and
+converged one round earlier. Against the identical-output v1.1 qualification
+(918.096 seconds, 126 fits), v1.3 is 3.10% faster with identical selected labels
+and stability values. Timings are machine-specific and do not promise a
+15-minute upper bound under different system load.
 
 Parallel execution uses standard C++17 threads rather than Unix process
 forking. It is therefore designed to compile on Linux, macOS, and Windows with
@@ -263,15 +276,23 @@ spe <- cellcharter_cluster(
   seed = 0L,
   backend = "cpp",
   workers = 8L,
-  threads_per_fit = 2L,
-  checkpoint_mode = "round",
-  resume = TRUE
+  threads_per_fit = 4L,
+  checkpoint_mode = "none",
+  resume = FALSE
 )
 ```
 
 Set `workers * threads_per_fit` no higher than the CPU threads and memory
 bandwidth available to R. Use `workers = 1L` for sequential execution or when
-a platform's multicore behavior has not been validated.
+a platform's multicore behavior has not been validated. Because CellCharterR
+already parallelizes across fits and within a fit, run the linked BLAS with one
+thread to avoid nested oversubscription. For example, set
+`OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1`, and `MKL_NUM_THREADS=1` before
+starting R.
+
+For interruptible long runs, use `checkpoint_mode = "round"` and
+`resume = TRUE`. Round checkpointing adds storage I/O and was intentionally
+disabled in the benchmark above.
 
 ### Experimental R Torch backend
 

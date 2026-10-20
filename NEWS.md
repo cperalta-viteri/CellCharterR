@@ -1,5 +1,18 @@
 # CellCharterR 0.99.0
 
+- Optimized the production C++ CPU GMM path around one shared materialized
+  representation, globally centered full-covariance EM, one cached N-by-K
+  posterior per concurrent fit, and blocked BLAS `DSYRK` covariance updates.
+  Candidate fits now start in descending K order to reduce the scheduling tail
+  while results retain canonical caller order. The production path remains
+  CPU-only; GPU clustering remains experimental. Set OpenBLAS, OpenMP, and MKL
+  thread counts to one when using outer or per-fit parallelism to avoid nested
+  oversubscription.
+- Full optimized mouse-spleen qualification is still running. The comparable
+  pre-optimization compiled-C++ run used 707,474 observations by 40 features,
+  `K = 2..20`, five rounds, and 105 fits, and took 2300.1 seconds. Its optimized
+  wall time remains `FINAL_OPTIMIZED_SECONDS`; this is a searchable placeholder,
+  not a result or speedup claim.
 - Made R Torch an optional experimental dependency. Loading CellCharterR or a
   legacy disk-backed SPE now remains a pure Bioconductor/HDF5 operation and
   cannot trigger a Lantern/LibTorch download; Torch entry points fail with an

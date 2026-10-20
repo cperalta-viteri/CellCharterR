@@ -1,8 +1,12 @@
 #' Fit a full-covariance GMM with the compiled CPU backend
 #'
-#' This experimental accelerated CPU backend uses double precision, centered
-#' two-pass covariance updates, and a private deterministic C++ random-number
-#' generator. Its K-means++ initialization is not RNG-identical to the pinned
+#' This accelerated CPU backend uses double precision, a globally centered
+#' full-covariance EM update, and a private deterministic C++ random-number
+#' generator. During each fit it caches one observation-by-component posterior
+#' matrix and accumulates covariance sufficient statistics in row blocks with
+#' the linked BLAS. Gaussian scoring precomputes the precision-Cholesky factor
+#' once per component and EM iteration. Its K-means++ initialization is not
+#' RNG-identical to the pinned
 #' sklearn initializer, so fitted solutions require empirical parity checks and
 #' are not described as exact seeded CellCharter reproductions. Its result
 #' inherits from both `cpp_gmm` and `torch_gmm`: the dedicated `cpp_gmm` class
@@ -12,7 +16,9 @@
 #' interrupts and join all native worker threads before returning to R.
 #' @param x Observation-by-feature numeric matrix-like object. The compiled
 #'   backend materialises it once as a dense double matrix and makes one shared
-#'   native row-major copy for concurrent fits.
+#'   native row-major copy plus a centered copy shared by concurrent fits.
+#'   Each active fit additionally stores one observation-by-component
+#'   double-precision posterior matrix.
 #' @inheritParams torch_gmm_fit
 #' @return A serializable `cpp_gmm` model inheriting from `torch_gmm`.
 #' @useDynLib CellCharterR, .registration=TRUE
@@ -115,6 +121,15 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
 }
 
 .cpp_gmm_compatibility <- function(model) {
+  if (is.null(model$nll_history) || !length(model$nll_history) ||
+      !is.finite(utils::tail(model$nll_history, 1L))) {
+    stop("Compiled GMM model lacks a finite monitored NLL history.", call. = FALSE)
+  }
+  # CellCharter 0.2.0 ranks repeated fits using PyCave's `nll_`, which is the
+  # last pre-M-step training metric. Keep the independently rescored final NLL
+  # in `model$nll`, but expose the reference selection quantity explicitly.
+  model$selection_nll <- as.numeric(utils::tail(model$nll_history, 1L))
+  model$selection_nll_semantics <- "last monitored mean NLL before M-step"
   attempts <- max(0L, as.integer(round(log10(
     model$covariance_regularization / model$requested_covariance_regularization))))
   model$regularization_attempts <-
@@ -130,7 +145,9 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
     collapsed_components = model$initialization_collapsed_components,
     branch = "full-data C++ KMeans; native threads parallelize independent fits")
   model$reference_semantics <- paste(
-    "CellCharter 0.2.0-style full-data two-pass centered full-covariance EM;",
+    "CellCharter 0.2.0-style full-data centered full-covariance EM with",
+    "precision-Cholesky scoring, cached posteriors, and blocked BLAS",
+    "covariance sufficient statistics;",
     "compiled double-precision CPU backend with a distinct deterministic",
     "C++ K-means++/Lloyd initializer (not sklearn RNG-identical).")
   model

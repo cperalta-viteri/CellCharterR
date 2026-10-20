@@ -291,8 +291,15 @@ test_that("checkpoint-free C++ AutoK creates no directory and embeds usable mode
   expect_true(is.list(fit$embedded_best_artifacts))
   for (k in fit$fit_k) {
     model <- cellcharter_autok_model(fit, k)
+    artifact <- fit$embedded_best_artifacts[[as.character(k)]]
     expect_s3_class(model, "torch_gmm")
     expect_identical(model$labels, cpp_gmm_predict(model, x, batch_size = 23L))
+    expect_equal(model$selection_nll, utils::tail(model$nll_history, 1L),
+                 tolerance = 0)
+    expect_equal(artifact$nll, model$selection_nll, tolerance = 0)
+    expect_equal(artifact$final_nll, model$nll, tolerance = 0)
+    expect_equal(fit$best_index[as.character(k), "nll"],
+                 model$selection_nll, tolerance = 0)
   }
 })
 
@@ -358,7 +365,7 @@ test_that("C++ round checkpoints survive an observability-only wrapper upgrade",
   state <- readRDS(state_path)
   previous_contract <- state$resume_contract
   previous_contract$algorithm <- paste0(
-    "cpp-full-covariance-em-v1.0.1:", paste(rep("a", 64L), collapse = "")
+    "cpp-full-covariance-em-v1.3.0:", paste(rep("a", 64L), collapse = "")
   )
   previous_id <- digest::digest(
     .cc_contract_canonical(previous_contract), algo = "sha256", serialize = TRUE
