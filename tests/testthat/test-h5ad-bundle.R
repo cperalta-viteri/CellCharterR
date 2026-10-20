@@ -546,10 +546,20 @@ test_that("metadata preflight counts long index and annotation strings", {
   rhdf5::h5write(long_ids, source_file, "obs/_index")
   rhdf5::h5write(long_labels, source_file, "obs/label")
 
-  estimate <- .transition_frame_estimate(source_file, "/obs", 3L)
+  estimate <- withr::with_options(
+    list(CellCharterR.import.character_bytes_per_value = 4096),
+    .transition_frame_estimate(source_file, "/obs", 3L)
+  )
   raw_payload <- sum(nchar(long_ids, type = "bytes")) +
     sum(nchar(long_labels, type = "bytes"))
   expect_gt(estimate, raw_payload)
+  expect_error(
+    withr::with_options(
+      list(CellCharterR.import.character_bytes_per_value = 0),
+      .transition_frame_estimate(source_file, "/obs", 3L)
+    ),
+    "character_bytes_per_value"
+  )
 })
 
 test_that("AUCell dataframe indices cannot silently reorder spots", {

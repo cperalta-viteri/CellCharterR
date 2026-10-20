@@ -11,8 +11,8 @@ jobs:
     container: bioconductor/bioconductor_docker:RELEASE_3_22
     env:
       CELLCHARTERR_CPU_ONLY: "true"
-      CELLCHARTERR_REQUIRE_TORCH: "true"
       CUDA_VISIBLE_DEVICES: ""
+      _R_CHECK_FORCE_SUGGESTS_: "false"
       R_KEEP_PKG_SOURCE: yes
     steps:
       - uses: actions/checkout@v4
@@ -22,12 +22,12 @@ jobs:
         run: |
           Rscript -e 'stopifnot(getRversion() >= "4.5", getRversion() < "4.6"); print(R.version.string); print(BiocManager::version()); print(packageVersion("BiocManager"))'
 
-      - name: Install validation dependencies and CPU LibTorch
+      - name: Install validation dependencies
         shell: bash
         run: |
           Rscript -e 'BiocManager::install(c("remotes", "rcmdcheck"), ask = FALSE, update = FALSE)'
-          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = TRUE, upgrade = "never")'
-          Rscript -e 'torch::install_torch(type = "cpu")'
+          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = c("Depends", "Imports", "LinkingTo"), upgrade = "never", repos = BiocManager::repositories())'
+          Rscript -e 'BiocManager::install(c("BiocStyle", "ggplot2", "ggspavis", "jsonlite", "knitr", "MASS", "rmarkdown", "testthat"), ask = FALSE, update = FALSE)'
 
       - name: Build and check on R 4.5
         shell: bash

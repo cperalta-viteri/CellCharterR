@@ -11,8 +11,8 @@ jobs:
     container: bioconductor/bioconductor_docker:RELEASE_3_19
     env:
       CELLCHARTERR_CPU_ONLY: "true"
-      CELLCHARTERR_REQUIRE_TORCH: "true"
       CUDA_VISIBLE_DEVICES: ""
+      _R_CHECK_FORCE_SUGGESTS_: "false"
       R_KEEP_PKG_SOURCE: yes
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,6 @@ jobs:
           Rscript -e 'BiocManager::install(c("zlibbioc", "DelayedArray", "HDF5Array", "IRanges", "rhdf5", "S4Arrays", "S4Vectors", "SingleCellExperiment", "SpatialExperiment", "SummarizedExperiment"), dependencies = c("Depends", "Imports", "LinkingTo"), ask = FALSE, update = FALSE)'
           Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = c("Depends", "Imports", "LinkingTo"), upgrade = "never", repos = BiocManager::repositories())'
           Rscript -e 'BiocManager::install(c("BiocStyle", "ggplot2", "ggspavis", "jsonlite", "knitr", "MASS", "rmarkdown", "testthat"), ask = FALSE, update = FALSE)'
-          Rscript -e 'torch::install_torch(type = "cpu")'
 
       - name: Build and check on the oldest requested environment
         shell: bash

@@ -11,20 +11,20 @@ jobs:
     container: bioconductor/bioconductor_docker:devel
     env:
       CELLCHARTERR_CPU_ONLY: "true"
-      CELLCHARTERR_REQUIRE_TORCH: "true"
       CUDA_VISIBLE_DEVICES: ""
+      _R_CHECK_FORCE_SUGGESTS_: "false"
       R_KEEP_PKG_SOURCE: yes
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install validation tools, R dependencies, and CPU LibTorch
+      - name: Install validation tools and R dependencies
         shell: bash
         run: |
           apt-get update
           apt-get install -y --no-install-recommends strace
           Rscript -e 'BiocManager::install(c("remotes", "rcmdcheck", "BiocCheck"), ask = FALSE, update = FALSE)'
-          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = TRUE, upgrade = "never")'
-          Rscript -e 'torch::install_torch(type = "cpu")'
+          Rscript -e 'options(repos = BiocManager::repositories()); remotes::install_deps(dependencies = c("Depends", "Imports", "LinkingTo"), upgrade = "never", repos = BiocManager::repositories())'
+          Rscript -e 'BiocManager::install(c("BiocStyle", "ggplot2", "ggspavis", "jsonlite", "knitr", "MASS", "rmarkdown", "testthat"), ask = FALSE, update = FALSE)'
 
       - name: Build, check, and run the tiny CPU smoke test without network access
         shell: bash

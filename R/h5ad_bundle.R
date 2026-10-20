@@ -685,27 +685,27 @@
     invisible(sample_id)
 }
 
-.transition_character_estimate <- function(file, path, n,
-                                           block_length = 100000L) {
+.transition_character_estimate <- function(
+        file, path, n,
+        bytes_per_value = getOption(
+            "CellCharterR.import.character_bytes_per_value", 256
+        )) {
     if (!n) return(0)
-    total <- 0
-    for (start in seq.int(1L, n, by = block_length)) {
-        index <- start:min(n, start + block_length - 1L)
-        value <- as.character(rhdf5::h5read(
-            file, sub("^/", "", path), index = list(index), drop = TRUE
-        ))
-        if (length(value) != length(index)) {
-            stop("AnnData string dataset `", path,
-                 "` has an unexpected length.", call. = FALSE)
-        }
-        # Deliberately count a distinct R string object for every element even
-        # though R may intern duplicates. This bounds pointer and CHARSXP/payload
-        # memory without assuming annotation cardinality or string length.
-        bytes <- nchar(value, type = "bytes", allowNA = TRUE, keepNA = TRUE)
-        bytes[is.na(bytes)] <- 2
-        total <- total + sum(64 + bytes)
+    if (!is.numeric(bytes_per_value) || length(bytes_per_value) != 1L ||
+        is.na(bytes_per_value) || !is.finite(bytes_per_value) ||
+        bytes_per_value < 1) {
+        stop(
+            "`CellCharterR.import.character_bytes_per_value` must be one positive finite number.",
+            call. = FALSE
+        )
     }
-    as.double(total)
+    # Do not sample variable-length HDF5 strings here. rhdf5/HDF5 can segfault
+    # when the same large vlen-string dataset is read through successive
+    # hyperslabs (observed with the 3.5-million-spot DeepSpot-M index). The
+    # actual reader performs one complete read later. This configurable
+    # allowance covers one CHARSXP/pointer plus 256 payload bytes per value by
+    # default, which is deliberately above ordinary spot IDs and annotations.
+    as.double(n) * (64 + as.double(bytes_per_value))
 }
 
 .transition_frame_estimate <- function(file, group, n, columns = NULL) {
