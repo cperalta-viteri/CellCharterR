@@ -235,23 +235,32 @@ These choices make peak memory depend on concurrency: in addition to the
 shared representation, each active fit owns one `N`-by-`K` double-precision
 posterior. Choose `workers` with both RAM and CPU bandwidth in mind.
 
-The full CPU qualification used the real mouse-spleen representation: 707,474
-spots by 40 features, candidate `K = 2..20`, `max_runs = 10`, and
-`convergence_tol = 0.01`. With 8 fit workers and 4 threads per fit, the
-optimized implementation converged after six AutoK rounds (126 fits) in
-889.675 seconds (14 minutes 49.675 seconds), selected K=10, and reached a peak
-process RSS of 3.596 GiB. The run was fresh, CPU-only, and used no intermediate
-checkpoints.
+The optimization history matters. On the full mouse-spleen representation, the
+original sequential R Torch GPU workflow took approximately four days, the
+first compiled multicore CPU implementation reduced the workflow to about 40
+minutes, and the current optimized C++ implementation reduced it again to about
+15 minutes:
 
-| Compiled-C++ implementation | Spatial spots | Features | Candidate K | AutoK rounds | Fits | Observed wall time |
-|---|---:|---:|---:|---:|---:|---:|
-| Pre-optimization baseline | 707,474 | 40 | 2..20 | 5 | 105 | 2300.1 s |
-| Optimized v1.3 qualification | 707,474 | 40 | 2..20 | 6 | 126 | **889.675 s** |
+| Development stage | Data and workload | Status | Wall time or runtime estimate |
+|---|---|---|---:|
+| Original sequential R Torch CUDA implementation | 707,474 mouse-spleen spots, 40 features, candidate `K = 2..20` | Historical GPU AutoK run | **approximately 4 d** |
+| First compiled multicore CPU implementation | 707,474 spots, 40 features, candidate `K = 2..20`, 5 rounds (105 fits) | Completed with 8 workers and 4 threads per fit | **38 min 20.1 s observed** |
+| Optimized compiled multicore CPU v1.3 | 707,474 spots, 40 features, candidate `K = 2..20`, 6 rounds (126 fits) | Completed with 8 workers and 4 threads per fit | **14 min 49.675 s observed** |
 
-The observed complete-workflow speedup is 2.585x even though the optimized run
-performed 20% more fits. Normalized per fit, throughput improved 3.102x
-(21.906 versus 7.061 seconds per fit). This is an observed workflow comparison,
-not an identical-numerics A/B: the older baseline used numerical ABI v1.0 and
+All three stages used the same full mouse-spleen input representation. The
+historical GPU and compiled CPU runs did not execute identical numbers of fits,
+so the progression is a workflow history rather than a controlled per-fit
+benchmark. The first compiled implementation took 2300.1 seconds (38 minutes
+20.1 seconds). The current qualification used the same 707,474 by 40
+representation, `max_runs = 10`, and `convergence_tol = 0.01`; it converged
+after six rounds (126 fits) in 889.675 seconds (14 minutes 49.675 seconds),
+selected K=10, and reached a peak process RSS of 3.596 GiB. It was a fresh,
+CPU-only run with no intermediate checkpoints.
+
+The complete-workflow speedup from the first compiled implementation to v1.3
+is 2.585x even though v1.3 performed 20% more fits. Normalized per fit,
+throughput improved 3.102x (21.906 versus 7.061 seconds per fit). This is not an
+identical-numerics A/B because the older baseline used numerical ABI v1.0 and
 converged one round earlier. Against the identical-output v1.1 qualification
 (918.096 seconds, 126 fits), v1.3 is 3.10% faster with identical selected labels
 and stability values. Timings are machine-specific and do not promise a
