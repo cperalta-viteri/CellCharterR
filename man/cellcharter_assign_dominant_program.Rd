@@ -45,7 +45,7 @@ provenance recorded under \code{metadata(sce)$CellCharterR$stages}.
 }
 \description{
 Standardizes every selected score program independently within each
-patient/block, or globally when code{block = NULL}, and assigns each spot to the
+patient/block, or globally when \code{block = NULL}, and assigns each spot to the
 program with the largest scaled score. Processing occurs one block at a time,
 so a disk-backed score matrix is never realized in full.
 }

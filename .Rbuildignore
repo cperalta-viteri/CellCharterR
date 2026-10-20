@@ -22,4 +22,8 @@
 ^inst/rmarkdown$
 ^inst/extdata/installed_dependency_manifest\.csv$
 ^CellCharterR_.*\.tar\.gz$
+^CellCharterR_.*\.tar\.gz\.sha256$
+^CPP_ACCELERATOR_STATUS\.md$
+^IMPLEMENTME\.md$
+^TASK\.md$
 ^transitionR($|/)

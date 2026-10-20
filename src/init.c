@@ -4,10 +4,12 @@
 
 extern SEXP C_cpp_gmm_fit(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP C_cpp_gmm_fit_many(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP C_cpp_aucell_score(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 
 static const R_CallMethodDef CallEntries[] = {
   {"C_cpp_gmm_fit", (DL_FUNC) &C_cpp_gmm_fit, 7},
   {"C_cpp_gmm_fit_many", (DL_FUNC) &C_cpp_gmm_fit_many, 9},
+  {"C_cpp_aucell_score", (DL_FUNC) &C_cpp_aucell_score, 7},
   {NULL, NULL, 0}
 };
 
