@@ -60,6 +60,22 @@
   .autok_representation_sha256(value)
 }
 
+.cc_zonation_block_values <- function(sce, block) {
+  if (is.null(block)) {
+    return(rep.int(".all", ncol(sce)))
+  }
+  if (!is.character(block) || length(block) != 1L || is.na(block) ||
+      !nzchar(block)) {
+    stop("`block` must be `NULL` or one non-empty colData column name.",
+         call. = FALSE)
+  }
+  values <- as.character(.cc_sce_coldata(sce, block, "block column"))
+  if (anyNA(values) || any(!nzchar(trimws(values)))) {
+    stop("`block` contains missing or blank values.", call. = FALSE)
+  }
+  values
+}
+
 .cc_zonation_positive_composition <- function(x, threshold) {
   x[x <= 0] <- 0
   totals <- rowSums(x)
@@ -102,15 +118,16 @@
 #' Assign a block-wise dominant program
 #'
 #' Standardizes every selected score program independently within each
-#' patient/block and assigns each spot to the program with the largest scaled
-#' score. Processing occurs one block at a time, so a disk-backed score matrix
-#' is never realized in full.
+#' patient/block, or globally when `block = NULL`, and assigns each spot to the
+#' program with the largest scaled score. Processing occurs one block at a time,
+#' so a disk-backed score matrix is never realized in full.
 #'
 #' @param sce A `SpatialExperiment` or compatible `SingleCellExperiment`.
 #' @param scores Name of an AUCell `altExp` (programs by spots) or `reducedDim`
 #'   (spots by programs).
 #' @param assay_name Assay used when `scores` identifies an `altExp`.
-#' @param block Patient/subject column in `colData(sce)`.
+#' @param block Optional patient/subject column in `colData(sce)`. `NULL`
+#'   treats the complete object as one block and performs global scaling.
 #' @param programs Programs allowed to compete for the assignment. `NULL` uses
 #'   every program in `scores`.
 #' @param output Name of the `colData` column receiving the assignment.
@@ -122,10 +139,10 @@
 #'   provenance recorded under `metadata(sce)$CellCharterR$stages`.
 #' @export
 cellcharter_assign_dominant_program <- function(
-    sce, scores = "AUCell", assay_name = "score", block,
+    sce, scores = "AUCell", assay_name = "score", block = NULL,
     programs = NULL, output = "dominant_program", require_positive = FALSE,
     overwrite = FALSE, progress = interactive()) {
-  block_values <- as.character(.cc_sce_coldata(sce, block, "block column"))
+  block_values <- .cc_zonation_block_values(sce, block)
   source <- .cc_zonation_scores(sce, scores, assay_name)
   if (is.null(programs)) programs <- source$programs
   if (!is.character(programs) || !length(programs) || anyNA(programs) ||
@@ -190,7 +207,8 @@ cellcharter_assign_dominant_program <- function(
 #'
 #' Adapts the equal-depth zonal enrichment mechanics used by Simkin et al. to
 #' ordered, mutually exclusive zones defined from AUCell programs. Scores are
-#' standardized separately within each patient/block. The strongest positive
+#' standardized separately within each patient/block, or globally when
+#' `block = NULL`. The strongest positive
 #' zone program assigns each spot; spots without a positive zone score remain
 #' unassigned. This analysis does not use spatial distance or a graph. Stored
 #' score, block, and parameter fingerprints prevent plotting stale results.
@@ -199,10 +217,13 @@ cellcharter_assign_dominant_program <- function(
 #' @param scores Name of an AUCell `altExp` (programs by spots) or legacy
 #'   `reducedDim` (spots by programs).
 #' @param assay_name Assay name used when `scores` identifies an `altExp`.
-#' @param block Mandatory patient/subject column in `colData(sce)`.
+#' @param block Optional patient/subject column in `colData(sce)`. `NULL`
+#'   treats the complete object as one block and supports descriptive plots,
+#'   but not block-level group inference.
 #' @param zone_programs Ordered programs defining mutually exclusive zones.
-#' @param composition_programs Programs competing in the within-spot
-#'   composition. `NULL` uses every available program.
+#' @param composition_programs Response programs quantified across the ordered
+#'   zones. They need not include `zone_programs`. `NULL` uses every available
+#'   program and treats non-zone programs as the default plotting responses.
 #' @param result_name Storage name under
 #'   `metadata(sce)$CellCharterR$results`.
 #' @param zone_col Optional `colData` column receiving spot-level zone labels.
@@ -216,13 +237,13 @@ cellcharter_assign_dominant_program <- function(
 #'   `metadata` and, when requested, spot-level zones in `colData`.
 #' @export
 cellcharter_zonation <- function(
-    sce, scores = "AUCell", assay_name = "score", block,
+    sce, scores = "AUCell", assay_name = "score", block = NULL,
     zone_programs = c("Pre-EMT", "Early-EMT", "Late-EMT"),
     composition_programs = NULL, result_name = "zonation",
     zone_col = "cellcharter_zone", min_spots_per_zone = 70L,
     sample_size = 200L, n_iterations = 100L, score_threshold = 0.1,
     seed = 5410L) {
-  block_values <- as.character(.cc_sce_coldata(sce, block, "block column"))
+  block_values <- .cc_zonation_block_values(sce, block)
   source <- .cc_zonation_scores(sce, scores, assay_name)
   if (!is.character(zone_programs) || length(zone_programs) < 2L ||
       anyNA(zone_programs) || any(!nzchar(zone_programs)) ||
@@ -235,16 +256,13 @@ cellcharter_zonation <- function(
          paste(setdiff(zone_programs, source$programs), collapse = ", "),
          call. = FALSE)
   }
-  if (is.null(composition_programs)) composition_programs <- source$programs
+  composition_was_default <- is.null(composition_programs)
+  if (composition_was_default) composition_programs <- source$programs
   if (!is.character(composition_programs) || !length(composition_programs) ||
       anyNA(composition_programs) || any(!nzchar(composition_programs)) ||
       anyDuplicated(composition_programs) ||
       !all(composition_programs %in% source$programs)) {
     stop("`composition_programs` must be unique names present in the AUCell source.",
-         call. = FALSE)
-  }
-  if (!all(zone_programs %in% composition_programs)) {
-    stop("`composition_programs` must include every `zone_programs` entry.",
          call. = FALSE)
   }
   integer_args <- list(min_spots_per_zone = min_spots_per_zone,
@@ -278,7 +296,8 @@ cellcharter_zonation <- function(
   for (block_index in seq_along(block_levels)) {
     current_block <- block_levels[[block_index]]
     rows <- which(block_values == current_block)
-    raw <- source$subset(rows, composition_programs)
+    analysis_programs <- unique(c(zone_programs, composition_programs))
+    raw <- source$subset(rows, analysis_programs)
     if (any(!is.finite(raw))) {
       stop("AUCell scores contain non-finite values in block `", current_block,
            "`.", call. = FALSE)
@@ -296,7 +315,9 @@ cellcharter_zonation <- function(
     assigned[rows] <- ifelse(is.na(zone_index), NA_character_,
                              zone_programs[zone_index])
 
-    composition <- .cc_zonation_positive_composition(scaled, score_threshold)
+    composition <- .cc_zonation_positive_composition(
+      scaled[, composition_programs, drop = FALSE], score_threshold
+    )
     zone_sizes <- vapply(seq_along(zone_programs), function(zone) {
       sum(zone_index == zone, na.rm = TRUE)
     }, integer(1))
@@ -347,12 +368,17 @@ cellcharter_zonation <- function(
     )
   }
   result <- list(
-    schema = "cellcharter_zonation_v1",
+    schema = "cellcharter_zonation_v2",
+    block_mode = if (is.null(block)) "pooled" else "blocked",
     block_results = do.call(rbind, output),
     zone_audit = do.call(rbind, zone_audit),
     zone_programs = zone_programs,
     composition_programs = composition_programs,
-    response_programs = setdiff(composition_programs, zone_programs),
+    response_programs = if (composition_was_default) {
+      setdiff(composition_programs, zone_programs)
+    } else {
+      composition_programs
+    },
     reference = list(
       method = "Simkin et al. authors-style equal-depth zonal enrichment adaptation",
       commit = "d53c7332270fb2f41a9ca14647ae390314f24ddd"
@@ -375,11 +401,12 @@ cellcharter_zonation <- function(
       n_iterations = as.integer(n_iterations),
       score_threshold = score_threshold, seed = as.integer(seed)
     ),
-    list(
+    c(list(
       scores = list(kind = "zonation_scores", scores = scores,
-                    assay_name = assay_name),
+                    assay_name = assay_name)
+    ), if (is.null(block)) list() else list(
       block = list(kind = "colData", name = block)
-    )
+    ))
   )
 }
 
@@ -390,7 +417,8 @@ cellcharter_zonation <- function(
   record <- .cc_sce_require_result(
     x, result_name, context = "Stored zonation result"
   )
-  if (!identical(record$value$schema, "cellcharter_zonation_v1")) {
+  if (!record$value$schema %in% c(
+      "cellcharter_zonation_v1", "cellcharter_zonation_v2")) {
     stop("SCE lacks stored zonation result `", result_name,
          "`; run `cellcharter_zonation()` first.", call. = FALSE)
   }
@@ -398,6 +426,15 @@ cellcharter_zonation <- function(
 }
 
 .cc_zonation_block_annotations <- function(sce, block_col, columns) {
+  if (is.null(block_col)) {
+    if (length(columns)) {
+      stop(
+        "Group or stratum comparisons require zonation computed with a `block` column.",
+        call. = FALSE
+      )
+    }
+    return(data.frame(block = ".all", stringsAsFactors = FALSE))
+  }
   block <- as.character(.cc_sce_coldata(sce, block_col, "stored block column"))
   answer <- data.frame(block = unique(block), stringsAsFactors = FALSE)
   for (column in columns) {
@@ -628,14 +665,22 @@ cellcharter_plot_zonation <- function(
     ggplot2::scale_colour_manual(values = colours[levels_used], drop = FALSE) +
     ggplot2::labs(
       x = "Ordered score-defined zone",
-      y = "Within-block program enrichment z-score",
+      y = if (is.null(parameters$block)) {
+        "Global program enrichment z-score"
+      } else {
+        "Within-block program enrichment z-score"
+      },
       colour = if (compare == "strata") stratify_by else if (!is.null(group)) group else NULL,
       title = title,
       subtitle = if (compare == "none") NULL else
         paste0(test_kind, "; ", p_adjust_method,
                " adjustment across all displayed program x zone tests"),
       caption = paste0(
-        "Authors-style equal-depth zonation; blocks are independent units. ",
+        if (is.null(parameters$block)) {
+          "Authors-style equal-depth zonation; all spots form one descriptive block. "
+        } else {
+          "Authors-style equal-depth zonation; blocks are independent units. "
+        },
         "Zones with <=", parameters$min_spots_per_zone, " spots were excluded."
       )
     ) +

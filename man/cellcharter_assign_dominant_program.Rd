@@ -8,7 +8,7 @@ cellcharter_assign_dominant_program(
   sce,
   scores = "AUCell",
   assay_name = "score",
-  block,
+  block = NULL,
   programs = NULL,
   output = "dominant_program",
   require_positive = FALSE,
@@ -24,7 +24,8 @@ cellcharter_assign_dominant_program(
 
 \item{assay_name}{Assay used when \code{scores} identifies an \code{altExp}.}
 
-\item{block}{Patient/subject column in \code{colData(sce)}.}
+\item{block}{Optional patient/subject column in \code{colData(sce)}. \code{NULL}
+treats the complete object as one block and performs global scaling.}
 
 \item{programs}{Programs allowed to compete for the assignment. \code{NULL} uses
 every program in \code{scores}.}
@@ -44,7 +45,7 @@ provenance recorded under \code{metadata(sce)$CellCharterR$stages}.
 }
 \description{
 Standardizes every selected score program independently within each
-patient/block and assigns each spot to the program with the largest scaled
-score. Processing occurs one block at a time, so a disk-backed score matrix
-is never realized in full.
+patient/block, or globally when code{block = NULL}, and assigns each spot to the
+program with the largest scaled score. Processing occurs one block at a time,
+so a disk-backed score matrix is never realized in full.
 }

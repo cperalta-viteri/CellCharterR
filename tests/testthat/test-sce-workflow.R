@@ -66,6 +66,48 @@ test_that("observation identity alignment distinguishes order and set mismatches
   expect_true(reordered$reordered)
 })
 
+test_that("SPE identity safely supports sample-local duplicated barcodes", {
+  spe <- SpatialExperiment::SpatialExperiment(
+    assays = list(counts = matrix(0, 1L, 4L)),
+    spatialCoords = cbind(x = 1:4, y = 0),
+    sample_id = c("A", "A", "B", "B")
+  )
+  colnames(spe) <- c("x", "y", "x", "y")
+  rownames(SpatialExperiment::spatialCoords(spe)) <- colnames(spe)
+  SingleCellExperiment::reducedDim(spe, "scores") <- matrix(1:8, 4L, 2L)
+
+  identity <- .cc_validate_sce_identity(spe)
+  expect_match(identity$cell_order_sha256, "^[0-9a-f]{64}$")
+
+  swapped <- spe[, c(3L, 2L, 1L, 4L)]
+  expect_false(identical(
+    identity$cell_order_sha256,
+    .cc_validate_sce_identity(swapped)$cell_order_sha256
+  ))
+
+  no_sample <- SingleCellExperiment::SingleCellExperiment(
+    assays = list(counts = matrix(0, 1L, 2L))
+  )
+  colnames(no_sample) <- c("x", "x")
+  expect_error(
+    .cc_validate_sce_identity(no_sample),
+    "add a non-missing `sample_id`"
+  )
+
+  repeated_within_sample <- SpatialExperiment::SpatialExperiment(
+    assays = list(counts = matrix(0, 1L, 4L)),
+    spatialCoords = cbind(x = 1:4, y = 0),
+    sample_id = c("A", "A", "A", "B")
+  )
+  colnames(repeated_within_sample) <- c("x", "y", "x", "y")
+  rownames(SpatialExperiment::spatialCoords(repeated_within_sample)) <-
+    colnames(repeated_within_sample)
+  expect_error(
+    .cc_validate_sce_identity(repeated_within_sample),
+    "sample-scoped cell identifiers"
+  )
+})
+
 test_that("sample-scoped CODEX identities allow only unambiguous local IDs", {
   skip_if_not_installed("rhdf5")
   raw <- tempfile(fileext = ".h5ad")

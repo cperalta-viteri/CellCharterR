@@ -53,16 +53,41 @@
   ids
 }
 
-.cc_observation_order_sha256 <- function(ids, context = "Observation identifiers") {
-  ids <- .cc_validate_observation_ids(ids, context)
+.cc_observation_order_sha256 <- function(
+    ids, context = "Observation identifiers", allow_duplicates = FALSE) {
+  ids <- .cc_validate_observation_ids(
+    ids, context, allow_duplicates = allow_duplicates
+  )
   digest::digest(ids, algo = "sha256")
 }
 
 .cc_align_observation_ids <- function(
     source_ids, target_ids, source_context = "Source observation identifiers",
-    target_context = "Target observation identifiers", allow_reorder = FALSE) {
-  source_ids <- .cc_validate_observation_ids(source_ids, source_context)
-  target_ids <- .cc_validate_observation_ids(target_ids, target_context)
+    target_context = "Target observation identifiers", allow_reorder = FALSE,
+    allow_duplicates = FALSE) {
+  source_ids <- .cc_validate_observation_ids(
+    source_ids, source_context, allow_duplicates = allow_duplicates
+  )
+  target_ids <- .cc_validate_observation_ids(
+    target_ids, target_context, allow_duplicates = allow_duplicates
+  )
+  if (identical(source_ids, target_ids)) {
+    return(list(index = seq_along(target_ids), reordered = FALSE))
+  }
+  if (allow_duplicates &&
+      (anyDuplicated(source_ids) || anyDuplicated(target_ids))) {
+    first <- if (length(source_ids) == length(target_ids)) {
+      which(source_ids != target_ids)[[1L]]
+    } else {
+      min(length(source_ids), length(target_ids)) + 1L
+    }
+    stop(
+      source_context, " and ", target_context,
+      " have an order mismatch at position ", first,
+      "; duplicated identifiers require exact positional agreement.",
+      call. = FALSE
+    )
+  }
   if (length(source_ids) != length(target_ids) ||
       !setequal(source_ids, target_ids)) {
     missing <- setdiff(target_ids, source_ids)
@@ -76,9 +101,6 @@
       if (length(detail)) paste0(" (", paste(detail, collapse = "; "), ")") else "",
       ".", call. = FALSE
     )
-  }
-  if (identical(source_ids, target_ids)) {
-    return(list(index = seq_along(target_ids), reordered = FALSE))
   }
   if (!isTRUE(allow_reorder)) {
     first <- which(source_ids != target_ids)[[1L]]
@@ -97,10 +119,34 @@
   if (!inherits(sce, "SingleCellExperiment")) {
     stop(context, " is not a SingleCellExperiment.", call. = FALSE)
   }
-  ids <- .cc_validate_observation_ids(colnames(sce), paste0(context, " cell identifiers"))
+  local_ids <- .cc_validate_observation_ids(
+    colnames(sce), paste0(context, " cell identifiers"),
+    allow_duplicates = TRUE
+  )
+  ids <- local_ids
+  if (anyDuplicated(local_ids)) {
+    col_data <- SummarizedExperiment::colData(sce)
+    if (!"sample_id" %in% colnames(col_data)) {
+      duplicate <- local_ids[duplicated(local_ids)][[1L]]
+      stop(
+        context, " contains duplicated local identifier `", duplicate,
+        "`; add a non-missing `sample_id` colData column or make the ",
+        "observation names globally unique.", call. = FALSE
+      )
+    }
+    sample_ids <- .cc_validate_observation_ids(
+      as.character(col_data$sample_id), paste0(context, " sample_id values"),
+      allow_duplicates = TRUE
+    )
+    ids <- .cc_validate_observation_ids(
+      paste(sample_ids, local_ids, sep = "\037"),
+      paste0(context, " sample-scoped cell identifiers")
+    )
+  }
   .cc_align_observation_ids(
-    rownames(SummarizedExperiment::colData(sce)), ids,
-    paste0(context, " colData row names"), paste0(context, " cell identifiers")
+    rownames(SummarizedExperiment::colData(sce)), local_ids,
+    paste0(context, " colData row names"), paste0(context, " cell identifiers"),
+    allow_duplicates = TRUE
   )
   if (is.null(reduced_dims)) reduced_dims <- SingleCellExperiment::reducedDimNames(sce)
   for (reduced_dim_name in reduced_dims) {
@@ -108,9 +154,9 @@
       stop(context, " lacks reduced dimension `", reduced_dim_name, "`.", call. = FALSE)
     }
     .cc_align_observation_ids(
-      rownames(SingleCellExperiment::reducedDim(sce, reduced_dim_name)), ids,
+      rownames(SingleCellExperiment::reducedDim(sce, reduced_dim_name)), local_ids,
       paste0(context, " `", reduced_dim_name, "` row names"),
-      paste0(context, " cell identifiers")
+      paste0(context, " cell identifiers"), allow_duplicates = TRUE
     )
   }
   if (inherits(sce, "SpatialExperiment")) {
@@ -120,9 +166,9 @@
       stop(context, " has invalid SpatialExperiment coordinates.", call. = FALSE)
     }
     .cc_align_observation_ids(
-      rownames(spatial), ids,
+      rownames(spatial), local_ids,
       paste0(context, " spatialCoords row names"),
-      paste0(context, " cell identifiers")
+      paste0(context, " cell identifiers"), allow_duplicates = TRUE
     )
   }
   order_sha256 <- .cc_observation_order_sha256(ids, paste0(context, " cell identifiers"))

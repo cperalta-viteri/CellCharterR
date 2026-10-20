@@ -14,7 +14,8 @@ make_zonation_spe <- function(use_alt_exp = FALSE) {
       risk = rep(rep(c("High", "Low"), each = 4L), each = 9L),
       site = rep(rep(c("AR", "BM"), 4L), each = 9L)
     ),
-    spatialCoords = cbind(seq_along(blocks), 0)
+    spatialCoords = cbind(seq_along(blocks), 0),
+    sample_id = blocks
   )
   colnames(spe) <- paste0("spot", seq_along(blocks))
   rownames(SpatialExperiment::spatialCoords(spe)) <- colnames(spe)
@@ -69,7 +70,8 @@ test_that("zonation is deterministic, block-aware, and stores audit data", {
   )
   expect_identical(.Random.seed, before)
   record <- S4Vectors::metadata(observed)$CellCharterR$results$zonation
-  expect_identical(record$value$schema, "cellcharter_zonation_v1")
+  expect_identical(record$value$schema, "cellcharter_zonation_v2")
+  expect_identical(record$value$block_mode, "blocked")
   expect_identical(record$value$response_programs, c("A", "B"))
   expect_equal(nrow(record$value$block_results), 8L * 5L * 3L)
   expect_true(all(record$value$zone_audit$retained))
@@ -83,6 +85,64 @@ test_that("zonation is deterministic, block-aware, and stores audit data", {
   expect_identical(
     S4Vectors::metadata(observed)$CellCharterR$results$zonation$value$block_results,
     S4Vectors::metadata(repeated)$CellCharterR$results$zonation$value$block_results
+  )
+})
+
+test_that("zone definitions and measured response programs are independent", {
+  observed <- cellcharter_zonation(
+    make_zonation_spe(), block = "patient",
+    zone_programs = c("Pre-EMT", "Early-EMT", "Late-EMT"),
+    composition_programs = c("A", "B"),
+    min_spots_per_zone = 2L, sample_size = 2L, n_iterations = 3L
+  )
+  result <- S4Vectors::metadata(observed)$CellCharterR$results$zonation$value
+  expect_identical(result$composition_programs, c("A", "B"))
+  expect_identical(result$response_programs, c("A", "B"))
+  expect_identical(unique(result$block_results$program), c("A", "B"))
+  expect_equal(nrow(result$block_results), 8L * 2L * 3L)
+})
+
+test_that("block is optional for pooled descriptive zonation", {
+  observed <- cellcharter_zonation(
+    make_zonation_spe(), block = NULL,
+    min_spots_per_zone = 2L, sample_size = 2L, n_iterations = 3L
+  )
+  record <- S4Vectors::metadata(observed)$CellCharterR$results$zonation
+  expect_null(record$parameters$block)
+  expect_identical(record$value$block_mode, "pooled")
+  expect_identical(unique(record$value$block_results$block), ".all")
+  expect_false("block" %in% names(record$input_fingerprints))
+
+  dominant <- cellcharter_assign_dominant_program(
+    make_zonation_spe(), block = NULL, programs = c("A", "B"),
+    progress = FALSE
+  )
+  expect_true("dominant_program" %in% colnames(SummarizedExperiment::colData(dominant)))
+
+  if (requireNamespace("ggplot2", quietly = TRUE)) {
+    expect_s3_class(
+      cellcharter_plot_zonation(observed, compare = "none"), "ggplot"
+    )
+    expect_error(
+      cellcharter_plot_zonation(observed, compare = "groups", group = "risk"),
+      "require zonation computed with a `block`"
+    )
+  }
+})
+
+test_that("zonation accepts sample-local Visium barcodes", {
+  spe <- make_zonation_spe()
+  colnames(spe) <- rep(paste0("barcode", 1:9), 8L)
+  rownames(SpatialExperiment::spatialCoords(spe)) <- colnames(spe)
+  expect_no_error(
+    observed <- cellcharter_zonation(
+      spe, block = "sample_id", composition_programs = c("A", "B"),
+      min_spots_per_zone = 2L, sample_size = 2L, n_iterations = 2L
+    )
+  )
+  expect_identical(
+    S4Vectors::metadata(observed)$CellCharterR$results$zonation$value$block_mode,
+    "blocked"
   )
 })
 

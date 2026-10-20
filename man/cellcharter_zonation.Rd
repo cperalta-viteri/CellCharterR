@@ -8,7 +8,7 @@ cellcharter_zonation(
   sce,
   scores = "AUCell",
   assay_name = "score",
-  block,
+  block = NULL,
   zone_programs = c("Pre-EMT", "Early-EMT", "Late-EMT"),
   composition_programs = NULL,
   result_name = "zonation",
@@ -28,12 +28,15 @@ cellcharter_zonation(
 
 \item{assay_name}{Assay name used when \code{scores} identifies an \code{altExp}.}
 
-\item{block}{Mandatory patient/subject column in \code{colData(sce)}.}
+\item{block}{Optional patient/subject column in \code{colData(sce)}. \code{NULL}
+treats the complete object as one block and supports descriptive plots,
+but not block-level group inference.}
 
 \item{zone_programs}{Ordered programs defining mutually exclusive zones.}
 
-\item{composition_programs}{Programs competing in the within-spot
-composition. \code{NULL} uses every available program.}
+\item{composition_programs}{Response programs quantified across the ordered
+zones. They need not include \code{zone_programs}. \code{NULL} uses every available
+program and treats non-zone programs as the default plotting responses.}
 
 \item{result_name}{Storage name under
 \code{metadata(sce)$CellCharterR$results}.}
@@ -58,7 +61,8 @@ The updated experiment with compact block-level results stored in
 \description{
 Adapts the equal-depth zonal enrichment mechanics used by Simkin et al. to
 ordered, mutually exclusive zones defined from AUCell programs. Scores are
-standardized separately within each patient/block. The strongest positive
+standardized separately within each patient/block, or globally when
+\code{block = NULL}. The strongest positive
 zone program assigns each spot; spots without a positive zone score remain
 unassigned. This analysis does not use spatial distance or a graph. Stored
 score, block, and parameter fingerprints prevent plotting stale results.
