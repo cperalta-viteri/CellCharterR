@@ -107,24 +107,22 @@ if (!requireNamespace("BiocManager", quietly = TRUE)) {
 # Make both Bioconductor and CRAN dependencies visible to the installer.
 options(repos = BiocManager::repositories())
 
-# R torch is distributed through CRAN, not Bioconductor.
-install.packages("torch")
-
-# Install the Linux CPU LibTorch runtime. Restart R if prompted.
-torch::install_torch(type = "cpu")
-
 if (!requireNamespace("remotes", quietly = TRUE)) {
   install.packages("remotes")
 }
 remotes::install_github(
   "cperalta-viteri/CellCharterR",
   build_vignettes = TRUE,
-  dependencies = TRUE
+  dependencies = NA
 )
 
 library(CellCharterR)
-torch_gmm_device("cpu")
 ```
+
+The compiled CPU backend, H5AD/SPE import, and downstream analyses do not need
+R Torch. The experimental Torch backend is optional; install it separately with
+`install.packages("torch")` only when you explicitly intend to use that backend.
+Loading a current or legacy SPE does not initialize Torch or download LibTorch.
 
 See [INSTALL](INSTALL) for the supported Linux CPU target and smoke test.
 

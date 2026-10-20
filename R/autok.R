@@ -785,6 +785,11 @@ cellcharter_autok_fit <- function(
   fit_fun <- fit_fun %||% .autok_default_fit
   predict_fun <- predict_fun %||% .autok_default_predict
   nll_fun <- nll_fun %||% .autok_default_nll
+  if (identical(backend, "torch") &&
+      (identical(fit_fun, .autok_default_fit) ||
+       identical(predict_fun, .autok_default_predict))) {
+    .cc_require_torch()
+  }
   if (!is.function(fit_fun) || !is.function(predict_fun) || !is.function(nll_fun)) {
     stop("`fit_fun`, `predict_fun`, and `nll_fun` must be functions.")
   }

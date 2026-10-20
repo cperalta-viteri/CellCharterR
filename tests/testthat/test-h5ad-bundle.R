@@ -265,6 +265,35 @@ test_that("H5AD import creates an independent movable SPE bundle", {
   expect_identical(SummarizedExperiment::assayNames(legacy_custom),
                    "legacy_expression")
 
+  # Loading a directory produced by the first public converter must be a pure
+  # Bioconductor/HDF5 operation. In particular, the optional Torch namespace
+  # must not be initialized (or attempt to download Lantern) as a side effect
+  # of loading CellCharterR or reconstructing the legacy SPE.
+  legacy_without_hash <- legacy_manifest
+  legacy_without_hash$arrays_sha256 <- NULL
+  legacy_without_hash$arrays_fingerprint <- NULL
+  saveRDS(legacy_without_hash, file.path(bundle, "manifest.rds"),
+          compress = FALSE)
+  child_script <- sprintf(
+    paste0(
+      "library(CellCharterR); ",
+      "stopifnot(!('torch' %%in%% loadedNamespaces())); ",
+      "x <- suppressWarnings(cellcharter_load_spe(%s, verify='none', progress=FALSE)); ",
+      "stopifnot(methods::validObject(x), identical(dim(x), c(3L, 5L)), ",
+      "!('torch' %%in%% loadedNamespaces()))"
+    ),
+    encodeString(bundle, quote = "\"")
+  )
+  child_output <- system2(
+    file.path(R.home("bin"), "Rscript"),
+    c("--vanilla", "-e", shQuote(child_script)),
+    stdout = TRUE, stderr = TRUE
+  )
+  expect_identical(attr(child_output, "status"), NULL,
+                   info = paste(child_output, collapse = "\n"))
+  saveRDS(legacy_manifest, file.path(bundle, "manifest.rds"),
+          compress = FALSE)
+
   future_manifest <- legacy_manifest
   future_manifest$format_version <- 99L
   saveRDS(future_manifest, file.path(bundle, "manifest.rds"), compress = FALSE)

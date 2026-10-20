@@ -1,5 +1,9 @@
 # CellCharterR 0.99.0
 
+- Made R Torch an optional experimental dependency. Loading CellCharterR or a
+  legacy disk-backed SPE now remains a pure Bioconductor/HDF5 operation and
+  cannot trigger a Lantern/LibTorch download; Torch entry points fail with an
+  actionable installation message when the optional package is absent.
 - Reorganized the public documentation around three workflows: a primary
   precomputed full mouse-spleen downstream tutorial, a large-H5AD disk-backed
   import tutorial, and the preserved experimental full R AutoK reproduction.

@@ -41,7 +41,6 @@ Imports:
     SpatialExperiment,
     stats,
     SummarizedExperiment,
-    torch,
     utils,
     withr
 LinkingTo:
@@ -54,10 +53,11 @@ Suggests:
     knitr,
     MASS,
     rmarkdown,
-    testthat (>= 3.0.0)
+    testthat (>= 3.0.0),
+    torch
 VignetteBuilder: knitr
 biocViews: Software, Spatial, SingleCell, Clustering, Proteomics
-SystemRequirements: C++17; LibTorch CPU runtime provided through the R torch package
+SystemRequirements: C++17
 NeedsCompilation: yes
 Config/testthat/edition: 3
 Roxygen: list(markdown = TRUE)

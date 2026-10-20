@@ -10,11 +10,26 @@
 #' cpu_device$type
 #' @export
 torch_gmm_device <- function(device = c("auto", "cuda", "cpu")) {
+  .cc_require_torch()
   device <- match.arg(device)
   cuda <- isTRUE(torch::cuda_is_available())
   if (device == "cuda" && !cuda) stop("CUDA was requested but is not available to R Torch.")
   if (device == "auto") device <- if (cuda) "cuda" else "cpu"
   torch::torch_device(device)
+}
+
+.cc_require_torch <- function() {
+  if (!requireNamespace("torch", quietly = TRUE)) {
+    stop(
+      paste0(
+        "The experimental Torch GMM backend requires the optional `torch` ",
+        "package. Install it with `install.packages(\"torch\")`, or use ",
+        "the CPU C++ backend with `backend = \"cpp\"`."
+      ),
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
 }
 
 .rc_reader <- function(x) {
@@ -523,6 +538,7 @@ torch_gmm_sample_rows <- function(x, n = 10000L, seed = 1L) {
 #' @export
 torch_gmm_runtime_info <- function(device = "auto", batch_size = 8192L,
                                    seed = 1L, num_threads = NULL) {
+  .cc_require_torch()
   batch_size <- .rc_positive_integer(batch_size, "batch_size")
   seed <- .rc_positive_integer(seed, "seed", allow_zero = TRUE)
   num_threads <- .rc_positive_integer(num_threads, "num_threads", allow_null = TRUE)
@@ -611,6 +627,7 @@ torch_gmm_fit <- function(x, n_clusters, batch_size = 8192L, max_iter = 100L,
                           device = "auto", seed = 1L, num_threads = NULL,
                           initialization_method = c("legacy", "torch"),
                           validate_input = TRUE, .oom_retries = 10L) {
+  .cc_require_torch()
   reader <- .rc_reader(x)
   k <- .rc_positive_integer(n_clusters, "n_clusters")
   if (k > reader$n) {
@@ -921,6 +938,7 @@ torch_gmm_fit <- function(x, n_clusters, batch_size = 8192L, max_iter = 100L,
 #' rowSums(probability)
 #' @export
 torch_gmm_predict_proba <- function(model, newdata, batch_size = 8192L, device = "auto") {
+  .cc_require_torch()
   stopifnot(inherits(model, "torch_gmm")); reader <- .rc_reader(newdata)
   batch_size <- .rc_positive_integer(batch_size, "batch_size")
   if (reader$p != model$n_features) stop("Feature dimensions do not match the fitted model.")
@@ -950,6 +968,7 @@ torch_gmm_predict_proba <- function(model, newdata, batch_size = 8192L, device =
 #' )
 #' @export
 torch_gmm_predict <- function(model, newdata, batch_size = 8192L, device = "auto") {
+  .cc_require_torch()
   stopifnot(inherits(model, "torch_gmm"))
   reader <- .rc_reader(newdata)
   batch_size <- .rc_positive_integer(batch_size, "batch_size")
@@ -987,6 +1006,7 @@ predict.torch_gmm <- function(object, newdata, ...) torch_gmm_predict(object, ne
 #' )
 #' @export
 torch_gmm_log_likelihood <- function(model, newdata, batch_size = 8192L, device = "auto") {
+  .cc_require_torch()
   stopifnot(inherits(model, "torch_gmm"))
   reader <- .rc_reader(newdata)
   batch_size <- .rc_positive_integer(batch_size, "batch_size")

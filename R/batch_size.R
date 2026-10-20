@@ -114,6 +114,7 @@ torch_gmm_autotune_batch_size <- function(
   resolved_device <- if (identical(requested_device, "cpu")) {
     "cpu"
   } else {
+    .cc_require_torch()
     torch_gmm_device(requested_device)$type
   }
   limit <- min(cap, if (is.null(n_obs)) cap else n_obs)
