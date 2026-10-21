@@ -43,7 +43,7 @@ jobs:
           export HTTPS_PROXY=http://127.0.0.1:9
           # R 4.6 can contact public clock services while checking future file
           # timestamps. Keep the local timestamp check, but disable that remote
-          # clock probe so the network-silence assertion measures package code.
+          # clock probe so the offline-execution assertion measures package code.
           export _R_CHECK_SYSTEM_CLOCK_=false
           strace -f -e trace=network -o network-build.trace R CMD build .
           strace -f -e trace=network -o network-check.trace R CMD check --no-manual CellCharterR_*.tar.gz
@@ -51,8 +51,15 @@ jobs:
           strace -f -e trace=network -o network-install.trace R CMD INSTALL --library=/tmp/CellCharterR-ci-library CellCharterR_*.tar.gz
           R_LIBS_USER=/tmp/CellCharterR-ci-library strace -f -e trace=network -o network-smoke.trace Rscript inst/scripts/ci-cpu-smoke.R cpu-smoke.rds
           R_LIBS_USER=/tmp/CellCharterR-ci-library Rscript -e 'invisible(suppressWarnings(lapply(c("HDF5Array", "SummarizedExperiment"), requireNamespace, quietly = TRUE))); library(CellCharterR); testthat::test_file("tests/testthat/test-analysis-bundle.R", package = "CellCharterR", reporter = "summary", stop_on_failure = TRUE, stop_on_warning = TRUE)'
-          if grep -E 'socket\(AF_INET6?|connect\([^,]+,.*(AF_INET6?|sin_port)' network-*.trace; then
-            echo 'Unexpected IPv4/IPv6 network activity occurred after dependency installation.' >&2
+          # The R CMD check process may try the deliberately unreachable proxy
+          # above. That traffic cannot leave the runner. Record every
+          # IPv4/IPv6 connect call, then reject any destination other than the
+          # exact loopback proxy configured by this job.
+          grep -hE 'connect\([^,]+,.*(AF_INET6?|sin_port)' network-*.trace > network-connects.trace || true
+          grep -Ev 'sa_family=AF_INET, sin_port=htons\(9\), sin_addr=inet_addr\("127\.0\.0\.1"\)' network-connects.trace > network-unexpected.trace || true
+          if test -s network-unexpected.trace; then
+            cat network-unexpected.trace >&2
+            echo 'Unexpected outbound IPv4/IPv6 connection occurred after dependency installation.' >&2
             exit 1
           fi
 
@@ -61,7 +68,7 @@ jobs:
         run: |
           Rscript -e 'BiocCheck::BiocCheck(Sys.glob("CellCharterR_*.tar.gz")[[1]], new.package = TRUE)'
 
-      - name: Retain CPU and network-silence evidence
+      - name: Retain CPU and offline-network evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
