@@ -20,7 +20,7 @@ cellcharter_autok_fit(
   data_id = NULL,
   resume = TRUE,
   cache_representation = c("none", "ram"),
-  backend = c("torch", "cpp"),
+  backend = NULL,
   workers = 1L,
   threads_per_fit = 1L,
   progress = TRUE,

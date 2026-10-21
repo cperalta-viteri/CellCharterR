@@ -87,9 +87,20 @@ test_that("monitored single-fit routing preserves fitted results and metadata", 
     num_threads = 2L
   )
 
-  for (field in names(expected)) {
+  # Wall-clock telemetry necessarily differs between two independent calls;
+  # compare every scientific/model field exactly and validate timings below.
+  timing_fields <- c("elapsed_seconds", "phase_elapsed_seconds")
+  for (field in setdiff(names(expected), timing_fields)) {
     expect_identical(observed[[field]], expected[[field]], info = field)
   }
+  expect_true(is.finite(expected$elapsed_seconds))
+  expect_gte(expected$elapsed_seconds, 0)
+  expect_true(is.finite(observed$elapsed_seconds))
+  expect_gte(observed$elapsed_seconds, 0)
+  expect_identical(names(observed$phase_elapsed_seconds),
+                   names(expected$phase_elapsed_seconds))
+  expect_true(all(is.finite(unlist(observed$phase_elapsed_seconds))))
+  expect_true(all(unlist(observed$phase_elapsed_seconds) >= 0))
   expect_identical(class(observed), c("cpp_gmm", "torch_gmm"))
   expect_identical(
     observed$runtime,

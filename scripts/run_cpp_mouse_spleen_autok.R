@@ -8,7 +8,7 @@
 #
 #   OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
 #   VECLIB_MAXIMUM_THREADS=1 GOTO_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-#   CODEX_AUTOK_WORKERS=8 CODEX_AUTOK_THREADS_PER_FIT=4 \
+#   CODEX_AUTOK_WORKERS=6 CODEX_AUTOK_THREADS_PER_FIT=2 \
 #   CODEX_CPP_RESULTS_DIR=results/CellCharterR_mouse_spleen_cpp_reproduction \
 #   Rscript scripts/run_cpp_mouse_spleen_autok.R
 #
@@ -83,9 +83,9 @@
 names(.thread_environment) <- .thread_environment_names
 .unsafe_thread_environment <- is.na(.thread_environment) | .thread_environment != "1"
 if (any(.unsafe_thread_environment)) {
-  warning(
+  stop(
     paste0(
-      "For a reproducible CPU benchmark, set these variables to 1 before R starts: ",
+      "Refusing to start an oversubscribed CPU benchmark. Set these variables to 1 before R starts: ",
       paste(.thread_environment_names[.unsafe_thread_environment], collapse = ", "),
       ". See the invocation at the top of this script."
     ),
@@ -128,7 +128,13 @@ input_path <- normalizePath(input_path, winslash = "/", mustWork = TRUE)
 if (!startsWith(paste0(input_path, "/"), paste0(repository_root, "/"))) {
   stop("CODEX_AGGREGATED_SPE must resolve inside this repository.", call. = FALSE)
 }
-output_dir <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
+# `normalizePath(..., mustWork = FALSE)` can leave a non-existent relative
+# path unchanged on Linux. Resolve the existing parent so the containment
+# check below also works for a fresh result directory.
+output_dir <- file.path(
+  normalizePath(dirname(output_dir), winslash = "/", mustWork = TRUE),
+  basename(output_dir)
+)
 if (identical(output_dir, results_root) ||
     !startsWith(paste0(output_dir, "/"), paste0(results_root, "/"))) {
   stop("CODEX_CPP_RESULTS_DIR must be a subdirectory of results/.", call. = FALSE)
@@ -148,8 +154,8 @@ max_runs <- 10L
 convergence_tol <- 0.01
 seed <- 0L
 backend <- "cpp"
-workers <- .env_positive_integer("CODEX_AUTOK_WORKERS", 8L)
-threads_per_fit <- .env_positive_integer("CODEX_AUTOK_THREADS_PER_FIT", 4L)
+workers <- .env_positive_integer("CODEX_AUTOK_WORKERS", 6L)
+threads_per_fit <- .env_positive_integer("CODEX_AUTOK_THREADS_PER_FIT", 2L)
 if (workers > 32L || threads_per_fit > 32L ||
     as.double(workers) * as.double(threads_per_fit) > 32) {
   stop(
@@ -185,8 +191,18 @@ if (file.exists(manifest_path)) {
 }
 
 spe <- readRDS(input_path)
+if (!inherits(spe, "SingleCellExperiment")) {
+  stop("The input must be a SpatialExperiment or a legacy SingleCellExperiment checkpoint.",
+       call. = FALSE)
+}
 if (!inherits(spe, "SpatialExperiment")) {
-  stop("The input must be a SpatialExperiment.", call. = FALSE)
+  warning(
+    paste0(
+      "Using the preserved legacy SingleCellExperiment mouse checkpoint; ",
+      "the fixed X_cellcharter representation is unchanged. New imports should use SpatialExperiment."
+    ),
+    call. = FALSE
+  )
 }
 if (!"X_cellcharter" %in% SingleCellExperiment::reducedDimNames(spe)) {
   stop("The input lacks reducedDim(spe, 'X_cellcharter').", call. = FALSE)
@@ -257,7 +273,7 @@ autok_finished <- Sys.time()
 autok_elapsed <- as.numeric(difftime(autok_finished, autok_started, units = "secs"))
 
 if (!identical(autok$backend, backend) ||
-    !identical(as.integer(autok$requested_k), c(2L, 20L)) ||
+    !identical(as.integer(autok$requested_k), 2L:20L) ||
     !identical(as.integer(autok$max_runs), max_runs) ||
     !identical(as.numeric(autok$convergence_tol), convergence_tol) ||
     !identical(as.integer(autok$seed), seed)) {

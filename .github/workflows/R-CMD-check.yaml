@@ -14,6 +14,12 @@ jobs:
       CUDA_VISIBLE_DEVICES: ""
       _R_CHECK_FORCE_SUGGESTS_: "false"
       R_KEEP_PKG_SOURCE: yes
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      BLIS_NUM_THREADS: "1"
+      VECLIB_MAXIMUM_THREADS: "1"
+      GOTO_NUM_THREADS: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +41,10 @@ jobs:
           export https_proxy=http://127.0.0.1:9
           export HTTP_PROXY=http://127.0.0.1:9
           export HTTPS_PROXY=http://127.0.0.1:9
+          # R 4.6 can contact public clock services while checking future file
+          # timestamps. Keep the local timestamp check, but disable that remote
+          # clock probe so the network-silence assertion measures package code.
+          export _R_CHECK_SYSTEM_CLOCK_=false
           strace -f -e trace=network -o network-build.trace R CMD build .
           strace -f -e trace=network -o network-check.trace R CMD check --no-manual CellCharterR_*.tar.gz
           mkdir /tmp/CellCharterR-ci-library

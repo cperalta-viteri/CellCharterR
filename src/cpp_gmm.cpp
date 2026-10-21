@@ -69,6 +69,13 @@ struct Fit {
   std::vector<int> initialization_collapsed;
   int early_wait = 0;
   double early_best = std::numeric_limits<double>::infinity();
+  // Diagnostic wall times never participate in numerical decisions.
+  double kmeans_seeding_seconds = 0.0;
+  double lloyd_seconds = 0.0;
+  double initialization_covariance_seconds = 0.0;
+  double expectation_seconds = 0.0;
+  double covariance_seconds = 0.0;
+  double final_scoring_seconds = 0.0;
 };
 
 struct ThreadJoiner {
@@ -119,6 +126,10 @@ std::vector<std::vector<double> > factors(const Fit& f) {
 }
 
 struct ScoringCache {
+  // Column-major lower-triangular precision-Cholesky factors.  The rest of
+  // the native engine stores observation rows contiguously; a row block is
+  // therefore also a column-major p-by-n matrix and can be transformed in
+  // place with DTRMM without another layout conversion.
   std::vector<std::vector<double> > precision_lower;
   std::vector<double> log_weights;
   std::vector<double> gaussian_bases;
@@ -152,40 +163,130 @@ ScoringCache make_scoring_cache(const Fit& f) {
     // PyCave likewise precomputes a precision-Cholesky factor. This removes
     // the dependent triangular solve and scalar divisions from every
     // observation/component score while retaining the same quadratic form.
-    out.precision_lower[c]=invert_lower(chol[c],f.p);
+    const std::vector<double> precision_row_major=
+      invert_lower(chol[c],f.p);
+    out.precision_lower[c].assign(static_cast<size_t>(f.p)*f.p,0.0);
+    for(int row=0;row<f.p;++row) for(int column=0;column<=row;++column)
+      out.precision_lower[c][static_cast<size_t>(row)+
+        static_cast<size_t>(column)*f.p]=
+        precision_row_major[static_cast<size_t>(row)*f.p+column];
     out.log_weights[c]=std::log(f.weights[c]);
     out.gaussian_bases[c]=gaussian_constant+2.0*logdet;
   }
   return out;
 }
 
-double responsibilities(const Data& d, int row, const Fit& f,
-                        const ScoringCache& cache,
-                        std::vector<double>& values,
-                        std::vector<double>& solved) {
-  const double* observation=&d.centered[static_cast<size_t>(row)*f.p];
-  double maximum=-std::numeric_limits<double>::infinity();
-  for(int c=0;c<f.k;++c) {
-    double quad=0.0;
-    for(int j=0;j<f.p;++j)
-      solved[j]=observation[j]-f.means[static_cast<size_t>(c)*f.p+j];
-    for(int j=0;j<f.p;++j) {
-      double transformed=0.0;
-      for(int q=0;q<=j;++q)
-        transformed+=atc(cache.precision_lower[c],f.p,j,q)*solved[q];
-      quad+=transformed*transformed;
+// Score one deterministic row shard in bounded blocks.  With BLAS configured
+// for one thread, native fit threads remain the sole source of parallelism.
+// The posterior normalization, likelihood reduction, and sufficient-statistic
+// accumulation retain their original observation and component order.
+void score_rows(const Data& d, int begin, int end, const Fit& f,
+                const ScoringCache& cache,
+                std::vector<double>* posterior,
+                std::vector<double>* local_nk,
+                std::vector<double>* local_sums,
+                std::vector<int>* labels,
+                double& log_likelihood,
+                const std::atomic<bool>* cancelled) {
+  const int block_rows=4096;
+  std::vector<double> transformed(
+    static_cast<size_t>(std::min(block_rows,end-begin))*f.p);
+  std::vector<double> scores(
+    static_cast<size_t>(std::min(block_rows,end-begin))*f.k);
+  const char side='L',uplo='L',transa='N',diag='N';
+  const double alpha=1.0;
+  for(int block_begin=begin;block_begin<end;block_begin+=block_rows) {
+    cancellation_point(cancelled);
+    const int rows=std::min(block_rows,end-block_begin);
+    for(int c=0;c<f.k;++c) {
+      const double* component_mean=&f.means[static_cast<size_t>(c)*f.p];
+      for(int i=0;i<rows;++i) {
+        const double* observation=&d.centered[
+          static_cast<size_t>(block_begin+i)*f.p];
+        double* destination=&transformed[static_cast<size_t>(i)*f.p];
+        for(int j=0;j<f.p;++j)
+          destination[j]=observation[j]-component_mean[j];
+      }
+      // `transformed` is row-major rows-by-p, which is the same memory layout
+      // as a column-major p-by-rows matrix. Apply L^{-1} to every residual.
+      F77_CALL(dtrmm)(&side,&uplo,&transa,&diag,&f.p,&rows,&alpha,
+                      cache.precision_lower[c].data(),&f.p,
+                      transformed.data(),&f.p
+                      FCONE FCONE FCONE FCONE);
+      for(int i=0;i<rows;++i) {
+        const double* value=&transformed[static_cast<size_t>(i)*f.p];
+        double quadratic=0.0;
+        for(int j=0;j<f.p;++j) quadratic+=value[j]*value[j];
+        scores[static_cast<size_t>(i)*f.k+c]=cache.log_weights[c]-
+          0.5*(cache.gaussian_bases[c]+quadratic);
+      }
     }
-    values[c]=cache.log_weights[c]-0.5*(cache.gaussian_bases[c]+quad);
-    maximum=std::max(maximum,values[c]);
+    for(int i=0;i<rows;++i) {
+      double* values=&scores[static_cast<size_t>(i)*f.k];
+      double maximum=-std::numeric_limits<double>::infinity();
+      for(int c=0;c<f.k;++c) maximum=std::max(maximum,values[c]);
+      double total=0.0;
+      for(int c=0;c<f.k;++c) {
+        values[c]=std::exp(values[c]-maximum);
+        total+=values[c];
+      }
+      log_likelihood+=maximum+std::log(total);
+      int best=0;
+      for(int c=0;c<f.k;++c) {
+        values[c]/=total;
+        if(values[c]>values[best]) best=c;
+      }
+      const int row=block_begin+i;
+      if(labels != nullptr) (*labels)[row]=best;
+      if(posterior != nullptr) {
+        for(int c=0;c<f.k;++c) {
+          (*posterior)[static_cast<size_t>(row)*f.k+c]=values[c];
+          (*local_nk)[c]+=values[c];
+        }
+        const double* observation=&d.centered[static_cast<size_t>(row)*f.p];
+        for(int feature=0;feature<f.p;++feature) {
+          double* feature_sum=&(*local_sums)[static_cast<size_t>(feature)*f.k];
+          const double x=observation[feature];
+          for(int c=0;c<f.k;++c) feature_sum[c]+=values[c]*x;
+        }
+      }
+    }
   }
-  double total = 0.0;
-  for (int c=0;c<f.k;++c) {
-    values[c]=std::exp(values[c]-maximum);
-    total+=values[c];
-  }
-  const double log_norm = maximum + std::log(total);
-  for (int c=0;c<f.k;++c) values[c]/=total;
-  return log_norm;
+}
+
+void nearest_assignments(const Data& d, const std::vector<double>& means,
+                         int k, int threads, std::vector<int>& assignments,
+                         const std::atomic<bool>* cancelled) {
+  const int nt=std::max(1,std::min(threads,d.n));
+  std::vector<std::thread> pool;
+  std::vector<std::exception_ptr> errors(nt);
+  pool.reserve(nt);
+  ThreadJoiner joiner{pool};
+  for(int t=0;t<nt;++t) pool.emplace_back([&,t](){
+    try {
+      const int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt);
+      const int end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt);
+      for(int i=begin;i<end;++i) {
+        if((i&1023)==0) cancellation_point(cancelled);
+        int best=0;
+        double best_distance=std::numeric_limits<double>::infinity();
+        for(int c=0;c<k;++c) {
+          double value=0.0;
+          for(int j=0;j<d.p;++j) {
+            const double delta=d.x[static_cast<size_t>(i)*d.p+j]-
+              means[static_cast<size_t>(c)*d.p+j];
+            value+=delta*delta;
+          }
+          // Strict comparison deliberately preserves first-component tie
+          // resolution from the serial implementation.
+          if(value<best_distance) { best_distance=value; best=c; }
+        }
+        assignments[i]=best;
+      }
+    } catch(...) { errors[t]=std::current_exception(); }
+  });
+  for(auto& thread:pool) if(thread.joinable()) thread.join();
+  for(const auto& error:errors) if(error) std::rethrow_exception(error);
 }
 
 // std::uniform_*_distribution is permitted to map an engine's bits
@@ -204,8 +305,24 @@ double unit_random(std::mt19937_64& rng) {
   return static_cast<double>(rng() >> 11) * (1.0 / 9007199254740992.0);
 }
 
-std::vector<double> kmeans_pp(const Data& d, int k, uint64_t seed,
+int covariance_block_rows(int features) {
+  // Keep each thread's residual workspace near 1 MiB. The former fixed
+  // 16,384-row block occupied 5 MiB at P=40 and 15 MiB at P=120, so several
+  // concurrent fits displaced one another from the shared last-level cache.
+  // Bounds retain efficient BLAS calls for both very small and large P; the
+  // 256-row alignment makes the choice stable and easy to audit.
+  const size_t target_bytes=static_cast<size_t>(1)*1024*1024;
+  int rows=static_cast<int>(target_bytes/
+    (sizeof(double)*static_cast<size_t>(features)));
+  rows=std::max(1024,std::min(8192,rows));
+  return std::max(1024,(rows/256)*256);
+}
+
+std::vector<double> kmeans_pp(const Data& d, int k, uint64_t seed, int threads,
+                              double* seeding_seconds,
+                              double* lloyd_seconds,
                               const std::atomic<bool>* cancelled = nullptr) {
+  const auto seeding_started=std::chrono::steady_clock::now();
   std::mt19937_64 rng(seed); // private RNG: does not consume or mutate R's RNG.
   std::vector<double> means(static_cast<size_t>(k) * d.p);
   const int first = static_cast<int>(bounded_random(rng, static_cast<uint64_t>(d.n)));
@@ -231,30 +348,97 @@ std::vector<double> kmeans_pp(const Data& d, int k, uint64_t seed,
     std::copy_n(&d.x[static_cast<size_t>(selected) * d.p], d.p,
                 means.begin() + static_cast<size_t>(c) * d.p);
   }
+  if(seeding_seconds != nullptr)
+    *seeding_seconds=std::chrono::duration<double>(
+      std::chrono::steady_clock::now()-seeding_started).count();
   // Complete the initializer with deterministic Lloyd passes. The final hard
   // assignments are summarized again below rather than treated as soft EM.
+  const auto lloyd_started=std::chrono::steady_clock::now();
   std::vector<int> assignment(d.n, 0);
+  std::vector<int> next_assignment(d.n,0);
   for (int iteration = 0; iteration < 30; ++iteration) {
     cancellation_point(cancelled);
     std::vector<double> sums(static_cast<size_t>(k) * d.p, 0.0), counts(k, 0.0);
     bool changed = false;
+    nearest_assignments(d,means,k,threads,next_assignment,cancelled);
     for (int i = 0; i < d.n; ++i) {
       if ((i & 1023) == 0) cancellation_point(cancelled);
-      int best = 0; double best_distance = std::numeric_limits<double>::infinity();
-      for (int c = 0; c < k; ++c) {
-        double value = 0.0; for (int j = 0; j < d.p; ++j) {
-          double z = d.x[static_cast<size_t>(i)*d.p+j] - means[static_cast<size_t>(c)*d.p+j]; value += z*z;
-        }
-        if (value < best_distance) { best_distance = value; best = c; }
-      }
-      changed = changed || iteration == 0 || assignment[i] != best; assignment[i] = best; counts[best] += 1.0;
+      const int best=next_assignment[i];
+      changed = changed || iteration == 0 || assignment[i] != best;
+      assignment[i] = best; counts[best] += 1.0;
       for (int j = 0; j < d.p; ++j) sums[static_cast<size_t>(best)*d.p+j] += d.x[static_cast<size_t>(i)*d.p+j];
     }
     for (int c = 0; c < k; ++c) if (counts[c] > 0.0) for (int j = 0; j < d.p; ++j)
       means[static_cast<size_t>(c)*d.p+j] = sums[static_cast<size_t>(c)*d.p+j] / counts[c];
     if (!changed) break;
   }
+  if(lloyd_seconds != nullptr)
+    *lloyd_seconds=std::chrono::duration<double>(
+      std::chrono::steady_clock::now()-lloyd_started).count();
   return means;
+}
+
+std::vector<double> covariance_from_hard(
+    const Data& d, int k, const std::vector<int>& hard,
+    const std::vector<double>& counts, const std::vector<double>& means,
+    int threads, const std::atomic<bool>* cancelled) {
+  std::vector<double> output(static_cast<size_t>(k)*d.p*d.p,0.0);
+  std::atomic<int> next_component(0);
+  const int nt=std::max(1,std::min(threads,k));
+  const int block_rows=covariance_block_rows(d.p);
+  std::vector<std::thread> pool;
+  std::vector<std::exception_ptr> errors(nt);
+  pool.reserve(nt);
+  ThreadJoiner joiner{pool};
+  for(int t=0;t<nt;++t) pool.emplace_back([&,t](){
+    try {
+      std::vector<double> residuals(static_cast<size_t>(block_rows)*d.p);
+      std::vector<double> cross(static_cast<size_t>(d.p)*d.p);
+      for(;;) {
+        const int c=next_component.fetch_add(1);
+        if(c>=k) break;
+        cancellation_point(cancelled);
+        double* target=&output[static_cast<size_t>(c)*d.p*d.p];
+        if(counts[c]<1e-6) {
+          for(int j=0;j<d.p;++j) target[static_cast<size_t>(j)*d.p+j]=1.0;
+          continue;
+        }
+        std::fill(cross.begin(),cross.end(),0.0);
+        int buffered=0;
+        bool first=true;
+        const double* component_mean=&means[static_cast<size_t>(c)*d.p];
+        auto flush=[&](){
+          if(buffered==0) return;
+          const char uplo='L',trans='N';
+          const double alpha=1.0,beta=first ? 0.0 : 1.0;
+          F77_CALL(dsyrk)(&uplo,&trans,&d.p,&buffered,&alpha,
+                          residuals.data(),&d.p,&beta,cross.data(),&d.p
+                          FCONE FCONE);
+          first=false;
+          buffered=0;
+        };
+        for(int i=0;i<d.n;++i) {
+          if((i&1023)==0) cancellation_point(cancelled);
+          if(hard[i]!=c) continue;
+          const double* observation=&d.x[static_cast<size_t>(i)*d.p];
+          double* destination=&residuals[static_cast<size_t>(buffered)*d.p];
+          for(int j=0;j<d.p;++j)
+            destination[j]=observation[j]-component_mean[j];
+          if(++buffered==block_rows) flush();
+        }
+        flush();
+        for(int row=0;row<d.p;++row) for(int column=0;column<=row;++column) {
+          const double value=cross[static_cast<size_t>(row)+
+            static_cast<size_t>(column)*d.p]/counts[c];
+          target[static_cast<size_t>(row)*d.p+column]=value;
+          target[static_cast<size_t>(column)*d.p+row]=value;
+        }
+      }
+    } catch(...) { errors[t]=std::current_exception(); }
+  });
+  for(auto& thread:pool) if(thread.joinable()) thread.join();
+  for(const auto& error:errors) if(error) std::rethrow_exception(error);
+  return output;
 }
 
 std::vector<double> covariance_from_posterior(
@@ -265,7 +449,7 @@ std::vector<double> covariance_from_posterior(
   std::vector<double> output(static_cast<size_t>(k)*d.p*d.p,0.0);
   std::atomic<int> next_component(0);
   const int nt=std::max(1,std::min(threads,k));
-  const int block_rows=16384;
+  const int block_rows=covariance_block_rows(d.p);
   std::vector<std::thread> pool;
   std::vector<std::exception_ptr> errors(nt);
   pool.reserve(nt);
@@ -332,17 +516,17 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
   f.tolerance = tolerance;
   f.center = d.center;
   const double collapse_threshold = 1e-6;
-  std::vector<double> centers = kmeans_pp(d, k, seed, cancelled);
+  std::vector<double> centers = kmeans_pp(
+    d,k,seed,threads_per_fit,&f.kmeans_seeding_seconds,&f.lloyd_seconds,
+    cancelled);
   f.means.assign(static_cast<size_t>(k) * d.p, 0.0); f.weights.assign(k, 0.0);
   f.covs.assign(static_cast<size_t>(k) * d.p * d.p, 0.0);
   std::vector<int> hard(d.n, 0); f.initialization_counts.assign(k, 0.0);
+  nearest_assignments(d,centers,k,threads_per_fit,hard,cancelled);
   for (int i = 0; i < d.n; ++i) {
     if ((i & 1023) == 0) cancellation_point(cancelled);
-    double best_distance = std::numeric_limits<double>::infinity(); int best = 0;
-    for (int c = 0; c < k; ++c) { double value=0.0; for(int j=0;j<d.p;++j) {
-      double z=d.x[static_cast<size_t>(i)*d.p+j]-centers[static_cast<size_t>(c)*d.p+j]; value+=z*z; }
-      if(value<best_distance){best_distance=value;best=c;} }
-    hard[i]=best; f.initialization_counts[best] += 1.0;
+    const int best=hard[i];
+    f.initialization_counts[best] += 1.0;
     for(int j=0;j<d.p;++j) f.means[static_cast<size_t>(best)*d.p+j] += d.x[static_cast<size_t>(i)*d.p+j];
   }
   for(int c=0;c<k;++c) {
@@ -354,18 +538,12 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
     f.weights[c]=std::max(f.initialization_counts[c],collapse_threshold);
   }
   double initial_total=std::accumulate(f.weights.begin(),f.weights.end(),0.0); for(double& w:f.weights) w/=initial_total;
-  // Center before multiplying: this is stable for large coordinate offsets.
-  for(int i=0;i<d.n;++i) { int c=hard[i]; if(f.initialization_counts[c]<collapse_threshold) continue;
-    if ((i & 1023) == 0) cancellation_point(cancelled);
-    for(int a=0;a<d.p;++a) for(int b=0;b<=a;++b) f.covs[(static_cast<size_t>(c)*d.p+a)*d.p+b] +=
-      (d.x[static_cast<size_t>(i)*d.p+a]-f.means[static_cast<size_t>(c)*d.p+a]) *
-      (d.x[static_cast<size_t>(i)*d.p+b]-f.means[static_cast<size_t>(c)*d.p+b]); }
-  for(int c=0;c<k;++c) for(int a=0;a<d.p;++a) for(int b=0;b<=a;++b) {
-    double value = f.initialization_counts[c] < collapse_threshold ? (a==b ? 1.0 : 0.0) :
-      f.covs[(static_cast<size_t>(c)*d.p+a)*d.p+b]/f.initialization_counts[c];
-    f.covs[(static_cast<size_t>(c)*d.p+a)*d.p+b]=value;
-    f.covs[(static_cast<size_t>(c)*d.p+b)*d.p+a]=value;
-  }
+  const auto initialization_covariance_started=
+    std::chrono::steady_clock::now();
+  f.covs=covariance_from_hard(d,k,hard,f.initialization_counts,f.means,
+                              threads_per_fit,cancelled);
+  f.initialization_covariance_seconds=std::chrono::duration<double>(
+    std::chrono::steady_clock::now()-initialization_covariance_started).count();
   // Initialization above deliberately follows the established unshifted
   // arithmetic. EM then proceeds in a shared centered coordinate system.
   for(int c=0;c<k;++c) for(int j=0;j<d.p;++j)
@@ -376,6 +554,7 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
   const int nt = std::max(1, std::min(threads_per_fit, d.n));
   for (int iteration = 0; iteration < max_iter; ++iteration) {
     cancellation_point(cancelled);
+    const auto expectation_started=std::chrono::steady_clock::now();
     const ScoringCache scoring_cache=make_scoring_cache(f);
     std::fill(nk.begin(), nk.end(), 0.0); std::fill(sums.begin(), sums.end(), 0.0);
     double ll = 0.0;
@@ -392,22 +571,8 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
     for(int t=0;t<nt;++t) pass1.emplace_back([&,t](){
       try {
         int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt);
-        std::vector<double> lr(k),solved(d.p);
-        for(int i=begin;i<end;++i){
-          if ((i & 1023) == 0) cancellation_point(cancelled);
-          local_ll[t]+=responsibilities(
-            d,i,f,scoring_cache,lr,solved);
-          for(int c=0;c<k;++c) {
-            posterior[static_cast<size_t>(i)*k+c]=lr[c];
-            local_nk[t][c]+=lr[c];
-          }
-          const double* row=&d.centered[static_cast<size_t>(i)*d.p];
-          for(int a=0;a<d.p;++a) {
-            double* feature_sum=&local_sums[t][static_cast<size_t>(a)*k];
-            const double xa=row[a];
-            for(int c=0;c<k;++c) feature_sum[c]+=lr[c]*xa;
-          }
-        }
+        score_rows(d,begin,end,f,scoring_cache,&posterior,&local_nk[t],
+                   &local_sums[t],nullptr,local_ll[t],cancelled);
       } catch(...) { pass1_errors[t]=std::current_exception(); }
     });
     for(auto& thread:pass1) if(thread.joinable()) thread.join();
@@ -435,13 +600,19 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
     }
     double weight_sum = std::accumulate(new_weights.begin(), new_weights.end(), 0.0);
     for (double& w : new_weights) w /= weight_sum;
+    f.expectation_seconds+=std::chrono::duration<double>(
+      std::chrono::steady_clock::now()-expectation_started).count();
+    const auto covariance_started=std::chrono::steady_clock::now();
     std::vector<double> new_covs=covariance_from_posterior(
       d,k,posterior,nk,new_means,collapsed,nt,cancelled);
+    f.covariance_seconds+=std::chrono::duration<double>(
+      std::chrono::steady_clock::now()-covariance_started).count();
     f.means.swap(new_means); f.weights.swap(new_weights); f.covs.swap(new_covs);
     f.iterations = iteration + 1; f.history.push_back(-ll / d.n);
     if (f.history.back() < best - tolerance) { best = f.history.back(); wait = 0; }
     else if (++wait >= 2) { f.converged = true; break; }
   }
+  const auto final_scoring_started=std::chrono::steady_clock::now();
   const auto scoring_cache=make_scoring_cache(f);
   double ll = 0.0;
   cancellation_point(cancelled);
@@ -451,18 +622,17 @@ Fit fit_once(const Data& d, int k, uint64_t seed, int max_iter,
   scoring.reserve(nt); ThreadJoiner scoring_joiner{scoring};
   for(int t=0;t<nt;++t) scoring.emplace_back([&,t](){
     try {
-      int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt), end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt); std::vector<double> lr(k),solved(d.p);
-      for(int i=begin;i<end;++i){
-        if ((i & 1023) == 0) cancellation_point(cancelled);
-        final_ll[t]+=responsibilities(
-          d,i,f,scoring_cache,lr,solved);
-        f.labels[i]=static_cast<int>(
-          std::max_element(lr.begin(),lr.end())-lr.begin()); }
+      const int begin=static_cast<int>((static_cast<int64_t>(d.n)*t)/nt);
+      const int end=static_cast<int>((static_cast<int64_t>(d.n)*(t+1))/nt);
+      score_rows(d,begin,end,f,scoring_cache,nullptr,nullptr,nullptr,&f.labels,
+                 final_ll[t],cancelled);
     } catch(...) { scoring_errors[t]=std::current_exception(); }
   });
   for(auto& thread:scoring) if(thread.joinable()) thread.join();
   for(const auto& error:scoring_errors) if(error) std::rethrow_exception(error);
   for(int t=0;t<nt;++t) ll+=final_ll[t];
+  f.final_scoring_seconds=std::chrono::duration<double>(
+    std::chrono::steady_clock::now()-final_scoring_started).count();
   f.nll = -ll / d.n;
   f.early_wait = wait; f.early_best = best;
   return f;
@@ -502,7 +672,8 @@ Data import_matrix(const Rcpp::NumericMatrix& x) {
   return d;
 }
 
-Rcpp::List export_fit(const Fit& f, double requested_reg, uint64_t seed) {
+Rcpp::List export_fit(const Fit& f, double requested_reg, uint64_t seed,
+                      double elapsed_seconds) {
   Rcpp::NumericMatrix means(f.k, f.p);
   for (int c = 0; c < f.k; ++c) {
     for (int j = 0; j < f.p; ++j) {
@@ -532,15 +703,29 @@ Rcpp::List export_fit(const Fit& f, double requested_reg, uint64_t seed) {
     Rcpp::_["early_stopping"]=Rcpp::List::create(Rcpp::_["monitor"]="mean_nll_before_m_step",
       Rcpp::_["min_delta"]=f.tolerance, Rcpp::_["patience"]=2,
       Rcpp::_["wait_count"]=f.early_wait,Rcpp::_["best_nll"]=f.early_best),
-    Rcpp::_["seed"]=static_cast<double>(seed));
+    Rcpp::_["seed"]=static_cast<double>(seed),
+    Rcpp::_["elapsed_seconds"]=elapsed_seconds,
+    Rcpp::_["phase_elapsed_seconds"]=Rcpp::List::create(
+      Rcpp::_["kmeans_seeding"]=f.kmeans_seeding_seconds,
+      Rcpp::_["lloyd"]=f.lloyd_seconds,
+      Rcpp::_["initialization_covariance"]=
+        f.initialization_covariance_seconds,
+      Rcpp::_["expectation"]=f.expectation_seconds,
+      Rcpp::_["covariance"]=f.covariance_seconds,
+      Rcpp::_["final_scoring"]=f.final_scoring_seconds));
 }
 }
 
 extern "C" SEXP C_cpp_gmm_fit(SEXP xs, SEXP ks, SEXP seeds, SEXP maxs, SEXP tols, SEXP regs, SEXP threadss) {
   BEGIN_RCPP
+  const auto fit_started=std::chrono::steady_clock::now();
   Data d=import_matrix(Rcpp::as<Rcpp::NumericMatrix>(xs)); int k=Rcpp::as<int>(ks);
   uint64_t seed=static_cast<uint64_t>(Rcpp::as<double>(seeds));
-  return export_fit(fit_restart(d,k,seed,Rcpp::as<int>(maxs),Rcpp::as<double>(tols),Rcpp::as<double>(regs),Rcpp::as<int>(threadss)),Rcpp::as<double>(regs),seed);
+  Fit fit=fit_restart(d,k,seed,Rcpp::as<int>(maxs),Rcpp::as<double>(tols),
+                      Rcpp::as<double>(regs),Rcpp::as<int>(threadss));
+  const double elapsed_seconds=std::chrono::duration<double>(
+    std::chrono::steady_clock::now()-fit_started).count();
+  return export_fit(fit,Rcpp::as<double>(regs),seed,elapsed_seconds);
   END_RCPP
 }
 
@@ -573,6 +758,7 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
     R_FlushConsole();
   }
   std::vector<Fit> fits(jobs); std::vector<std::string> errors(jobs);
+  std::vector<double> fit_elapsed_seconds(jobs,0.0);
   std::atomic<int> next(0);
   std::atomic<bool> cancelled(false);
   std::atomic<int> workers_finished(0);
@@ -592,14 +778,18 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
                             threads_per_fit,&cancelled);
       } catch(const FitCancelled&) {
         // Interruption is reported once by the main R thread after every
-        // worker has unwound and joined.
+        // worker has unwound and joined. A peer job can also request the same
+        // cooperative cancellation after its first fatal native failure.
       } catch(const std::exception& e) {
         errors[i]=e.what();
+        cancelled.store(true,std::memory_order_relaxed);
       } catch(...) {
         errors[i]="unknown native exception";
+        cancelled.store(true,std::memory_order_relaxed);
       }
       const double fit_seconds=std::chrono::duration<double>(
         std::chrono::steady_clock::now()-fit_started).count();
+      fit_elapsed_seconds[i]=fit_seconds;
       {
         std::lock_guard<std::mutex> lock(progress_mutex);
         completion_events[published_events++]=CompletionEvent{i,fit_seconds};
@@ -659,8 +849,13 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
   }
   for(auto& thread:pool) if(thread.joinable()) thread.join();
   if(interrupted) Rcpp::stop("Native C++ GMM fitting interrupted by user.");
-  for(int i=0;i<jobs;++i) if(!errors[i].empty()) Rcpp::stop("Native GMM job %d failed: %s",i+1,errors[i]);
-  Rcpp::List out(jobs); for(int i=0;i<jobs;++i) out[i]=export_fit(fits[i],reg,native_seeds[i]);
+  for(int i=0;i<jobs;++i) if(!errors[i].empty())
+    Rcpp::stop(
+      "Native GMM job %d (K=%d) failed; remaining jobs were cancelled: %s",
+      i+1,native_ks[i],errors[i]);
+  Rcpp::List out(jobs);
+  for(int i=0;i<jobs;++i)
+    out[i]=export_fit(fits[i],reg,native_seeds[i],fit_elapsed_seconds[i]);
   return out;
   END_RCPP
 }

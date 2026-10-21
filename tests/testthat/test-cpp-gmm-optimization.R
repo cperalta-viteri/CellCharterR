@@ -20,6 +20,18 @@ expect_cpp_gmm_equivalent <- function(observed, expected, tolerance = 1e-12) {
                tolerance = tolerance)
 }
 
+cpp_gmm_high_dimensional_fixture <- function() {
+  set.seed(9217)
+  n <- 480L
+  p <- 120L
+  group <- rep(0:2, length.out = n)
+  latent <- matrix(stats::rnorm(n * 8L), nrow = n)
+  loadings <- matrix(stats::rnorm(8L * p, sd = 0.35), nrow = 8L)
+  offsets <- matrix(stats::rnorm(3L * p, sd = 1.6), nrow = 3L)
+  latent %*% loadings + offsets[group + 1L, , drop = FALSE] +
+    matrix(stats::rnorm(n * p, sd = 0.08), nrow = n)
+}
+
 test_that("largest-K-first C++ scheduling preserves caller result order", {
   x <- cpp_gmm_optimization_fixture()
   ks <- c(2L, 5L, 3L)
@@ -42,6 +54,27 @@ test_that("largest-K-first C++ scheduling preserves caller result order", {
   expect_identical(
     unname(vapply(models, `[[`, numeric(1L), "seed")), as.numeric(seeds)
   )
+  expect_true(all(vapply(
+    models,
+    function(model) is.numeric(model$elapsed_seconds) &&
+      length(model$elapsed_seconds) == 1L &&
+      is.finite(model$elapsed_seconds) && model$elapsed_seconds >= 0,
+    logical(1L)
+  )))
+  expected_phases <- c(
+    "kmeans_seeding", "lloyd", "initialization_covariance",
+    "expectation", "covariance", "final_scoring"
+  )
+  for (model in models) {
+    phases <- unlist(model$phase_elapsed_seconds, use.names = TRUE)
+    expect_identical(names(phases), expected_phases)
+    expect_true(all(is.finite(phases)))
+    expect_true(all(phases >= 0))
+    # Import/export and initialization summaries are intentionally outside the
+    # phase counters, so accounted time cannot exceed fit wall time apart from
+    # timer granularity.
+    expect_lte(sum(phases), model$elapsed_seconds * 1.01 + 0.01)
+  }
 })
 
 test_that("optimized C++ fits are equivalent across worker topologies", {
@@ -156,4 +189,42 @@ test_that("optimized C++ fitting and prediction do not dispatch to Torch", {
     cpp_gmm_log_likelihood(model, x, batch_size = 11L), -model$nll,
     tolerance = 1e-10
   )
+})
+
+test_that("blocked scoring preserves full-covariance P=120 results across topologies", {
+  x <- cpp_gmm_high_dimensional_fixture()
+  arguments <- list(
+    x = x, n_clusters = 3L, max_iter = 5L, tolerance = 1e-8,
+    covariance_regularization = 1e-5, seed = 312L
+  )
+
+  serial <- do.call(cpp_gmm_fit, c(arguments, list(num_threads = 1L)))
+  parallel <- do.call(cpp_gmm_fit, c(arguments, list(num_threads = 4L)))
+  outer_parallel <- cpp_gmm_fit_many(
+    x,
+    n_clusters = c(3L, 3L),
+    seeds = c(312L, 312L),
+    workers = 2L,
+    threads_per_fit = 1L,
+    max_iter = 5L,
+    tolerance = 1e-8,
+    covariance_regularization = 1e-5,
+    progress = FALSE
+  )
+
+  expect_cpp_gmm_equivalent(parallel, serial, tolerance = 1e-10)
+  for (model in outer_parallel) {
+    expect_cpp_gmm_equivalent(model, serial, tolerance = 1e-10)
+  }
+  expect_identical(
+    serial$labels,
+    cpp_gmm_predict(serial, x, batch_size = 97L)
+  )
+  expect_equal(
+    serial$nll,
+    -cpp_gmm_log_likelihood(serial, x, batch_size = 89L),
+    tolerance = 1e-9
+  )
+  covariance <- serial$covariances[[1L]]
+  expect_gt(max(abs(covariance[upper.tri(covariance)])), 0.01)
 })

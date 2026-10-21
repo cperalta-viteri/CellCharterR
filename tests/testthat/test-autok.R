@@ -6,6 +6,104 @@ test_that("Fowlkes-Mallows is label-invariant and handles singleton partitions",
   expect_error(cellcharter_fowlkes_mallows(a, replace(a, 1, NA)), "missing")
 })
 
+test_that("compact integer FMI matches the general contingency calculation", {
+  set.seed(814)
+  labels_a <- sample.int(11L, 50000L, replace = TRUE) - 1L
+  labels_b <- sample.int(13L, 50000L, replace = TRUE) - 1L
+  expected <- cellcharter_fowlkes_mallows(
+    as.character(labels_a), as.character(labels_b)
+  )
+  expect_equal(
+    cellcharter_fowlkes_mallows(labels_a, labels_b),
+    expected,
+    tolerance = 0
+  )
+})
+
+test_that("sparse integer FMI labels avoid a range-sized contingency allocation", {
+  labels_a <- c(0L, 100000000L, 0L, 100000000L)
+  labels_b <- c(0L, 0L, 1L, 1L)
+  expect_equal(
+    cellcharter_fowlkes_mallows(labels_a, labels_b),
+    cellcharter_fowlkes_mallows(as.character(labels_a), as.character(labels_b)),
+    tolerance = 0
+  )
+})
+
+test_that("regularization retry diagnostics retain one AutoK index row per fit", {
+  checkpoint_dir <- tempfile("autok-retry-diagnostics-")
+  x <- matrix(seq_len(30), ncol = 3)
+  calls <- 0L
+  fit_hook <- function(x, n_clusters, seed, ...) {
+    calls <<- calls + 1L
+    list(
+      k = n_clusters, nll = as.numeric(n_clusters),
+      covariance_regularization = 1e-5,
+      regularization_attempts = c(1e-6, 1e-5)
+    )
+  }
+  predict_hook <- function(model, newdata, ...) {
+    (seq_len(nrow(newdata)) - 1L) %% model$k
+  }
+
+  first <- cellcharter_autok_fit(
+    x, n_clusters = c(2L, 3L), checkpoint_dir = checkpoint_dir,
+    max_runs = 1L, seed = 17L, fit_fun = fit_hook,
+    predict_fun = predict_hook, nll_fun = function(model) model$nll,
+    data_id = "retry-diagnostics-v1"
+  )
+  expect_equal(nrow(first$fit_index), length(first$fit_k))
+  expect_false(anyDuplicated(first$fit_index[c("k", "run")]) > 0L)
+  expect_identical(first$fit_index$regularization_attempts, rep.int(2L, length(first$fit_k)))
+
+  resumed <- cellcharter_autok_fit(
+    x, n_clusters = c(2L, 3L), checkpoint_dir = checkpoint_dir,
+    max_runs = 1L, seed = 17L, fit_fun = fit_hook,
+    predict_fun = predict_hook, nll_fun = function(model) model$nll,
+    data_id = "retry-diagnostics-v1", resume = TRUE
+  )
+  expect_equal(calls, length(first$fit_k))
+  expect_true(all(resumed$fit_index$resumed))
+  expect_false(anyDuplicated(resumed$fit_index[c("k", "run")]) > 0L)
+})
+
+test_that("legacy ridge-valued retry diagnostics migrate to an integer count", {
+  checkpoint_dir <- tempfile("autok-legacy-retry-value-")
+  x <- matrix(seq_len(30), ncol = 3)
+  fit_hook <- function(x, n_clusters, seed, ...) {
+    list(
+      k = n_clusters, nll = as.numeric(n_clusters),
+      covariance_regularization = 1e-6,
+      regularization_attempts = 1e-6
+    )
+  }
+  predict_hook <- function(model, newdata, ...) {
+    (seq_len(nrow(newdata)) - 1L) %% model$k
+  }
+  first <- cellcharter_autok_fit(
+    x, n_clusters = c(2L, 3L), checkpoint_dir = checkpoint_dir,
+    max_runs = 1L, seed = 23L, fit_fun = fit_hook,
+    predict_fun = predict_hook, nll_fun = function(model) model$nll,
+    data_id = "legacy-retry-value-v1"
+  )
+  state_path <- file.path(checkpoint_dir, "autok_state.rds")
+  state <- readRDS(state_path)
+  state$fit_index$regularization_attempts[] <- 1e-6
+  saveRDS(state, state_path)
+
+  resumed <- cellcharter_autok_fit(
+    x, n_clusters = c(2L, 3L), checkpoint_dir = checkpoint_dir,
+    max_runs = 1L, seed = 23L, fit_fun = fit_hook,
+    predict_fun = predict_hook, nll_fun = function(model) model$nll,
+    data_id = "legacy-retry-value-v1", resume = TRUE
+  )
+  expect_identical(
+    resumed$fit_index$regularization_attempts,
+    rep.int(1L, length(first$fit_k))
+  )
+  expect_true(all(resumed$fit_index$resumed))
+})
+
 test_that("neighboring-K edge scores are mirrored like CellCharter 0.2.0", {
   edges <- data.frame(
     run = rep(2L, 3), previous_run = rep(1L, 3),
@@ -465,6 +563,35 @@ test_that("C++ fit checkpoint mode publishes each K before starting the next", {
   expect_identical(readRDS(first)$k, 1L)
 })
 
+test_that("ordinary AutoK calls default to the supported compiled backend", {
+  testthat::local_mocked_bindings(
+    cpp_gmm_fit = function(x, n_clusters, seed, num_threads, ...) {
+      structure(list(
+        labels = (seq_len(nrow(x)) - 1L) %% n_clusters,
+        selection_nll = as.numeric(n_clusters), nll = as.numeric(n_clusters),
+        nll_history = as.numeric(n_clusters), converged = TRUE,
+        iterations = 1L, covariance_regularization = 1e-6,
+        regularization_attempts = 1e-6,
+        runtime = list(device = "cpu", backend = "compiled-cpp-double")
+      ), class = c("cpp_gmm", "torch_gmm"))
+    },
+    .package = "CellCharterR"
+  )
+  fit <- cellcharter_autok_fit(
+    matrix(seq_len(30), ncol = 3L), c(2L, 2L),
+    tempfile("autok-default-cpp-"), max_runs = 1L, progress = FALSE
+  )
+  expect_identical(fit$backend, "cpp")
+  expect_error(
+    cellcharter_autok_fit(
+      matrix(seq_len(30), ncol = 3L), c(2L, 2L),
+      tempfile("autok-cpp-hooks-"), max_runs = 1L,
+      backend = "cpp", fit_fun = function(...) NULL, progress = FALSE
+    ),
+    "does not call R hooks"
+  )
+})
+
 test_that("C++ AutoK ranks repetitions by the reference monitored NLL", {
   x <- matrix(seq_len(48), ncol = 4L)
   testthat::local_mocked_bindings(
@@ -519,6 +646,28 @@ test_that("C++ numerical ABI rejects older checkpoint identities", {
       character()
     )
   }
+})
+
+test_that("allocation-only FMI hardening preserves pre-hardening resume identity", {
+  old_digest <- "8b479382a95c7a4ef4354fd590cbaece42c3923d6397b12fe7caeae65c55591c"
+  hardened_digest <- "19b99ee2dfbf401d643225618a28a9683bae77c9a9c2a208a585afad0c172688"
+  current <- list(
+    fit_k = 1:4, candidate_k = 2:3, seed = 1L,
+    n_obs = 10L, n_features = 3L
+  )
+  state <- c(current, list(
+    data_id = "compatible-id", runs_completed = 1L,
+    edge_stability = data.frame(), convergence_history = data.frame(),
+    similarity_digest = old_digest
+  ))
+  expect_true(.autok_compatible_state(
+    state, current, accepted_data_ids = "compatible-id",
+    similarity_digest = hardened_digest, default_similarity = TRUE
+  ))
+  expect_false(.autok_compatible_state(
+    state, current, accepted_data_ids = "compatible-id",
+    similarity_digest = hardened_digest, default_similarity = FALSE
+  ))
 })
 
 test_that("AutoK disables nested direct-fit OOM retries", {

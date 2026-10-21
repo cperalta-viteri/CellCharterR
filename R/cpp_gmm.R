@@ -30,9 +30,6 @@
 cpp_gmm_fit <- function(x, n_clusters, max_iter = 100L, tolerance = 1e-3,
                         covariance_regularization = 1e-6, seed = 1L,
                         num_threads = 1L) {
-  x <- as.matrix(x)
-  if (!is.numeric(x) || length(dim(x)) != 2L || !nrow(x) || !ncol(x))
-    stop("`x` must be a non-empty numeric matrix.", call. = FALSE)
   n_clusters <- .rc_positive_integer(n_clusters, "n_clusters")
   max_iter <- .rc_positive_integer(max_iter, "max_iter")
   seed <- .rc_positive_integer(seed, "seed", allow_zero = TRUE)
@@ -41,6 +38,10 @@ cpp_gmm_fit <- function(x, n_clusters, max_iter = 100L, tolerance = 1e-3,
     covariance_regularization, "covariance_regularization", strictly_positive = TRUE)
   num_threads <- .rc_positive_integer(num_threads, "num_threads")
   if (num_threads > 32L) { warning("Capping `num_threads` at 32.", call. = FALSE); num_threads <- 32L }
+  .cpp_gmm_require_single_thread_blas(1L, num_threads)
+  x <- as.matrix(x)
+  if (!is.numeric(x) || length(dim(x)) != 2L || !nrow(x) || !ncol(x))
+    stop("`x` must be a non-empty numeric matrix.", call. = FALSE)
   if (n_clusters > nrow(x)) stop("`n_clusters` cannot exceed nrow(x).", call. = FALSE)
   # Use the one-job form of the monitored native engine. This preserves the
   # exact same fit kernel and output while allowing R's main thread to poll for
@@ -75,7 +76,12 @@ cpp_gmm_fit <- function(x, n_clusters, max_iter = 100L, tolerance = 1e-3,
 #' @param seeds Integer seeds, recycled only when length one. Otherwise the
 #'   vector must have one seed per requested fit.
 #' @param workers Positive maximum number of independent fits run concurrently.
-#'   Values above 32 are capped. This controls between-fit parallelism.
+#'   Values above 32 are capped. This controls between-fit parallelism. When
+#'   the effective native topology uses more than one thread, start R with
+#'   `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
+#'   `BLIS_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`, and `GOTO_NUM_THREADS` all
+#'   set to `1`; the function fails early otherwise to prevent nested BLAS
+#'   oversubscription.
 #' @param threads_per_fit Positive native row-shard thread count within each
 #'   independent fit. The product `workers * threads_per_fit` is capped at 32,
 #'   with `threads_per_fit` reduced when necessary.
@@ -91,22 +97,28 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
                              max_iter = 100L, tolerance = 1e-3,
                              covariance_regularization = 1e-6,
                              progress = interactive()) {
+  if (!length(n_clusters)) stop("`n_clusters` must not be empty.", call. = FALSE)
+  workers <- .rc_positive_integer(workers, "workers")
+  if (workers > 32L) { warning("Capping `workers` at 32.", call. = FALSE); workers <- 32L }
+  threads_per_fit <- .rc_positive_integer(threads_per_fit, "threads_per_fit")
+  if (as.double(workers) * as.double(threads_per_fit) > 32) {
+    threads_per_fit <- max(1L, 32L %/% workers)
+    warning(sprintf("Capping `threads_per_fit` at %d so the native topology does not exceed 32 threads.", threads_per_fit), call. = FALSE)
+  }
+  # The native engine owns fit- and row-level parallelism.  Its covariance
+  # kernels call the linked BLAS, so a second BLAS thread pool would multiply
+  # the requested topology (for example 8 x 4 x 32 OpenBLAS threads).  These
+  # controls must be established before R starts; setting them here can be too
+  # late once a BLAS implementation has initialized its worker pool.
+  .cpp_gmm_require_single_thread_blas(workers, threads_per_fit)
   x <- as.matrix(x)
   if (!is.numeric(x) || length(dim(x)) != 2L || !nrow(x) || !ncol(x) || any(!is.finite(x)))
     stop("`x` must be a finite, non-empty numeric matrix.", call. = FALSE)
-  if (!length(n_clusters)) stop("`n_clusters` must not be empty.", call. = FALSE)
   ks <- vapply(n_clusters, .rc_positive_integer, integer(1), name = "n_clusters")
   if (any(ks > nrow(x))) stop("Every value in `n_clusters` must be <= nrow(x).", call. = FALSE)
   if (length(seeds) == 1L) seeds <- rep(seeds, length(ks))
   if (length(seeds) != length(ks)) stop("`seeds` must have length one or length(n_clusters).", call. = FALSE)
   seeds <- vapply(seeds, .rc_positive_integer, integer(1), name = "seeds", allow_zero = TRUE)
-  workers <- .rc_positive_integer(workers, "workers")
-  if (workers > 32L) { warning("Capping `workers` at 32.", call. = FALSE); workers <- 32L }
-  threads_per_fit <- .rc_positive_integer(threads_per_fit, "threads_per_fit")
-  if (workers * threads_per_fit > 32L) {
-    threads_per_fit <- max(1L, 32L %/% workers)
-    warning(sprintf("Capping `threads_per_fit` at %d so the native topology does not exceed 32 threads.", threads_per_fit), call. = FALSE)
-  }
   max_iter <- .rc_positive_integer(max_iter, "max_iter")
   tolerance <- .rc_nonnegative_number(tolerance, "tolerance", strictly_positive = TRUE)
   covariance_regularization <- .rc_nonnegative_number(
@@ -128,6 +140,47 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
   }
   names(models) <- paste0("k", ks)
   models
+}
+
+.cpp_gmm_blas_environment <- function() {
+  variables <- c(
+    "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+    "BLIS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "GOTO_NUM_THREADS"
+  )
+  values <- Sys.getenv(variables, unset = "")
+  stats::setNames(as.character(values), variables)
+}
+
+.cpp_gmm_blas_contract <- function() {
+  versions <- extSoftVersion()
+  version_value <- function(name) {
+    if (name %in% names(versions)) unname(as.character(versions[[name]])) else NA_character_
+  }
+  list(
+    library = version_value("BLAS"),
+    lapack = version_value("LAPACK"),
+    environment = as.list(.cpp_gmm_blas_environment())
+  )
+}
+
+.cpp_gmm_require_single_thread_blas <- function(workers, threads_per_fit) {
+  if (as.double(workers) * as.double(threads_per_fit) <= 1) {
+    return(invisible(.cpp_gmm_blas_contract()))
+  }
+  values <- .cpp_gmm_blas_environment()
+  unsafe <- names(values)[values != "1"]
+  if (length(unsafe)) {
+    assignments <- paste0(unsafe, "=1", collapse = " ")
+    stop(
+      "Parallel compiled GMM fitting requires a single-threaded BLAS to avoid ",
+      "nested oversubscription. Start a fresh R process with all BLAS/OpenMP ",
+      "controls set to 1 before loading CellCharterR. Missing or unsafe: ",
+      paste(unsafe, collapse = ", "), ". For example: `", assignments,
+      " Rscript your-script.R`.",
+      call. = FALSE
+    )
+  }
+  invisible(.cpp_gmm_blas_contract())
 }
 
 .cpp_gmm_compatibility <- function(model) {
@@ -153,7 +206,10 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
   model$initialization <- list(
     method = "cpp-kmeans++-lloyd-hard", counts = model$initialization_counts,
     collapsed_components = model$initialization_collapsed_components,
-    branch = "full-data C++ KMeans; native threads parallelize independent fits")
+    branch = paste(
+      "full-data C++ KMeans; native threads parallelize independent fits,",
+      "Lloyd assignments, and initialization covariance"
+    ))
   model$reference_semantics <- paste(
     "CellCharter 0.2.0-style full-data centered full-covariance EM with",
     "precision-Cholesky scoring, cached posteriors, and blocked BLAS",

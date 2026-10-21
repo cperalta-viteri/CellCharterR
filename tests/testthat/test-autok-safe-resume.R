@@ -95,6 +95,53 @@ test_that("legacy state metadata is migrated once even when no run remains", {
   expect_gte(file.info(state_path)$mtime, state_time)
 })
 
+test_that("legacy fit indexes can be migrated and extended by a new run", {
+  checkpoint_dir <- tempfile("autok-legacy-extend-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  counter <- new.env(parent = emptyenv())
+  counter$fit <- counter$predict <- counter$similarity <- 0L
+  hooks <- autok_counting_hooks(counter)
+
+  first <- autok_test_call(
+    checkpoint_dir, counter, max_runs = 1L,
+    convergence_tol = 0, hooks = hooks
+  )
+  expect_equal(first$runs_completed, 1L)
+  state_path <- file.path(checkpoint_dir, "autok_state.rds")
+  legacy <- readRDS(state_path)
+  legacy$fit_index <- NULL
+  saveRDS(legacy, state_path)
+
+  counter$fit <- counter$predict <- counter$similarity <- 0L
+  extended <- autok_test_call(
+    checkpoint_dir, counter, max_runs = 2L,
+    convergence_tol = 0, hooks = hooks
+  )
+  expect_equal(extended$runs_completed, 2L)
+  expect_equal(nrow(extended$fit_index), 2L * length(extended$fit_k))
+  expect_false(anyDuplicated(extended$fit_index[c("k", "run")]) > 0L)
+  expect_true(all(c(
+    "final_nll", "converged", "iterations", "elapsed_seconds",
+    "effective_regularization", "regularization_attempts"
+  ) %in% names(extended$fit_index)))
+  expect_identical(counter$fit, length(extended$fit_k))
+
+  counter$fit <- counter$predict <- counter$similarity <- 0L
+  resumed <- autok_test_call(
+    checkpoint_dir, counter, max_runs = 2L,
+    convergence_tol = 0, hooks = hooks
+  )
+  expect_equal(
+    resumed$fit_index[setdiff(names(resumed$fit_index), "resumed")],
+    extended$fit_index[setdiff(names(extended$fit_index), "resumed")]
+  )
+  expect_true(all(resumed$fit_index$resumed))
+  expect_identical(
+    c(fit = counter$fit, predict = counter$predict, similarity = counter$similarity),
+    c(fit = 0L, predict = 0L, similarity = 0L)
+  )
+})
+
 test_that("a validated legacy input identity transitions across repeated resumes", {
   skip_if_not_installed("torch")
   checkpoint_dir <- tempfile("autok-input-transition-")

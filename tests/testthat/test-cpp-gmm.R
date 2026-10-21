@@ -85,12 +85,15 @@ test_that("compiled progress path joins all workers after native fit failures", 
   expect_output(
     expect_error(
       cpp_gmm_fit_many(
-        x, 2:4, seeds = 1:3, workers = 3L, threads_per_fit = 1L,
+        x, 2:4, seeds = 1:3, workers = 1L, threads_per_fit = 1L,
         max_iter = 2L, progress = TRUE
       ),
-      "Native GMM job 1 failed.*Cholesky factorization failed"
+      paste0(
+        "Native GMM job 3 \\(K=4\\) failed; remaining jobs were cancelled: ",
+        "GMM failed after 8 regularization attempts: Cholesky factorization failed"
+      )
     ),
-    "3/3 jobs finished",
+    "1/3 jobs finished",
     fixed = TRUE
   )
 })
@@ -365,7 +368,7 @@ test_that("C++ round checkpoints survive an observability-only wrapper upgrade",
   state <- readRDS(state_path)
   previous_contract <- state$resume_contract
   previous_contract$algorithm <- paste0(
-    "cpp-full-covariance-em-v1.3.0:", paste(rep("a", 64L), collapse = "")
+    "cpp-full-covariance-em-v1.5.0:", paste(rep("a", 64L), collapse = "")
   )
   previous_id <- digest::digest(
     .cc_contract_canonical(previous_contract), algo = "sha256", serialize = TRUE

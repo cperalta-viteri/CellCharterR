@@ -22,7 +22,30 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
     stop("Cluster labels must be non-empty and cannot contain missing values.")
   }
 
-  contingency <- table(labels_a, labels_b)
+  # AutoK's native GMM labels are compact zero-based integers.  Avoid the
+  # repeated factor construction and sorting performed by `table()` for each
+  # multi-million-spot comparison; `tabulate()` produces the exact same
+  # contingency counts in one linear pass.  Arbitrary user labels retain the
+  # general `table()` path.
+  max_a <- if (is.integer(labels_a)) max(labels_a) else Inf
+  max_b <- if (is.integer(labels_b)) max(labels_b) else Inf
+  contingency_bins <- (as.double(max_a) + 1) * (as.double(max_b) + 1)
+  compact_integer <- is.integer(labels_a) && is.integer(labels_b) &&
+    all(labels_a >= 0L) && all(labels_b >= 0L) &&
+    max_a < .Machine$integer.max && max_b < .Machine$integer.max &&
+    contingency_bins <= .Machine$integer.max &&
+    contingency_bins <= 1e7 &&
+    contingency_bins <= max(1024, 4 * length(labels_a))
+  if (compact_integer) {
+    n_a <- as.integer(max_a + 1)
+    n_b <- as.integer(max_b + 1)
+    contingency <- matrix(
+      tabulate(labels_a + 1L + n_a * labels_b, nbins = n_a * n_b),
+      nrow = n_a, ncol = n_b
+    )
+  } else {
+    contingency <- table(labels_a, labels_b)
+  }
   choose2 <- function(x) x * (x - 1) / 2
   true_positive <- sum(choose2(contingency))
   predicted_positive <- sum(choose2(rowSums(contingency)))
@@ -122,14 +145,14 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   unname(digest::digest(file = path, algo = "sha256", serialize = FALSE))
 }
 
-.autok_atomic_save_rds <- function(object, path) {
+.autok_atomic_save_rds <- function(object, path, compress = TRUE) {
   directory <- dirname(path)
   dir.create(directory, recursive = TRUE, showWarnings = FALSE)
   temporary <- tempfile(
     pattern = paste0(".", basename(path), "-"), tmpdir = directory, fileext = ".tmp"
   )
   on.exit(unlink(temporary), add = TRUE)
-  base::saveRDS(object, temporary)
+  base::saveRDS(object, temporary, compress = compress)
   if (!file.rename(temporary, path)) {
     stop("Could not atomically move checkpoint into place: ", path)
   }
@@ -165,7 +188,18 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
                 "runs_completed", "edge_stability", "convergence_history")
   if (is.null(state) || !all(required %in% names(state))) return(FALSE)
   similarity_matches <- if (!is.null(state$similarity_digest)) {
-    identical(state$similarity_digest, similarity_digest)
+    identical(state$similarity_digest, similarity_digest) ||
+      (
+        default_similarity &&
+        identical(
+          similarity_digest,
+          "19b99ee2dfbf401d643225618a28a9683bae77c9a9c2a208a585afad0c172688"
+        ) &&
+        identical(
+          state$similarity_digest,
+          "8b479382a95c7a4ef4354fd590cbaece42c3923d6397b12fe7caeae65c55591c"
+        )
+      )
   } else {
     # Older states predate an explicit similarity identity and are safe to
     # restore only for the package's pinned default FMI implementation.
@@ -182,7 +216,7 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 .autok_cpp_observability_compatible_id <- function(state, current_contract) {
   if (is.null(state$resume_contract) || is.null(state$data_id)) return(character())
   previous <- state$resume_contract
-  token <- "cpp-full-covariance-em-v1.3.0"
+  token <- "cpp-full-covariance-em-v1.5.0"
   if (!is.character(previous$algorithm) || length(previous$algorithm) != 1L ||
       !startsWith(previous$algorithm, token)) return(character())
   if (is.null(previous$representation_sha256) ||
@@ -353,10 +387,11 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   if (identical(backend, "cpp")) {
     return(list(
       schema = "CellCharterR_autok_execution_identity",
-      schema_version = 1L,
+      schema_version = 2L,
       backend = "cpp",
       numeric_type = "double",
-      threads_per_fit = as.integer(threads_per_fit)
+      threads_per_fit = as.integer(threads_per_fit),
+      blas = .cpp_gmm_blas_contract()
     ))
   }
   if (!isTRUE(default_torch)) {
@@ -734,16 +769,24 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #'   and reuses it. It never materialises assays. The C++ backend always
 #'   materialises this representation once as a double matrix and therefore
 #'   ignores this Torch-only setting. Custom fitting hooks require `"none"`.
-#' @param backend Exactly `"cpp"` for the supported compiled double-precision
-#'   CPU backend or `"torch"` for the experimental float32 R Torch backend.
+#' @param backend `NULL` (the default), `"cpp"`, or `"torch"`. `NULL` selects
+#'   the supported compiled double-precision CPU backend for an ordinary AutoK
+#'   call. For backward compatibility it selects the generic/Torch path when
+#'   custom fit/predict/NLL hooks or Torch-only fit arguments (`device`,
+#'   `batch_size`, `num_threads`, or `initialization_method`) are supplied.
+#'   `"torch"` explicitly opts into the experimental float32 R Torch backend.
 #'   C++ fits requested K values through [cpp_gmm_fit_many()].
 #' @param workers Positive number of independent K fits that the C++ backend may
 #'   run concurrently. This controls between-fit parallelism and has no effect
-#'   for `backend = "torch"`.
+#'   for `backend = "torch"`. Parallel C++ fitting requires the linked BLAS and
+#'   OpenMP thread-control environment variables documented by
+#'   [cpp_gmm_fit_many()] to be set to one before R starts.
 #' @param threads_per_fit Positive number of native threads used within each C++
 #'   fit. The implementation caps the product of `workers` and
-#'   `threads_per_fit` at 32 to avoid nested oversubscription. It has no effect
-#'   for `backend = "torch"`.
+#'   `threads_per_fit` at 32. BLAS threads are a separate parallel layer, so the
+#'   function fails before inspecting a large representation when a parallel
+#'   C++ topology is requested without explicit single-thread BLAS controls. It
+#'   has no effect for `backend = "torch"`.
 #' @param progress A single logical controlling status messages. For compiled
 #'   rounds this includes completed-fit counts and estimated time remaining.
 #' @param checkpoint_mode Checkpoint granularity. `"fit"` writes the historical
@@ -786,7 +829,7 @@ cellcharter_autok_fit <- function(
     similarity_fun = cellcharter_fowlkes_mallows,
     fit_args = list(), predict_args = list(), data_id = NULL, resume = TRUE,
     cache_representation = c("none", "ram"),
-    backend = c("torch", "cpp"), workers = 1L, threads_per_fit = 1L,
+    backend = NULL, workers = 1L, threads_per_fit = 1L,
     progress = TRUE, checkpoint_mode = c("fit", "round", "none")) {
   grid <- .autok_k_grid(n_clusters)
   fit_k <- grid$fit_k
@@ -808,13 +851,39 @@ cellcharter_autok_fit <- function(
     stop("`resume` must be TRUE or FALSE.")
   }
   cache_representation <- match.arg(cache_representation)
-  backend <- match.arg(backend)
+  custom_hooks_supplied <- !is.null(fit_fun) || !is.null(predict_fun) ||
+    !is.null(nll_fun)
+  torch_argument_supplied <- is.list(fit_args) && any(
+    names(fit_args) %in% c(
+      "device", "batch_size", "num_threads", "initialization_method"
+    )
+  ) || is.list(predict_args) && any(
+    names(predict_args) %in% c("device", "batch_size")
+  )
+  if (is.null(backend)) {
+    backend <- if (custom_hooks_supplied || torch_argument_supplied) "torch" else "cpp"
+  } else {
+    backend <- match.arg(backend, c("cpp", "torch"))
+  }
+  if (identical(backend, "cpp") && custom_hooks_supplied) {
+    stop(
+      "Custom `fit_fun`, `predict_fun`, or `nll_fun` hooks require `backend = \"torch\"` ",
+      "(the generic R-hook execution path); the compiled backend does not call R hooks.",
+      call. = FALSE
+    )
+  }
   checkpoint_mode <- match.arg(checkpoint_mode)
   if (!identical(backend, "cpp") && !identical(checkpoint_mode, "fit")) {
     stop("`checkpoint_mode = \"round\"` or `\"none\"` requires `backend = \"cpp\"`.")
   }
   workers <- .autok_validate_integer(workers, "workers")
   threads_per_fit <- .autok_validate_integer(threads_per_fit, "threads_per_fit")
+  if (identical(backend, "cpp")) {
+    # Fail before hashing or materialising a potentially multi-million-row
+    # representation.  A nested BLAS pool can otherwise multiply the nominal
+    # native topology and turn a minutes-to-hours run into a multiday one.
+    .cpp_gmm_require_single_thread_blas(workers, threads_per_fit)
+  }
   if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
     stop("`progress` must be TRUE or FALSE.")
   }
@@ -959,7 +1028,7 @@ cellcharter_autok_fit <- function(
     # token beside the public wrappers and bump it whenever numerical semantics
     # in src/cpp_gmm.cpp change, so stale native fits cannot be resumed.
     implementation_functions <- list(
-      cpp_backend_abi = function() "cpp-full-covariance-em-v1.3.0"
+      cpp_backend_abi = function() "cpp-full-covariance-em-v1.5.0"
     )
   }
   # The public defaults are deliberately small wrappers.  Hash their
@@ -1006,7 +1075,7 @@ cellcharter_autok_fit <- function(
   resume_contract <- .autok_resume_contract(
     input_data_id, fit_args, predict_args, default_torch, implementation_digest,
     algorithm = if (identical(backend, "cpp")) {
-      "cpp-full-covariance-em-v1.3.0"
+      "cpp-full-covariance-em-v1.5.0"
     } else NULL,
     representation_sha256 = representation_sha256
   )
@@ -1074,6 +1143,9 @@ cellcharter_autok_fit <- function(
   )
   fit_index <- data.frame(
     k = integer(), run = integer(), seed = integer(), nll = numeric(),
+    final_nll = numeric(), converged = logical(), iterations = integer(),
+    elapsed_seconds = numeric(), effective_regularization = numeric(),
+    regularization_attempts = integer(),
     path = character(), bytes = numeric(), sha256 = character(),
     execution_contract_sha256 = character(),
     resumed = logical(), stringsAsFactors = FALSE
@@ -1133,6 +1205,32 @@ cellcharter_autok_fit <- function(
 
     if (!is.null(saved_state$fit_index)) {
       fit_index <- saved_state$fit_index[saved_state$fit_index$run <= runs_completed, , drop = FALSE]
+      # Older compatible checkpoints predate per-fit diagnostics. Preserve
+      # their reusable scientific artifacts and represent unavailable
+      # observability fields explicitly rather than inventing values.
+      diagnostic_defaults <- list(
+        final_nll = NA_real_, converged = NA, iterations = NA_integer_,
+        elapsed_seconds = NA_real_, effective_regularization = NA_real_,
+        regularization_attempts = NA_integer_
+      )
+      for (field in names(diagnostic_defaults)) {
+        if (!field %in% names(fit_index)) {
+          fit_index[[field]] <- rep(diagnostic_defaults[[field]], nrow(fit_index))
+        }
+      }
+      # Early v1.5 states stored the sole attempted ridge value (for example,
+      # 1e-6) in this scalar index column. A state that survived key validation
+      # cannot contain a multi-attempt vector because that historical bug
+      # duplicated its (K, run) row. Migrate the valid one-attempt encoding to
+      # the documented integer count without touching current count values.
+      legacy_attempt_value <- is.finite(fit_index$regularization_attempts) &
+        fit_index$regularization_attempts > 0 &
+        abs(fit_index$regularization_attempts -
+              round(fit_index$regularization_attempts)) > sqrt(.Machine$double.eps)
+      if (any(legacy_attempt_value)) {
+        fit_index$regularization_attempts[legacy_attempt_value] <- 1
+      }
+      fit_index$regularization_attempts <- as.integer(fit_index$regularization_attempts)
       expected_fit_keys <- expand.grid(
         k = fit_k, run = seq_len(runs_completed), KEEP.OUT.ATTRS = FALSE
       )
@@ -1225,16 +1323,32 @@ cellcharter_autok_fit <- function(
                            n_obs = as.integer(n_obs), n_features = as.integer(n_features),
                            data_id = data_id, execution_contract = execution_contract)
           artifact <- .autok_read_checkpoint(path, expected, n_obs, legacy_data_ids)
+          model_diagnostics <- if (is.list(artifact$model)) artifact$model else list()
           index <- index + 1L
           rows[[index]] <- data.frame(k = k, run = committed_run, seed = run_seed,
-                                      nll = artifact$nll, path = path,
+                                      nll = artifact$nll,
+                                      final_nll = artifact$final_nll %||%
+                                        model_diagnostics$nll %||% artifact$nll,
+                                      converged = model_diagnostics$converged %||% NA,
+                                      iterations = model_diagnostics$iterations %||% NA_integer_,
+                                      elapsed_seconds = model_diagnostics$elapsed_seconds %||% NA_real_,
+                                      effective_regularization =
+                                        model_diagnostics$covariance_regularization %||% NA_real_,
+                                      regularization_attempts = if (
+                                        is.null(model_diagnostics$regularization_attempts)
+                                      ) {
+                                        NA_integer_
+                                      } else {
+                                        as.integer(length(model_diagnostics$regularization_attempts))
+                                      },
+                                      path = path,
                                       bytes = as.numeric(file.info(path)$size),
                                       sha256 = .autok_file_sha256(path),
                                       execution_contract_sha256 =
                                         .autok_execution_contract_sha256(execution_contract),
                                       resumed = TRUE,
                                       stringsAsFactors = FALSE)
-          rm(artifact)
+          rm(artifact, model_diagnostics)
         }
         message(sprintf("CellCharterR AutoK resume: validated committed run %d/%d.",
                         committed_run, runs_completed))
@@ -1528,10 +1642,35 @@ cellcharter_autok_fit <- function(
         fit_elapsed <- proc.time()[["elapsed"]] - fit_started
         new_fit_seconds <- c(new_fit_seconds, fit_elapsed)
       }
+      model_diagnostics <- if (is.list(artifact$model)) artifact$model else list()
+      if (progress && identical(model_diagnostics$converged, FALSE)) {
+        message(sprintf(
+          paste0(
+            "CellCharterR AutoK: K=%d run=%d reached max_iter without the ",
+            "per-fit tolerance criterion; retaining it for reference-compatible AutoK."
+          ),
+          k, run
+        ))
+      }
       campaign_completed <- campaign_completed + 1L
       fit_index <- rbind(
         fit_index,
-        data.frame(k = k, run = run, seed = run_seed, nll = artifact$nll,
+        data.frame(
+                   k = k, run = run, seed = run_seed, nll = artifact$nll,
+                   final_nll = artifact$final_nll %||% model_diagnostics$nll %||% artifact$nll,
+                   converged = model_diagnostics$converged %||% NA,
+                   iterations = model_diagnostics$iterations %||% NA_integer_,
+                   elapsed_seconds = model_diagnostics$elapsed_seconds %||%
+                     if (!reused) fit_elapsed else NA_real_,
+                   effective_regularization = model_diagnostics$covariance_regularization %||% NA_real_,
+                   # Models retain the attempted ridge values for diagnosis;
+                   # the tabular fit index stores their scalar count so a
+                   # retry cannot expand one (K, run) into duplicate rows.
+                   regularization_attempts = if (is.null(model_diagnostics$regularization_attempts)) {
+                     NA_integer_
+                   } else {
+                     as.integer(length(model_diagnostics$regularization_attempts))
+                   },
                    path = path, bytes = if (!is.na(path) && file.exists(path)) as.numeric(file.info(path)$size) else NA_real_,
                    sha256 = if (!is.na(path) && file.exists(path)) .autok_file_sha256(path) else NA_character_,
                    execution_contract_sha256 =
@@ -1541,7 +1680,7 @@ cellcharter_autok_fit <- function(
       if (run > 1L && k != fit_k[[length(fit_k)]]) {
         current_round_labels[[as.character(k)]] <- artifact$labels
       }
-      rm(artifact)
+      rm(artifact, model_diagnostics)
       if (!reused && identical(backend, "cpp") &&
           identical(checkpoint_mode, "fit") && progress) {
         mean_fit_seconds <- mean(new_fit_seconds)
@@ -1568,12 +1707,23 @@ cellcharter_autok_fit <- function(
     if (identical(backend, "cpp") && identical(checkpoint_mode, "round") &&
         length(cpp_artifacts)) {
       round_path <- .autok_round_path(checkpoint_dir, run)
+      checkpoint_started <- proc.time()[["elapsed"]]
+      if (progress) message(sprintf(
+        "CellCharterR AutoK: saving committed round %d to `%s`.",
+        run, round_path
+      ))
       .autok_atomic_save_rds(list(
         format = "cellcharter_autok_round_v1", run = run,
         data_id = data_id, artifacts = cpp_artifacts
-      ), round_path)
+      ), round_path, compress = FALSE)
       fit_index$bytes[fit_index$run == run] <- as.numeric(file.info(round_path)$size)
       fit_index$sha256[fit_index$run == run] <- .autok_file_sha256(round_path)
+      if (progress) message(sprintf(
+        "CellCharterR AutoK: round %d checkpoint saved in %s (%.1f MiB).",
+        run,
+        .autok_format_duration(proc.time()[["elapsed"]] - checkpoint_started),
+        as.numeric(file.info(round_path)$size) / 1024^2
+      ))
     }
     if (identical(backend, "cpp") && length(cpp_round) && progress) {
       mean_fit_seconds <- mean(new_fit_seconds)
@@ -1586,8 +1736,15 @@ cellcharter_autok_fit <- function(
     }
 
     if (run > 1L) {
-      scores <- vector("list", (run - 1L) * (length(fit_k) - 1L))
+      n_scores <- (run - 1L) * (length(fit_k) - 1L)
+      scores <- vector("list", n_scores)
       score_index <- 0L
+      fmi_started <- proc.time()[["elapsed"]]
+      next_fmi_report <- 0.1
+      if (progress) message(sprintf(
+        "CellCharterR AutoK: computing %d exact full-data FMI comparison(s) for round %d.",
+        n_scores, run
+      ))
       # The current round's lower-K labels are reused for every prior run.
       # Read each vector once, then release the cache after this round. This
       # preserves CellCharter's comparison order while avoiding repeated RDS
@@ -1625,12 +1782,24 @@ cellcharter_autok_fit <- function(
             run = run, previous_run = previous_run, lower_k = lower_k,
             upper_k = upper_k, score = as.numeric(score)
           )
+          fraction_complete <- score_index / n_scores
+          if (progress && fraction_complete + 1e-12 >= next_fmi_report) {
+            message(sprintf(
+              "CellCharterR AutoK FMI: %d/%d comparisons complete (%.0f%%).",
+              score_index, n_scores, 100 * fraction_complete
+            ))
+            next_fmi_report <- next_fmi_report + 0.1
+          }
           rm(previous_labels)
         }
         rm(previous_round_labels)
       }
       rm(current_labels)
       edge_stability <- rbind(edge_stability, do.call(rbind, scores))
+      if (progress) message(sprintf(
+        "CellCharterR AutoK: round %d FMI complete in %s.",
+        run, .autok_format_duration(proc.time()[["elapsed"]] - fmi_started)
+      ))
       stability <- .autok_mirror_stability(edge_stability, fit_k)
       stability_mean <- rowMeans(stability)
 

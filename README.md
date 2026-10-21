@@ -237,33 +237,34 @@ posterior. Choose `workers` with both RAM and CPU bandwidth in mind.
 The optimization history matters. On the full mouse-spleen representation, the
 original sequential R Torch GPU workflow took approximately four days, the
 first compiled multicore CPU implementation reduced the workflow to about 40
-minutes, and the current optimized C++ implementation reduced it again to about
-15 minutes:
+minutes, and successive C++ optimizations reduced it first to about 15 minutes
+and then to about 12 minutes:
 
 | Development stage | Data and workload | Status | Wall time or runtime estimate |
 |---|---|---|---:|
 | Original sequential R Torch CUDA implementation | 707,474 mouse-spleen spots, 40 features, candidate `K = 2..20` | Historical GPU AutoK run | **approximately 4 d** |
 | First compiled multicore CPU implementation | 707,474 spots, 40 features, candidate `K = 2..20`, 5 rounds (105 fits) | Completed with 8 workers and 4 threads per fit | **38 min 20.1 s observed** |
 | Optimized compiled multicore CPU v1.3 | 707,474 spots, 40 features, candidate `K = 2..20`, 6 rounds (126 fits) | Completed with 8 workers and 4 threads per fit | **14 min 49.675 s observed** |
+| Optimized compiled multicore CPU v1.5 | 707,474 spots, 40 features, candidate `K = 2..20`, 6 rounds (126 fits) | Completed with 6 workers and 2 threads per fit | **11 min 32.3 s observed** |
 
-All three stages used the same full mouse-spleen input representation. The
+All four stages used the same full mouse-spleen input representation. The
 historical GPU and compiled CPU runs did not execute identical numbers of fits,
 so the progression is a workflow history rather than a controlled per-fit
 benchmark. The first compiled implementation took 2300.1 seconds (38 minutes
-20.1 seconds). The current qualification used the same 707,474 by 40
+20.1 seconds). The current v1.5 qualification used the same 707,474 by 40
 representation, `max_runs = 10`, and `convergence_tol = 0.01`; it converged
-after six rounds (126 fits) in 889.675 seconds (14 minutes 49.675 seconds),
-selected K=10, and reached a peak process RSS of 3.596 GiB. It was a fresh,
-CPU-only run with no intermediate checkpoints.
+after six rounds (126 fits) in 692.296 seconds (11 minutes 32.3 seconds) and
+selected K=10. It was a fresh, CPU-only run with no intermediate checkpoints.
+The qualification metrics are distributed in
+`inst/extdata/cpp_v1_5_mouse_spleen_acceptance.csv`.
 
-The complete-workflow speedup from the first compiled implementation to v1.3
-is 2.585x even though v1.3 performed 20% more fits. Normalized per fit,
-throughput improved 3.102x (21.906 versus 7.061 seconds per fit). This is not an
-identical-numerics A/B because the older baseline used numerical ABI v1.0 and
-converged one round earlier. Against the identical-output v1.1 qualification
-(918.096 seconds, 126 fits), v1.3 is 3.10% faster with identical selected labels
-and stability values. Timings are machine-specific and do not promise a
-15-minute upper bound under different system load.
+The complete-workflow speedup from the first compiled implementation to v1.5
+is 3.322x even though v1.5 performed 20% more fits. Relative to v1.3, v1.5 is
+1.285x faster. The v1.5 acceptance comparison reproduced the v1.3 stability
+matrix and stability means exactly, selected K=10 after the same six rounds,
+gave Fowlkes-Mallows index 1 for every selected per-K model, and differed in
+selection log-likelihood by at most 6.54e-13. Timings are machine-specific and
+do not promise a 12-minute upper bound under different system load.
 
 Parallel execution uses standard C++17 threads rather than Unix process
 forking. It is therefore designed to compile on Linux, macOS, and Windows with
@@ -283,10 +284,10 @@ spe <- cellcharter_cluster(
   convergence_tol = 0.01,
   seed = 0L,
   backend = "cpp",
-  workers = 8L,
-  threads_per_fit = 4L,
-  checkpoint_mode = "none",
-  resume = FALSE
+  workers = 6L,
+  threads_per_fit = 2L,
+  checkpoint_mode = "round",
+  resume = TRUE
 )
 ```
 
@@ -294,13 +295,16 @@ Set `workers * threads_per_fit` no higher than the CPU threads and memory
 bandwidth available to R. Use `workers = 1L` for sequential execution or when
 a platform's multicore behavior has not been validated. Because CellCharterR
 already parallelizes across fits and within a fit, run the linked BLAS with one
-thread to avoid nested oversubscription. For example, set
-`OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1`, and `MKL_NUM_THREADS=1` before
-starting R.
+thread to avoid nested oversubscription. Before starting R, set
+`OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`,
+`BLIS_NUM_THREADS=1`, `VECLIB_MAXIMUM_THREADS=1`, and
+`GOTO_NUM_THREADS=1`.
 
 For interruptible long runs, use `checkpoint_mode = "round"` and
-`resume = TRUE`. Round checkpointing adds storage I/O and was intentionally
-disabled in the benchmark above.
+`resume = TRUE`. One checkpoint is written after every complete AutoK round;
+an interrupted partial round is rerun, while all committed rounds are reused.
+Round checkpointing adds storage I/O and was intentionally disabled in the
+mouse-spleen benchmark above.
 
 ### Experimental R Torch backend
 
