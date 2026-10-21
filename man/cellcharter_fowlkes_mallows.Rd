@@ -7,10 +7,13 @@
 cellcharter_fowlkes_mallows(labels_a, labels_b)
 }
 \arguments{
-\item{labels_a, labels_b}{Cluster labels of equal length.}
+\item{labels_a, labels_b}{Non-empty atomic vectors or factors containing one
+non-missing cluster label per observation. They must have equal length;
+label names and numeric codes need not agree between the two partitions.}
 }
 \value{
-A scalar in \verb{[0, 1]}.
+One numeric Fowlkes--Mallows pair-agreement score in \verb{[0, 1]}.
+Zero is returned when either partition contains no same-cluster pair.
 }
 \description{
 This is the pair-counting definition used by

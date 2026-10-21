@@ -11,14 +11,18 @@ cellcharter_global_distance_cutoff(
 )
 }
 \arguments{
-\item{adjacency_by_sample}{Named list of sample-local sparse graphs.}
+\item{adjacency_by_sample}{Non-empty uniquely named list of square,
+symmetric, finite non-negative sample-local sparse graphs.}
 
-\item{coordinates_by_sample}{Named list of aligned coordinate matrices.}
+\item{coordinates_by_sample}{List with names identical and in the same order
+as \code{adjacency_by_sample}; each value is an aligned finite x/y matrix with
+one row per graph node.}
 
-\item{percentile}{Distance percentile, normally 99.}
+\item{percentile}{One finite number from 0 through 100; CellCharter uses 99.}
 }
 \value{
-The scalar global distance cutoff.
+One numeric global positive-edge distance quantile, or \code{NA_real_}
+when no sample graph contains a positive-length edge.
 }
 \description{
 CellCharter 0.2.0 builds Delaunay graphs independently by physical sample,

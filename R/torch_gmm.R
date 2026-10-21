@@ -3,8 +3,12 @@
 #' CUDA is used when it is visible to R Torch; otherwise the exact same batched
 #' implementation runs on CPU.  This is deliberately separate from HDF5 I/O:
 #' each chunk is read from disk on CPU, copied once to the device, and released.
-#' @param device `"auto"`, `"cpu"`, or `"cuda"`.
-#' @return A `torch_device` selecting the resolved CPU or CUDA device.
+#' @param device Exactly one of `"auto"`, `"cpu"`, or `"cuda"`. `"auto"`
+#'   resolves to CUDA only when [torch::cuda_is_available()] is true; requesting
+#'   unavailable CUDA raises an error rather than silently falling back.
+#' @return A `torch_device` selecting the resolved CPU or CUDA device. Calling
+#'   this function requires the optional `torch` package and working Lantern
+#'   libraries.
 #' @examplesIf requireNamespace("torch", quietly = TRUE)
 #' cpu_device <- torch_gmm_device("cpu")
 #' cpu_device$type
@@ -138,10 +142,15 @@ torch_gmm_device <- function(device = c("auto", "cuda", "cpu")) {
 #'
 #' The sampled matrix is intentionally the only sizeable object retained on the
 #' R heap during initialisation. It is used for k-means-like mean initialisation.
-#' @param x observation-by-feature matrix or DelayedMatrix.
-#' @param n number of rows to sample.
-#' @param seed random seed.
-#' @return A numeric matrix containing at most `n` sampled rows.
+#' @param x Non-empty numeric observation-by-feature matrix or `DelayedMatrix`;
+#'   sampled blocks must be finite and float32-compatible.
+#' @param n One positive integer requested sample size. If `n > nrow(x)`, all
+#'   rows are returned once in seeded random order; sampling is without
+#'   replacement.
+#' @param seed One non-negative integer passed through [withr::with_seed()] so
+#'   the caller's global RNG state is restored after sampling.
+#' @return A dense numeric matrix containing `min(n, nrow(x))` sampled rows and
+#'   all input features. This sampled matrix is materialised in RAM.
 #' @examplesIf requireNamespace("torch", quietly = TRUE)
 #' x <- matrix(seq_len(20), nrow = 10)
 #' identical(
@@ -525,11 +534,17 @@ torch_gmm_sample_rows <- function(x, n = 10000L, seed = 1L) {
 
 #' Report the Torch execution environment
 #'
-#' @param device Selected Torch device.
-#' @param batch_size Maximum observations per device batch.
-#' @param seed Initialization seed.
-#' @param num_threads Requested CPU thread count, or `NULL` to retain Torch's setting.
-#' @return A named list suitable for checkpoint provenance.
+#' @param device Exactly one of `"auto"`, `"cpu"`, or `"cuda"`, resolved as in
+#'   [torch_gmm_device()]. Explicit unavailable CUDA is an error.
+#' @param batch_size One positive integer giving the maximum observations per
+#'   disk-to-device batch; recorded as provenance without allocating a batch.
+#' @param seed One non-negative integer initialization seed recorded verbatim.
+#' @param num_threads `NULL` to report Torch's current CPU thread count, or one
+#'   positive integer temporarily set while collecting the runtime record. The
+#'   previous Torch setting is restored before return.
+#' @return A named list containing resolved `device`, installed `torch_version`,
+#'   `cuda_available`, visible `gpu_name` when discoverable, `batch_size`,
+#'   `seed`, and effective `cpu_threads`; no model is fitted.
 #' @examplesIf requireNamespace("torch", quietly = TRUE)
 #' info <- torch_gmm_runtime_info(
 #'   device = "cpu", batch_size = 8, seed = 7, num_threads = 1
@@ -589,25 +604,37 @@ torch_gmm_runtime_info <- function(device = "auto", batch_size = 8192L,
 #' aggregation, downstream statistics, and plotting APIs are not affected by
 #' this status.
 #'
-#' @param x observation-by-feature matrix or DelayedMatrix. Rows are read in
-#'   chunks and never materialised jointly.
-#' @param n_clusters number of mixture components.
-#' @param batch_size Maximum observations transferred per E-step, or `"auto"`
-#'   for conservative CUDA-memory-aware selection.
-#' @param max_iter maximum EM iterations.
-#' @param tolerance stop when per-observation NLL change is below this value.
-#' @param covariance_regularization diagonal ridge added before Cholesky.
-#' @param device Torch device selection.
-#' @param seed initialisation seed.
+#' @param x Non-empty numeric observation-by-feature matrix or `DelayedMatrix`.
+#'   Rows are read in chunks; values must be finite and representable as
+#'   float32. A trusted cache created internally by AutoK is also accepted.
+#' @param n_clusters One positive integer no greater than `nrow(x)` giving the
+#'   number of full-covariance mixture components.
+#' @param batch_size One positive integer giving the maximum observations
+#'   transferred per E-step, or `"auto"` for conservative CUDA-memory-aware
+#'   selection. It changes memory/transfer topology, not the fitted objective.
+#' @param max_iter One positive integer maximum number of EM iterations.
+#' @param tolerance One finite positive stopping threshold for the absolute
+#'   change in mean per-observation negative log likelihood.
+#' @param covariance_regularization One finite positive diagonal ridge added
+#'   exactly once before each covariance Cholesky factorization.
+#' @param device Exactly one of `"auto"`, `"cpu"`, or `"cuda"`; see
+#'   [torch_gmm_device()].
+#' @param seed One non-negative integer controlling deterministic initialization.
 #' @param num_threads Requested CPU thread count, or `NULL` to retain Torch's
 #'   current setting.
-#' @param initialization_method `"legacy"` for the original base-R streamed
-#'   initializer or `"torch"` for the accelerated full-data Torch initializer.
-#' @param validate_input Whether to scan every input block for finite values
-#'   before fitting. AutoK may perform this scan once for the whole campaign.
+#' @param initialization_method `"legacy"` for the bounded-memory base-R
+#'   streamed initializer or `"torch"` for the accelerated full-data Torch
+#'   initializer. Both are deterministic for a fixed runtime and seed but are
+#'   not sklearn-RNG-identical.
+#' @param validate_input A single logical. When `TRUE`, scan every input block
+#'   for finite float32-compatible values before fitting. AutoK may safely set
+#'   this to `FALSE` after validating the shared representation once.
 #' @param .oom_retries Internal maximum number of complete-fit CUDA OOM retries.
 #'   AutoK sets this to zero because it owns campaign-level batch-size retries.
-#' @return A `torch_gmm` model.  Only mixture parameters are retained in memory.
+#' @return A serializable `torch_gmm` list containing fitted weights, means,
+#'   full covariance matrices, final/monitored likelihoods, convergence and
+#'   regularization diagnostics, initialization diagnostics, and runtime
+#'   provenance. Observation-level posterior probabilities are not retained.
 #' @examplesIf requireNamespace("torch", quietly = TRUE)
 #' # A tiny, deterministic, CPU-only fit.
 #' x <- rbind(
@@ -919,12 +946,21 @@ torch_gmm_fit <- function(x, n_clusters, batch_size = 8192L, max_iter = 100L,
        chol = .rc_cholesky(covs, model$covariance_regularization, eye))
 }
 
-#' Posterior GMM probabilities in bounded-size batches
-#' @param model a fitted `torch_gmm`.
-#' @param newdata observation-by-feature matrix or DelayedMatrix.
-#' @param batch_size disk-to-device chunk size.
-#' @param device Torch device selection.
-#' @return A numeric observation-by-component posterior-probability matrix.
+#' Posterior GMM probabilities computed in bounded-size batches
+#' @param model A valid fitted `torch_gmm` containing numeric component weights,
+#'   means, full covariance matrices, feature count, cluster count, and positive
+#'   covariance regularization as returned by [torch_gmm_fit()].
+#' @param newdata Non-empty numeric observation-by-feature matrix or
+#'   `DelayedMatrix` with exactly `model$n_features` columns and finite,
+#'   float32-compatible values. Returned rows preserve this observation order.
+#' @param batch_size Positive disk-to-device row chunk size. It bounds temporary
+#'   scoring tensors, but the complete observation-by-component result is still
+#'   allocated and returned in RAM.
+#' @param device Exactly one of `"auto"`, `"cpu"`, or `"cuda"`; see
+#'   [torch_gmm_device()]. Model parameters and each input block are copied to
+#'   the resolved device for scoring.
+#' @return A dense numeric observation-by-component posterior-probability matrix
+#'   in RAM. Rows follow `newdata`; columns follow the fitted component order.
 #' @examplesIf requireNamespace("torch", quietly = TRUE)
 #' model <- structure(list(
 #'   means = rbind(c(-1, -1), c(1, 1)),
@@ -954,6 +990,9 @@ torch_gmm_predict_proba <- function(model, newdata, batch_size = 8192L, device =
 
 #' Predict CellCharter domain labels from a Torch GMM
 #' @inheritParams torch_gmm_predict_proba
+#' @param batch_size Positive disk-to-device row chunk size. Only one
+#'   `batch_size`-by-K score block and the final length-N integer label vector
+#'   are retained; a complete N-by-K probability matrix is never allocated.
 #' @return A zero-based integer label vector matching CellCharter's Python
 #'   component convention.
 #' @examplesIf requireNamespace("torch", quietly = TRUE)
@@ -993,6 +1032,9 @@ predict.torch_gmm <- function(object, newdata, ...) torch_gmm_predict(object, ne
 
 #' Streamed mean log likelihood
 #' @inheritParams torch_gmm_predict_proba
+#' @param batch_size Positive disk-to-device row chunk size. Only one
+#'   `batch_size`-by-K score block and a scalar running sum are retained; a
+#'   complete N-by-K result is never allocated.
 #' @return Mean per-observation log likelihood under `model`.
 #' @examplesIf requireNamespace("torch", quietly = TRUE)
 #' model <- structure(list(

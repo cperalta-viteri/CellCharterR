@@ -5,7 +5,7 @@
 \title{Fit one fixed-K model and attach its domains}
 \usage{
 cellcharter_cluster_fixed(
-  sce,
+  spe,
   representation = "X_cellcharter",
   n_clusters,
   domain_col = "cellcharter_domain",
@@ -19,28 +19,47 @@ cellcharter_cluster_fixed(
 )
 }
 \arguments{
-\item{sce}{An aggregated \code{SingleCellExperiment} or \code{SpatialExperiment}.}
+\item{spe}{An aggregated \code{SpatialExperiment} with a current aggregation
+stage for \code{representation}.}
 
-\item{representation}{Aggregated representation in \code{reducedDims(sce)}.}
+\item{representation}{Name of the numeric spot-by-feature matrix in
+\code{reducedDims(spe)} used for fitting and prediction.}
 
-\item{n_clusters}{Exact number of mixture components to fit.}
+\item{n_clusters}{Positive integer number of mixture components, not greater
+than the number of spots. Exactly this K is fitted once.}
 
-\item{domain_col}{Output column in \code{colData(sce)}.}
+\item{domain_col}{Name of the zero-based factor labels written to
+\code{colData(spe)}. Fit metadata is written to
+\code{metadata(spe)$CellCharterR$fixed_k[[domain_col]]}, and stage provenance to
+\code{metadata(spe)$CellCharterR$stages[[paste0("clustering:", domain_col)]]}.}
 
-\item{checkpoint_dir}{Optional durable checkpoint directory.}
+\item{checkpoint_dir}{\code{NULL} or a non-empty durable directory. When set, the
+completed model and labels are written atomically to
+\verb{fixed_k<n_clusters>.rds}; metadata then records the normalized path rather
+than embedding the model and labels.}
 
-\item{seed}{Deterministic GMM initialization seed.}
+\item{seed}{Non-negative integer initialization seed passed to \code{fit_fun} and
+included in checkpoint compatibility.}
 
-\item{fit_args, predict_args}{Named additional arguments for \code{fit_fun} and
-\code{predict_fun}, respectively.}
+\item{fit_args}{Named list of additional arguments passed to \code{fit_fun}.
+It must not contain \code{x}, \code{n_clusters}, or \code{seed}.}
 
-\item{resume}{Reuse an exact compatible completed checkpoint when available.}
+\item{predict_args}{Named list of additional arguments passed to
+\code{predict_fun}. It must not contain \code{model} or \code{newdata}.}
 
-\item{fit_fun, predict_fun}{Fitting and prediction hooks. Their defaults are
-\code{\link[=torch_gmm_fit]{torch_gmm_fit()}} and \code{\link[=torch_gmm_predict]{torch_gmm_predict()}}.}
+\item{resume}{A single logical value. When \code{TRUE}, reuse a complete checkpoint
+only if spot order, representation, aggregation stage, K, seed, arguments,
+and fitting implementations all match exactly.}
+
+\item{fit_fun}{Function called as \code{fit_fun(x, n_clusters, seed, ...)}.
+The default is \code{\link[=torch_gmm_fit]{torch_gmm_fit()}}.}
+
+\item{predict_fun}{Function called as \code{predict_fun(model, newdata, ...)}.
+The default is \code{\link[=torch_gmm_predict]{torch_gmm_predict()}}.}
 }
 \value{
-The updated experiment with factor labels in \code{domain_col}.
+The updated \code{SpatialExperiment} with factor labels in
+\code{colData(spe)[[domain_col]]} and fit provenance in metadata.
 }
 \description{
 Unlike \code{\link[=cellcharter_cluster]{cellcharter_cluster()}}, this function performs exactly one GMM fit
@@ -51,7 +70,7 @@ AutoK stability. A completed checkpoint can be resumed after interruption.
 
 Fixed-K fitting uses the experimental R Torch GMM path by default. For
 multi-million-observation datasets, consider fitting with Python CellCharter
-and storing its labels directly in \code{colData(sce)}.
+and storing its labels directly in \code{colData(spe)}.
 }
 
 \examples{

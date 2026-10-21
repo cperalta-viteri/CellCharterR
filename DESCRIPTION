@@ -5,7 +5,7 @@ Authors@R: c(person(given = "Christian", family = "Peralta Viteri", role = c("au
 Author: Christian Peralta Viteri [aut, cre]
 Maintainer: Christian Peralta Viteri <christian_94_97@hotmail.com>
 Description: Implements a reproducible, disk-backed workflow for identifying
-    spatial domains in SpatialExperiment and SingleCellExperiment data. It
+    spatial domains in SpatialExperiment data. It
     constructs sample-local
     spatial graphs, aggregates exclusive graph-hop representations, fits
     batched full-covariance Gaussian mixture models with R Torch or an

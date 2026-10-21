@@ -30,14 +30,14 @@
   )
 }
 
-.cc_result_graph_sha256 <- function(sce, graph_name,
+.cc_result_graph_sha256 <- function(spe, graph_name,
                                     target_block_edges = 1000000L) {
-  if (!graph_name %in% SingleCellExperiment::colPairNames(sce)) {
-    stop("SCE colPairs lacks graph `", graph_name, "`.", call. = FALSE)
+  if (!graph_name %in% SingleCellExperiment::colPairNames(spe)) {
+    stop("SPE colPairs lacks graph `", graph_name, "`.", call. = FALSE)
   }
-  pairs <- SingleCellExperiment::colPair(sce, graph_name)
-  if (!identical(S4Vectors::nnode(pairs), ncol(sce))) {
-    stop("SCE graph `", graph_name,
+  pairs <- SingleCellExperiment::colPair(spe, graph_name)
+  if (!identical(S4Vectors::nnode(pairs), ncol(spe))) {
+    stop("SPE graph `", graph_name,
          "` has dimensions inconsistent with its observations.", call. = FALSE)
   }
   starts <- if (length(pairs)) {
@@ -53,7 +53,7 @@
     values <- if (ncol(metadata)) metadata[[1L]] else rep.int(1, length(block))
     if ((!is.numeric(values) && !is.logical(values)) || anyNA(values) ||
         any(!is.finite(values))) {
-      stop("SCE graph `", graph_name,
+      stop("SPE graph `", graph_name,
            "` must store finite numeric edge values.", call. = FALSE)
     }
     keep <- values != 0
@@ -81,38 +81,38 @@
   )
 }
 
-.cc_result_input_sha256 <- function(sce, spec) {
+.cc_result_input_sha256 <- function(spe, spec) {
   if (identical(spec$kind, "colData")) {
     return(.cc_result_vector_sha256(
-      .cc_sce_coldata(sce, spec$name, paste0("result input `", spec$name, "`"))
+      .cc_spe_coldata(spe, spec$name, paste0("result input `", spec$name, "`"))
     ))
   }
   if (identical(spec$kind, "domain")) {
-    return(.cc_result_vector_sha256(.cc_sce_raw_domain(sce, spec$name)))
+    return(.cc_result_vector_sha256(.cc_spe_raw_domain(spe, spec$name)))
   }
   if (identical(spec$kind, "weighted_graph")) {
-    return(.cc_result_graph_sha256(sce, spec$name))
+    return(.cc_result_graph_sha256(spe, spec$name))
   }
   if (identical(spec$kind, "zonation_scores")) {
-    return(.cc_zonation_score_sha256(sce, spec$scores, spec$assay_name))
+    return(.cc_zonation_score_sha256(spe, spec$scores, spec$assay_name))
   }
   stop("Unknown CellCharterR result-input kind `", spec$kind, "`.", call. = FALSE)
 }
 
-.cc_result_inputs <- function(sce, specs) {
+.cc_result_inputs <- function(spe, specs) {
   if (is.null(specs)) return(list())
   if (!is.list(specs) || is.null(names(specs)) || any(!nzchar(names(specs))) ||
       anyDuplicated(names(specs))) {
     stop("Result input specifications must be a uniquely named list.", call. = FALSE)
   }
   lapply(specs, function(spec) {
-    c(spec, list(sha256 = .cc_result_input_sha256(sce, spec)))
+    c(spec, list(sha256 = .cc_result_input_sha256(spe, spec)))
   })
 }
 
-.cc_sce_require_result <- function(sce, result_name, context = "Stored result") {
-  identity <- .cc_validate_sce_identity(sce)
-  record <- .cc_sce_metadata(sce)$results[[result_name]]
+.cc_spe_require_result <- function(spe, result_name, context = "Stored result") {
+  identity <- .cc_validate_spe_identity(spe)
+  record <- .cc_spe_metadata(spe)$results[[result_name]]
   if (is.null(record) || is.null(record$value)) {
     stop(context, " `", result_name, "` is not available; recompute it.",
          call. = FALSE)
@@ -124,7 +124,7 @@
          "` has incomplete identity metadata; recompute it.", call. = FALSE)
   }
   if (has_n_cells &&
-      (!identical(record$n_cells, ncol(sce)) ||
+      (!identical(record$n_cells, ncol(spe)) ||
        !identical(record$cell_order_sha256, identity$cell_order_sha256))) {
     stop(context, " `", result_name,
          "` is stale after observation reordering or subsetting; recompute it.",
@@ -148,7 +148,7 @@
   }
   for (label in names(fingerprints %||% list())) {
     fingerprint <- fingerprints[[label]]
-    current <- try(.cc_result_input_sha256(sce, fingerprint), silent = TRUE)
+    current <- try(.cc_result_input_sha256(spe, fingerprint), silent = TRUE)
     if (inherits(current, "try-error") ||
         !identical(current, fingerprint$sha256)) {
       stop(context, " `", result_name, "` is stale because its `", label,

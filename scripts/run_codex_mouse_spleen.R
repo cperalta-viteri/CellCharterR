@@ -2,7 +2,7 @@
 
 # Checkpointed R reproduction of the CellCharter CODEX mouse-spleen workflow.
 # Large matrices stay HDF5-backed and the analysis state is orchestrated by a
-# SingleCellExperiment. Set CODEX_STAGES to a comma-separated subset to resume
+# SpatialExperiment. Set CODEX_STAGES to a comma-separated subset to resume
 # particular stages
 # (representation,graph,aggregation,autok,tutorial_k11,downstream,report).
 
@@ -11,7 +11,15 @@ suppressPackageStartupMessages({
   library(HDF5Array)
   library(Matrix)
 })
-source("R/sce_workflow.R")
+source("R/spe_workflow.R")
+
+# Frozen checkpoint-contract regions below retain their historical local names
+# so completed mouse-spleen artifacts remain reusable after the public SPE
+# migration. These aliases are compatibility-only and are not package APIs.
+read_codex_sce <- read_codex_spe
+.cc_validate_sce_identity <- function(sce, ...) {
+  .cc_validate_spe_identity(.cc_legacy_sce_as_spe(sce), ...)
+}
 source("R/aggregation.R")
 source("R/torch_gmm.R")
 source("R/cpp_gmm.R")
@@ -137,7 +145,7 @@ if (!graph_source %in% c("r_published", "r_pinned_global", "official")) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   temporary <- tempfile(paste0(".", basename(path), "-"), dirname(path), ".tmp")
   on.exit(unlink(temporary), add = TRUE)
-  # The SCE stores only HDF5 seeds and metadata here. Base serialization keeps
+  # The SPE stores only HDF5 seeds and metadata here. Base serialization keeps
   # those lazy references without asking S4Vectors to realize out-of-memory
   # assays; the referenced HDF5 files are separately checksummed in metadata.
   base::saveRDS(object, temporary, compress = FALSE)
@@ -227,6 +235,45 @@ if (!graph_source %in% c("r_published", "r_pinned_global", "official")) {
     return(TRUE)
   }
   FALSE
+}
+.adopt_renamed_contract <- function(stage, expected, artifacts,
+                                    legacy_implementation_digest) {
+  adopted <- .cc_adopt_legacy_implementation_contract(
+    .contract_path(stage), expected, artifacts,
+    allowed_implementation_digests = legacy_implementation_digest,
+    allowed_version_values = list(CellCharterR = "0.2.0.9000")
+  )
+  if (is.null(adopted)) {
+    legacy <- try(readRDS(.contract_path(stage)), silent = TRUE)
+    if (!inherits(legacy, "try-error") &&
+        identical(legacy$expected_contract$implementation_digest,
+                  legacy_implementation_digest)) {
+      normalized <- legacy$expected_contract
+      normalized$implementation_digest <- expected$implementation_digest
+      if (identical(normalized$versions$CellCharterR, "0.2.0.9000")) {
+        normalized$versions$CellCharterR <- expected$versions$CellCharterR
+      }
+      normalized$contract_id <- expected$contract_id
+      fields <- setdiff(names(expected), "contract_id")
+      changed <- fields[!vapply(
+        fields, function(field) identical(normalized[[field]], expected[[field]]),
+        logical(1L)
+      )]
+      if (length(changed)) {
+        message(
+          "CellCharterR checkpoint compatibility: legacy `", stage,
+          "` contract also differs in ", paste(changed, collapse = ", "),
+          "; it will not be reused."
+        )
+      }
+    }
+    return(expected)
+  }
+  message(
+    "CellCharterR checkpoint compatibility: reusing the verified pre-SPE-rename `",
+    stage, "` contract; artifact bytes and all scientific contract fields match."
+  )
+  adopted
 }
 
 .hdf5_seed_identity <- function(value) {
@@ -512,6 +559,13 @@ if (parameters_updated) {
 # Legacy additions above are deliberately in-memory only. The immutable SCE
 # checkpoint is never rewritten during validation/migration.
 representation_artifacts <- c(sce = sce_path)
+if (!representation_created) {
+  representation_contract <- .adopt_renamed_contract(
+    "representation", representation_contract, representation_artifacts,
+    legacy_implementation_digest =
+      "e751fa359f31a98fd89cd257fa0112192dd1f6364797768e83631e09e2524bc0"
+  )
+}
 if (representation_created) {
   cellcharter_record_checkpoint(
     representation_contract, representation_artifacts,
@@ -1996,6 +2050,11 @@ if (downstream_checkpoint_complete) {
         "k11_agreement", "sce")
     )
     downstream_artifacts <- c(manifest = downstream_manifest_path, downstream_artifacts)
+    downstream_contract <- .adopt_renamed_contract(
+      "downstream", downstream_contract, downstream_artifacts,
+      legacy_implementation_digest =
+        "dfa6fa0517c74ad279101eb35f7a8d70bcc0d585ff0af6492e4958c0075bab4f"
+    )
     downstream_checkpoint_complete <- .require_contract(
       "downstream", downstream_contract, downstream_artifacts
     )

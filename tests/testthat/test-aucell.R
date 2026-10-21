@@ -12,6 +12,10 @@ make_aucell_spe <- function(x, delayed = FALSE, sparse = FALSE,
   spe
 }
 
+test_that("AUCell names its SpatialExperiment argument spe", {
+  expect_identical(names(formals(cellcharter_aucell))[[1L]], "spe")
+})
+
 test_that("AUCell uses the strict cutoff and normalized denominator", {
   x <- cbind(
     s1 = c(5, 4, 3, 2, 1),
@@ -19,7 +23,7 @@ test_that("AUCell uses the strict cutoff and normalized denominator", {
   )
   rownames(x) <- paste0("g", seq_len(nrow(x)))
   observed <- cellcharter_aucell(
-    make_aucell_spe(x),
+    spe = make_aucell_spe(x),
     list(A = c("g1", "g3"), B = "g4", C = c("g1", "g2", "g3", "g4")),
     auc_max_rank = 4, tie_method = "ordinal", threads = 2L,
     progress = FALSE

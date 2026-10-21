@@ -26,18 +26,18 @@ dir.create("data", recursive = TRUE, showWarnings = FALSE)
 source_sha256 <- digest::digest(file = source_rds, algo = "sha256", serialize = FALSE)
 k11_sha256 <- digest::digest(file = k11_rds, algo = "sha256", serialize = FALSE)
 source <- readRDS(source_rds)
-if (!inherits(source, "SingleCellExperiment")) {
-  stop("The source checkpoint is not a SingleCellExperiment.")
+if (!inherits(source, "SpatialExperiment")) {
+  stop("The source checkpoint is not a SpatialExperiment.")
 }
 ids <- colnames(source)
 if (is.null(ids) || anyNA(ids) || anyDuplicated(ids)) {
-  stop("The source SCE must have complete, unique cell identifiers.")
+  stop("The source SPE must have complete, unique spot identifiers.")
 }
 if (tiny_n > ncol(source)) stop("Tiny size exceeds the number of source spots.")
 
 k11 <- readRDS(k11_rds)
 if (!identical(k11$cell_ids, ids) || length(k11$labels) != length(ids) || anyNA(k11$labels)) {
-  stop("Standalone K=11 labels do not exactly align with the source SCE.")
+  stop("Standalone K=11 labels do not exactly align with the source SPE.")
 }
 
 col_data <- SummarizedExperiment::colData(source)
@@ -61,11 +61,7 @@ reduced <- lapply(source_reduced_names, function(name) {
   value
 })
 names(reduced) <- source_reduced_names
-spatial <- if (inherits(source, "SpatialExperiment")) {
-  as.matrix(SpatialExperiment::spatialCoords(source))
-} else {
-  as.matrix(SingleCellExperiment::reducedDim(source, "spatial"))
-}
+spatial <- as.matrix(SpatialExperiment::spatialCoords(source))
 rownames(spatial) <- ids
 colnames(spatial) <- c("x", "y")
 
@@ -123,7 +119,7 @@ stopifnot(
 full_path <- file.path(output_dir, "CellCharterR_mouse_spleen_sce.rds")
 full_tmp <- paste0(full_path, ".partial")
 saveRDS(portable, full_tmp, compress = "gzip", version = 3L)
-if (!file.rename(full_tmp, full_path)) stop("Could not publish the full portable SCE.")
+if (!file.rename(full_tmp, full_path)) stop("Could not publish the full portable SPE.")
 full_sha256 <- digest::digest(file = full_path, algo = "sha256", serialize = FALSE)
 
 # Select the teaching spots directly from the portable object, never from the

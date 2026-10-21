@@ -7,13 +7,21 @@
 torch_gmm_predict(model, newdata, batch_size = 8192L, device = "auto")
 }
 \arguments{
-\item{model}{a fitted \code{torch_gmm}.}
+\item{model}{A valid fitted \code{torch_gmm} containing numeric component weights,
+means, full covariance matrices, feature count, cluster count, and positive
+covariance regularization as returned by \code{\link[=torch_gmm_fit]{torch_gmm_fit()}}.}
 
-\item{newdata}{observation-by-feature matrix or DelayedMatrix.}
+\item{newdata}{Non-empty numeric observation-by-feature matrix or
+\code{DelayedMatrix} with exactly \code{model$n_features} columns and finite,
+float32-compatible values. Returned rows preserve this observation order.}
 
-\item{batch_size}{disk-to-device chunk size.}
+\item{batch_size}{Positive disk-to-device row chunk size. Only one
+\code{batch_size}-by-K score block and the final length-N integer label vector
+are retained; a complete N-by-K probability matrix is never allocated.}
 
-\item{device}{Torch device selection.}
+\item{device}{Exactly one of \code{"auto"}, \code{"cpu"}, or \code{"cuda"}; see
+\code{\link[=torch_gmm_device]{torch_gmm_device()}}. Model parameters and each input block are copied to
+the resolved device for scoring.}
 }
 \value{
 A zero-based integer label vector matching CellCharter's Python

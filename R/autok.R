@@ -4,8 +4,11 @@
 #' `sklearn.metrics.fowlkes_mallows_score`, the default similarity function in
 #' CellCharter 0.2.0. Cluster names do not need to agree between the inputs.
 #'
-#' @param labels_a,labels_b Cluster labels of equal length.
-#' @return A scalar in `[0, 1]`.
+#' @param labels_a,labels_b Non-empty atomic vectors or factors containing one
+#'   non-missing cluster label per observation. They must have equal length;
+#'   label names and numeric codes need not agree between the two partitions.
+#' @return One numeric Fowlkes--Mallows pair-agreement score in `[0, 1]`.
+#'   Zero is returned when either partition contains no same-cluster pair.
 #' @examples
 #' labels_a <- c(1L, 1L, 2L, 2L)
 #' labels_b <- c("a", "a", "b", "b")
@@ -654,36 +657,56 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #'
 #' Reproduces the neighboring-K stability algorithm in CellCharter 0.2.0. For
 #' every run, labels at K are compared with all earlier-run labels at K+1. The
-#' two edges incident to each interior K are then mirrored and combined. Fits
-#' are checkpointed individually before stability is updated, so an interrupted
-#' analysis resumes without repeating completed fits.
+#' two edges incident to each interior K are then mirrored and combined. With
+#' `checkpoint_mode = "fit"`, fits are checkpointed individually before
+#' stability is updated. The compiled backend also supports atomic per-round
+#' checkpoints or a no-checkpoint run, with the trade-offs described below.
 #'
 #' @section Experimental status:
-#' The R AutoK fitting path is experimental for multi-million-observation
-#' datasets because repeated R Torch GMM fits may be substantially slower than
-#' Python CellCharter. Its outputs and stability utilities remain available for
-#' validation and moderate-size analyses. External Python domain labels can be
-#' stored directly in `colData(sce)` for downstream R analysis.
+#' The compiled CPU backend (`backend = "cpp"`) is the supported scalable path.
+#' The optional R Torch backend remains experimental for large datasets because
+#' repeated fits can be substantially slower and more memory-sensitive. Both
+#' backends return the same AutoK result structure, but their deterministic
+#' initializers are not expected to produce identical cluster labels.
 #'
-#' @param x Observation-by-feature matrix accepted by `fit_fun`.
+#' @param x Non-empty numeric observation-by-feature matrix-like object. The
+#'   built-in Torch backend accepts matrices and `DelayedMatrix` inputs; the C++
+#'   backend materialises the representation once as a dense double matrix.
+#'   Assays are never read implicitly.
 #' @param n_clusters A numeric vector of exactly two integer bounds for
 #'   selectable K. The fitted grid is expanded by one at each boundary, as in
 #'   a CellCharter Python tuple. Longer numeric vectors are rejected to prevent
 #'   silently treating their endpoints as non-selectable sentinels. An R list
 #'   instead denotes an already-expanded consecutive grid whose first and last
 #'   values are the explicit sentinel K values.
-#' @param checkpoint_dir Directory for atomic per-fit and state checkpoints.
-#' @param max_runs Maximum repeated fits for each K.
+#' @param checkpoint_dir One non-empty path. It is used when `checkpoint_mode`
+#'   is `"fit"` or `"round"`: per-fit mode writes one artifact per K and run,
+#'   whereas round mode writes one atomic bundle after all K values in a run
+#'   finish. A path is still required syntactically with
+#'   `checkpoint_mode = "none"`, but no directory or checkpoint is created and
+#'   completed models and labels remain embedded in the returned object.
+#' @param max_runs Positive maximum number of repeated fits for each K. Each run
+#'   uses one seed across the fitted K grid; convergence can stop the campaign
+#'   after the third completed run.
 #' @param convergence_tol Stop when the MAPE between consecutive stability
 #'   curves is below this non-negative threshold. The first possible stop is
 #'   after run three, matching CellCharter 0.2.0.
 #' @param seed Base seed. Run `i` uses `seed + i - 1` for every K.
-#' @param fit_fun Function called as `fit_fun(x, n_clusters, seed, ...)`.
-#' @param predict_fun Function called as `predict_fun(model, newdata, ...)`.
-#' @param nll_fun Function returning the model's scalar negative log-likelihood.
-#' @param similarity_fun Label-agreement function. Defaults to the
-#'   Fowlkes--Mallows score.
-#' @param fit_args,predict_args Additional named arguments for the hooks.
+#' @param fit_fun `NULL` for the selected built-in backend, or a custom function
+#'   called as `fit_fun(x, n_clusters, seed, ...)` in per-fit checkpoint mode.
+#'   Custom hooks are not supported by `backend = "cpp"`.
+#' @param predict_fun `NULL` for the selected built-in backend, or a custom
+#'   function called as `predict_fun(model, newdata, ...)`. It must return one
+#'   non-missing label per row of `newdata`.
+#' @param nll_fun `NULL` for the selected built-in backend, or a custom function
+#'   returning one finite scalar negative log likelihood for model selection.
+#' @param similarity_fun Function accepting two equal-length label vectors and
+#'   returning one finite scalar agreement score. The default is
+#'   [cellcharter_fowlkes_mallows()].
+#' @param fit_args,predict_args Named lists forwarded to the fitting and
+#'   prediction hooks. Reserved call arguments cannot be overridden. With the
+#'   C++ backend, `fit_args` may contain only `max_iter`, `tolerance`, and
+#'   `covariance_regularization`, and `predict_args` must be empty.
 #' @param data_id Optional immutable upstream provenance ID. Independently of
 #'   this value, AutoK computes a bounded-memory SHA-256 fingerprint of the
 #'   numerical representation and combines it with scientifically material
@@ -700,27 +723,42 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #'   arguments. A committed campaign with
 #'   a different representation, fitting contract, or execution contract fails
 #'   closed and is never overwritten during resume.
-#' @param resume Reuse matching fully committed runs. Historical stability is
+#' @param resume A single logical. When `TRUE`, reuse matching fully committed
+#'   runs. Historical stability is
 #'   restored without recomputation; artifacts from an interrupted final run
 #'   are moved to a recoverable `quarantine/` directory and that run restarts
 #'   from its first K.
-#' @param cache_representation Either `"none"` for the bounded-memory reader or
-#'   `"ram"` to materialise only the observation-by-feature representation once
-#'   as a CPU float32 Torch tensor and reuse it throughout AutoK. The latter can
-#'   substantially accelerate repeated GPU fits and never materialises assays.
-#' @param backend GMM implementation. `"torch"` preserves the original path;
-#'   `"cpp"` fits all requested K values for a run through `cpp_gmm_fit_many()`.
-#' @param workers,threads_per_fit Positive parallelism controls for the C++ backend.
-#' @param progress Whether to emit C++ round progress and estimated time remaining.
+#' @param cache_representation Torch-backend representation policy. `"none"`
+#'   streams through the bounded-memory reader; `"ram"` materialises only the
+#'   observation-by-feature representation once as a CPU float32 Torch tensor
+#'   and reuses it. It never materialises assays. The C++ backend always
+#'   materialises this representation once as a double matrix and therefore
+#'   ignores this Torch-only setting. Custom fitting hooks require `"none"`.
+#' @param backend Exactly `"cpp"` for the supported compiled double-precision
+#'   CPU backend or `"torch"` for the experimental float32 R Torch backend.
+#'   C++ fits requested K values through [cpp_gmm_fit_many()].
+#' @param workers Positive number of independent K fits that the C++ backend may
+#'   run concurrently. This controls between-fit parallelism and has no effect
+#'   for `backend = "torch"`.
+#' @param threads_per_fit Positive number of native threads used within each C++
+#'   fit. The implementation caps the product of `workers` and
+#'   `threads_per_fit` at 32 to avoid nested oversubscription. It has no effect
+#'   for `backend = "torch"`.
+#' @param progress A single logical controlling status messages. For compiled
+#'   rounds this includes completed-fit counts and estimated time remaining.
 #' @param checkpoint_mode Checkpoint granularity. `"fit"` writes the historical
 #'   per-K artifacts immediately and therefore runs C++ K values sequentially;
 #'   an interruption loses at most the active K. `"round"` parallelizes K fits
 #'   and writes one atomic bundle after the complete C++ round; an interrupted
 #'   active round is recomputed. `"none"` performs no writes, parallelizes K
-#'   fits, and retains every model and label vector in RAM.
-#' @return A `cellcharter_autok` object containing stability, convergence
-#'   history, and paths to the lowest-NLL model checkpoint for every K. Label
-#'   vectors remain in the per-fit RDS files rather than being duplicated in RAM.
+#'   fits, and retains every model and label vector in RAM. `"round"` and
+#'   `"none"` require `backend = "cpp"`; Torch and custom-hook runs use `"fit"`.
+#' @return A `cellcharter_autok` object containing the fitted/selectable K grids,
+#'   repeated stability values, convergence history, lowest-negative-log-
+#'   likelihood index, selected K, representation fingerprint, and numerical
+#'   execution contract. In `"fit"` and `"round"` modes the index points to
+#'   durable RDS artifacts; in `"none"` mode the best model and labels for every
+#'   K are embedded in `embedded_best_artifacts` and no path is written.
 #' @examples
 #' # Small deterministic hooks keep this example fast and independent of a GPU.
 #' toy <- rbind(c(-2, -2), c(-2, -1), c(-1, -2),
@@ -1700,8 +1738,11 @@ cellcharter_autok_fit <- function(
 
 #' Return the most stable K from an AutoK fit
 #'
-#' @param object A fitted `cellcharter_autok` object.
-#' @return The first K attaining the maximum mean mirrored stability.
+#' @param object A valid `cellcharter_autok` result returned by
+#'   [cellcharter_autok_fit()] with at least two completed runs and non-`NULL`
+#'   `stability_mean` values aligned to `candidate_k`.
+#' @return One integer: the first selectable K attaining the maximum mean
+#'   mirrored neighboring-K Fowlkes--Mallows stability.
 #' @examples
 #' autok <- structure(
 #'   list(candidate_k = 2:4, stability_mean = c(0.7, 0.9, 0.8)),
@@ -1719,9 +1760,14 @@ cellcharter_autok_best_k <- function(object) {
 
 #' Load the lowest-NLL model fitted for K
 #'
-#' @param object A fitted `cellcharter_autok` object.
-#' @param k Cluster count. Defaults to the most stable K.
-#' @return The checkpointed fitted model.
+#' @param object A valid `cellcharter_autok` result returned by
+#'   [cellcharter_autok_fit()]. Its selected-artifact index and any referenced
+#'   checkpoint files must remain intact.
+#' @param k `NULL` to use [cellcharter_autok_best_k()], or one positive fitted
+#'   cluster count present exactly once in `object$best_index`.
+#' @return The lowest-negative-log-likelihood fitted model for `k`, loaded from
+#'   its durable checkpoint when checkpointing was enabled or returned from the
+#'   embedded best artifact when `checkpoint_mode = "none"`.
 #' @examples
 #' checkpoint <- tempfile(fileext = ".rds")
 #' saveRDS(list(model = list(n_clusters = 2L, device = "cpu")), checkpoint)
@@ -1778,11 +1824,14 @@ cellcharter_autok_model <- function(object, k = NULL) {
 #' AutoK range (notably K = 1) is retained with an `NA` mean, because stability
 #' cannot be estimated without fitted solutions on both neighboring K values.
 #'
-#' @param object A fitted `cellcharter_autok` object.
-#' @param k_range Integer K values to display. Defaults to the inclusive range
-#'   from one through the largest selectable K.
-#' @param highlight_k K values to mark for interpretation, such as a published
-#'   sensitivity analysis. Highlighting does not alter selection.
+#' @param object A valid `cellcharter_autok` result with repeated `stability`,
+#'   aligned `stability_mean`, `candidate_k`, and `best_k` fields.
+#' @param k_range `NULL` for the inclusive range from one through the largest
+#'   selectable K, or unique increasing positive integers to display. Values
+#'   outside the selectable range are retained with non-estimable `NA` means.
+#' @param highlight_k A possibly empty vector of positive integer K values to
+#'   mark for interpretation, such as a published sensitivity fit.
+#'   Highlighting never changes AutoK selection.
 #' @return A list with `summary` (one row per displayed K) and `scores`
 #'   (the saved repeated stability values in long form).
 #' @examples
@@ -1858,7 +1907,8 @@ cellcharter_autok_stability_data <- function(
 #' K values. It never recomputes or substitutes a proxy for AutoK stability.
 #'
 #' @inheritParams cellcharter_autok_stability_data
-#' @param title Plot title.
+#' @param title `NULL` for no title or one character plot title passed to
+#'   [ggplot2::labs()].
 #' @return A `ggplot` object. The exact diagnostic tables are attached as the
 #'   `cellcharter_stability_data` attribute for durable checkpointing.
 #' @examplesIf requireNamespace("ggplot2", quietly = TRUE)

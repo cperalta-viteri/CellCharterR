@@ -1,15 +1,15 @@
-.cc_zonation_scores <- function(sce, scores, assay_name) {
-  .cc_validate_sce_identity(sce, reduced_dims = NULL)
+.cc_zonation_scores <- function(spe, scores, assay_name) {
+  .cc_validate_spe_identity(spe, reduced_dims = NULL)
   if (!is.character(scores) || length(scores) != 1L || is.na(scores) || !nzchar(scores)) {
     stop("`scores` must name one altExp or reducedDim.", call. = FALSE)
   }
-  if (scores %in% SingleCellExperiment::altExpNames(sce)) {
-    alternative <- SingleCellExperiment::altExp(sce, scores)
+  if (scores %in% SingleCellExperiment::altExpNames(spe)) {
+    alternative <- SingleCellExperiment::altExp(spe, scores)
     if (!assay_name %in% SummarizedExperiment::assayNames(alternative)) {
       stop("altExp `", scores, "` lacks assay `", assay_name, "`.", call. = FALSE)
     }
     value <- SummarizedExperiment::assay(alternative, assay_name)
-    if (ncol(value) != ncol(sce)) {
+    if (ncol(value) != ncol(spe)) {
       stop("AUCell altExp assay must have one column per spot.", call. = FALSE)
     }
     programs <- rownames(value)
@@ -18,9 +18,9 @@
       t(as.matrix(value[selected, rows, drop = FALSE]))
     }
     source <- paste0("altExp:", scores, "/assay:", assay_name)
-  } else if (scores %in% SingleCellExperiment::reducedDimNames(sce)) {
-    value <- SingleCellExperiment::reducedDim(sce, scores, withDimnames = TRUE)
-    if (nrow(value) != ncol(sce)) {
+  } else if (scores %in% SingleCellExperiment::reducedDimNames(spe)) {
+    value <- SingleCellExperiment::reducedDim(spe, scores, withDimnames = TRUE)
+    if (nrow(value) != ncol(spe)) {
       stop("AUCell reducedDim must have one row per spot.", call. = FALSE)
     }
     programs <- colnames(value)
@@ -30,7 +30,7 @@
     }
     source <- paste0("reducedDim:", scores)
   } else {
-    stop("SCE lacks AUCell score source `", scores, "`.", call. = FALSE)
+    stop("SpatialExperiment lacks AUCell score source `", scores, "`.", call. = FALSE)
   }
   numeric_value <- is.numeric(value) ||
     (inherits(value, "DelayedArray") &&
@@ -44,32 +44,32 @@
        orientation = orientation)
 }
 
-.cc_zonation_score_sha256 <- function(sce, scores, assay_name) {
-  .cc_validate_sce_identity(sce, reduced_dims = NULL)
-  if (scores %in% SingleCellExperiment::altExpNames(sce)) {
-    alternative <- SingleCellExperiment::altExp(sce, scores)
+.cc_zonation_score_sha256 <- function(spe, scores, assay_name) {
+  .cc_validate_spe_identity(spe, reduced_dims = NULL)
+  if (scores %in% SingleCellExperiment::altExpNames(spe)) {
+    alternative <- SingleCellExperiment::altExp(spe, scores)
     if (!assay_name %in% SummarizedExperiment::assayNames(alternative)) {
       stop("altExp `", scores, "` lacks assay `", assay_name, "`.", call. = FALSE)
     }
     value <- SummarizedExperiment::assay(alternative, assay_name)
-  } else if (scores %in% SingleCellExperiment::reducedDimNames(sce)) {
-    value <- SingleCellExperiment::reducedDim(sce, scores, withDimnames = TRUE)
+  } else if (scores %in% SingleCellExperiment::reducedDimNames(spe)) {
+    value <- SingleCellExperiment::reducedDim(spe, scores, withDimnames = TRUE)
   } else {
-    stop("SCE lacks AUCell score source `", scores, "`.", call. = FALSE)
+    stop("SpatialExperiment lacks AUCell score source `", scores, "`.", call. = FALSE)
   }
   .autok_representation_sha256(value)
 }
 
-.cc_zonation_block_values <- function(sce, block) {
+.cc_zonation_block_values <- function(spe, block) {
   if (is.null(block)) {
-    return(rep.int(".all", ncol(sce)))
+    return(rep.int(".all", ncol(spe)))
   }
   if (!is.character(block) || length(block) != 1L || is.na(block) ||
       !nzchar(block)) {
     stop("`block` must be `NULL` or one non-empty colData column name.",
          call. = FALSE)
   }
-  values <- as.character(.cc_sce_coldata(sce, block, "block column"))
+  values <- as.character(.cc_spe_coldata(spe, block, "block column"))
   if (anyNA(values) || any(!nzchar(trimws(values)))) {
     stop("`block` contains missing or blank values.", call. = FALSE)
   }
@@ -122,28 +122,41 @@
 #' program with the largest scaled score. Processing occurs one block at a time,
 #' so a disk-backed score matrix is never realized in full.
 #'
-#' @param sce A `SpatialExperiment` or compatible `SingleCellExperiment`.
-#' @param scores Name of an AUCell `altExp` (programs by spots) or `reducedDim`
-#'   (spots by programs).
-#' @param assay_name Assay used when `scores` identifies an `altExp`.
-#' @param block Optional patient/subject column in `colData(sce)`. `NULL`
-#'   treats the complete object as one block and performs global scaling.
-#' @param programs Programs allowed to compete for the assignment. `NULL` uses
-#'   every program in `scores`.
-#' @param output Name of the `colData` column receiving the assignment.
+#' @param spe A `SpatialExperiment` containing program scores for every spot.
+#' @param scores One non-empty string naming either an `altExp` whose rows are
+#'   programs and columns are spots, or a `reducedDim` whose rows are spots and
+#'   columns are programs. Program names must be unique and non-empty.
+#' @param assay_name One non-empty string naming the assay to read when
+#'   `scores` identifies an `altExp`; ignored for a `reducedDim` source.
+#' @param block `NULL` for a single global standardization, or one `colData(spe)`
+#'   column containing non-missing patient, subject, slide, or sample IDs.
+#'   Scores are centered and scaled independently within every block; this is
+#'   a scaling unit, not a statistical correction for block effects.
+#' @param programs Unique program names allowed to compete for assignment, in
+#'   tie-breaking and output-factor order. `NULL` uses every program available
+#'   from `scores`. Ties are resolved in favor of the first listed program.
+#' @param output One non-empty name for the factor written to
+#'   `colData(spe)[[output]]`. The stage record is written under
+#'   `metadata(spe)$CellCharterR$stages[[paste0("dominant_program:", output)]]`.
 #' @param require_positive If `TRUE`, leave a spot unassigned when its largest
-#'   block-standardized score is not positive. This matches zonation assignment.
-#' @param overwrite Whether an existing `output` column may be replaced.
-#' @param progress Whether to display a block progress bar.
-#' @return The updated experiment with a factor in `colData(sce)[[output]]` and
-#'   provenance recorded under `metadata(sce)$CellCharterR$stages`.
+#'   block-standardized score is zero or negative. If `FALSE`, every spot is
+#'   assigned, including spots for which all standardized scores are negative.
+#' @param overwrite A single logical indicating whether an existing
+#'   `colData(spe)[[output]]` column may be replaced. Nothing is overwritten
+#'   when this is `FALSE`.
+#' @param progress A single logical indicating whether to display progress over
+#'   blocks. It does not affect the result.
+#' @return The updated `SpatialExperiment`. The dominant-program factor is in
+#'   `colData(spe)[[output]]`; parameters, spot count, and spot-order identity
+#'   are in the corresponding `metadata(spe)$CellCharterR$stages` record. No
+#'   score matrix or external file is created.
 #' @export
 cellcharter_assign_dominant_program <- function(
-    sce, scores = "AUCell", assay_name = "score", block = NULL,
+    spe, scores = "AUCell", assay_name = "score", block = NULL,
     programs = NULL, output = "dominant_program", require_positive = FALSE,
     overwrite = FALSE, progress = interactive()) {
-  block_values <- .cc_zonation_block_values(sce, block)
-  source <- .cc_zonation_scores(sce, scores, assay_name)
+  block_values <- .cc_zonation_block_values(spe, block)
+  source <- .cc_zonation_scores(spe, scores, assay_name)
   if (is.null(programs)) programs <- source$programs
   if (!is.character(programs) || !length(programs) || anyNA(programs) ||
       any(!nzchar(programs)) || anyDuplicated(programs) ||
@@ -162,13 +175,13 @@ cellcharter_assign_dominant_program <- function(
     stop("`require_positive`, `overwrite`, and `progress` must be TRUE or FALSE.",
          call. = FALSE)
   }
-  if (output %in% colnames(SummarizedExperiment::colData(sce)) && !overwrite) {
+  if (output %in% colnames(SummarizedExperiment::colData(spe)) && !overwrite) {
     stop("colData already contains `", output,
          "`; set `overwrite = TRUE` to replace it.", call. = FALSE)
   }
 
   blocks <- unique(block_values)
-  assigned <- rep.int(NA_character_, ncol(sce))
+  assigned <- rep.int(NA_character_, ncol(spe))
   bar <- if (progress) utils::txtProgressBar(0L, length(blocks), style = 3L) else NULL
   if (!is.null(bar)) on.exit(close(bar), add = TRUE)
   for (i in seq_along(blocks)) {
@@ -191,11 +204,11 @@ cellcharter_assign_dominant_program <- function(
     if (!is.null(bar)) utils::setTxtProgressBar(bar, i)
   }
 
-  SummarizedExperiment::colData(sce)[[output]] <- factor(
+  SummarizedExperiment::colData(spe)[[output]] <- factor(
     assigned, levels = programs
   )
-  .cc_sce_record_stage(
-    sce, paste0("dominant_program:", output),
+  .cc_spe_record_stage(
+    spe, paste0("dominant_program:", output),
     list(scores = scores, score_source = source$source,
          score_orientation = source$orientation, assay_name = assay_name,
          block = block, programs = programs, output = output,
@@ -213,38 +226,56 @@ cellcharter_assign_dominant_program <- function(
 #' unassigned. This analysis does not use spatial distance or a graph. Stored
 #' score, block, and parameter fingerprints prevent plotting stale results.
 #'
-#' @param sce A `SpatialExperiment` or compatible `SingleCellExperiment`.
-#' @param scores Name of an AUCell `altExp` (programs by spots) or legacy
-#'   `reducedDim` (spots by programs).
-#' @param assay_name Assay name used when `scores` identifies an `altExp`.
-#' @param block Optional patient/subject column in `colData(sce)`. `NULL`
-#'   treats the complete object as one block and supports descriptive plots,
-#'   but not block-level group inference.
-#' @param zone_programs Ordered programs defining mutually exclusive zones.
-#' @param composition_programs Response programs quantified across the ordered
-#'   zones. They need not include `zone_programs`. `NULL` uses every available
-#'   program and treats non-zone programs as the default plotting responses.
-#' @param result_name Storage name under
-#'   `metadata(sce)$CellCharterR$results`.
-#' @param zone_col Optional `colData` column receiving spot-level zone labels.
-#' @param min_spots_per_zone Zones with this many or fewer spots are excluded.
-#' @param sample_size Equal rarefaction depth used when available.
-#' @param n_iterations Number of rarefaction iterations.
-#' @param score_threshold Minimum within-spot composition retained after
-#'   positive-score normalization.
-#' @param seed Deterministic rarefaction seed.
-#' @return The updated experiment with compact block-level results stored in
-#'   `metadata` and, when requested, spot-level zones in `colData`.
+#' @param spe A `SpatialExperiment` containing program scores for every spot.
+#' @param scores One non-empty string naming either an `altExp` whose rows are
+#'   programs and columns are spots, or a `reducedDim` whose rows are spots and
+#'   columns are programs.
+#' @param assay_name One non-empty string naming the assay to read when
+#'   `scores` identifies an `altExp`; ignored for a `reducedDim` source.
+#' @param block `NULL` to treat all spots as one descriptive block, or one
+#'   `colData(spe)` column containing complete patient, subject, slide, or
+#'   sample IDs. Score standardization, rarefaction, and inferential units are
+#'   block-specific when supplied. Group inference in
+#'   [cellcharter_plot_zonation()] requires a non-`NULL` block.
+#' @param zone_programs At least two unique score-program names in biological
+#'   order. Within every block, each program is z-scored and each spot is
+#'   assigned to its largest positive zone score; ties follow this vector's
+#'   order and spots with no positive maximum remain unassigned.
+#' @param composition_programs Unique response-program names quantified across
+#'   the ordered zones. They may overlap `zone_programs`. `NULL` quantifies all
+#'   available programs and makes non-zone programs the default plot set.
+#' @param result_name One non-empty storage key. The complete freshness-checked
+#'   record is written to
+#'   `metadata(spe)$CellCharterR$results[[result_name]]`; scientific outputs
+#'   such as `block_results` and `zone_audit` are in that record's `$value`.
+#'   Reusing a key replaces its previous record.
+#' @param zone_col `NULL` to avoid adding spot-level labels, or one non-empty
+#'   name for the ordered zone factor written to `colData(spe)[[zone_col]]`.
+#' @param min_spots_per_zone A non-negative whole number. A block-zone is
+#'   retained only when its spot count is strictly greater than this value.
+#' @param sample_size A positive whole number giving the target rarefaction
+#'   depth. Each block uses the smaller of this value and its smallest retained
+#'   zone total.
+#' @param n_iterations A positive whole number of rarefaction draws whose
+#'   program counts are averaged for every retained block-zone.
+#' @param score_threshold A finite number in `[0, 1)`. After negative z-scores
+#'   are set to zero and positive scores are normalized within a spot,
+#'   proportions below this value are discarded and the remainder renormalized.
+#' @param seed A positive whole-number seed for deterministic rarefaction.
+#' @return The updated `SpatialExperiment`. The result record is stored in
+#'   `metadata(spe)$CellCharterR$results[[result_name]]`; when `zone_col` is not
+#'   `NULL`, the ordered spot-level zone factor is also stored in
+#'   `colData(spe)[[zone_col]]`. No graph, distance, or external file is made.
 #' @export
 cellcharter_zonation <- function(
-    sce, scores = "AUCell", assay_name = "score", block = NULL,
+    spe, scores = "AUCell", assay_name = "score", block = NULL,
     zone_programs = c("Pre-EMT", "Early-EMT", "Late-EMT"),
     composition_programs = NULL, result_name = "zonation",
     zone_col = "cellcharter_zone", min_spots_per_zone = 70L,
     sample_size = 200L, n_iterations = 100L, score_threshold = 0.1,
     seed = 5410L) {
-  block_values <- .cc_zonation_block_values(sce, block)
-  source <- .cc_zonation_scores(sce, scores, assay_name)
+  block_values <- .cc_zonation_block_values(spe, block)
+  source <- .cc_zonation_scores(spe, scores, assay_name)
   if (!is.character(zone_programs) || length(zone_programs) < 2L ||
       anyNA(zone_programs) || any(!nzchar(zone_programs)) ||
       anyDuplicated(zone_programs)) {
@@ -290,7 +321,7 @@ cellcharter_zonation <- function(
   }
 
   block_levels <- unique(block_values)
-  assigned <- rep.int(NA_character_, ncol(sce))
+  assigned <- rep.int(NA_character_, ncol(spe))
   output <- vector("list", length(block_levels))
   zone_audit <- vector("list", length(block_levels))
   for (block_index in seq_along(block_levels)) {
@@ -385,12 +416,12 @@ cellcharter_zonation <- function(
     )
   )
   if (!is.null(zone_col)) {
-    SummarizedExperiment::colData(sce)[[zone_col]] <- factor(
+    SummarizedExperiment::colData(spe)[[zone_col]] <- factor(
       assigned, levels = zone_programs, ordered = TRUE
     )
   }
-  .cc_sce_store_result(
-    sce, result_name, result,
+  .cc_spe_store_result(
+    spe, result_name, result,
     list(
       scores = scores, score_source = source$source,
       score_orientation = source$orientation, assay_name = assay_name,
@@ -411,21 +442,21 @@ cellcharter_zonation <- function(
 }
 
 .cc_zonation_result <- function(x, result_name) {
-  if (!inherits(x, "SingleCellExperiment")) {
-    stop("`x` must be a SingleCellExperiment or SpatialExperiment.", call. = FALSE)
+  if (!inherits(x, "SpatialExperiment")) {
+    stop("`x` must be a SpatialExperiment.", call. = FALSE)
   }
-  record <- .cc_sce_require_result(
+  record <- .cc_spe_require_result(
     x, result_name, context = "Stored zonation result"
   )
   if (!record$value$schema %in% c(
       "cellcharter_zonation_v1", "cellcharter_zonation_v2")) {
-    stop("SCE lacks stored zonation result `", result_name,
+    stop("SpatialExperiment lacks stored zonation result `", result_name,
          "`; run `cellcharter_zonation()` first.", call. = FALSE)
   }
   record
 }
 
-.cc_zonation_block_annotations <- function(sce, block_col, columns) {
+.cc_zonation_block_annotations <- function(spe, block_col, columns) {
   if (is.null(block_col)) {
     if (length(columns)) {
       stop(
@@ -435,10 +466,10 @@ cellcharter_zonation <- function(
     }
     return(data.frame(block = ".all", stringsAsFactors = FALSE))
   }
-  block <- as.character(.cc_sce_coldata(sce, block_col, "stored block column"))
+  block <- as.character(.cc_spe_coldata(spe, block_col, "stored block column"))
   answer <- data.frame(block = unique(block), stringsAsFactors = FALSE)
   for (column in columns) {
-    values <- as.character(.cc_sce_coldata(sce, column, paste0("annotation column `", column, "`")))
+    values <- as.character(.cc_spe_coldata(spe, column, paste0("annotation column `", column, "`")))
     split_values <- split(values, block)
     conflicts <- names(split_values)[vapply(split_values, function(z) length(unique(z)) != 1L,
                                             logical(1))]
@@ -460,28 +491,54 @@ cellcharter_zonation <- function(
 #' compare the displayed programs within each zone, or display descriptive
 #' curves without inference.
 #'
-#' @param x An experiment containing a stored zonation result.
-#' @param result_name Stored result name.
-#' @param programs Programs to display. `NULL` displays every non-zone program.
+#' @param x A `SpatialExperiment` containing a result previously stored by
+#'   [cellcharter_zonation()]. Plotting is read-only and does not modify `x`.
+#' @param result_name One non-empty key under
+#'   `metadata(x)$CellCharterR$results`. The result's score, block, and
+#'   parameter fingerprints are validated before plotting.
+#' @param programs Unique stored composition-program names to display, in plot
+#'   order. `NULL` uses the result's response programs: normally every
+#'   quantified non-zone program when `composition_programs` was not specified.
 #' @param compare One of `"groups"`, `"strata"`, `"programs"`, or `"none"`.
-#'   `"programs"` performs a block-paired Friedman test among the displayed
-#'   programs separately within each zone and requires `facet = FALSE`.
-#' @param group `colData` column defining groups.
-#' @param group_levels Optional ordered group levels to retain.
-#' @param within_group For `compare = "strata"`, one group value to retain.
-#' @param stratify_by Optional `colData` column defining strata.
-#' @param strata Optional ordered strata to retain.
-#' @param show_individual Draw faint block/patient trajectories.
-#' @param show_significance Add adjusted q-values to the plot.
-#' @param p_adjust_method Method passed to [stats::p.adjust()].
+#'   `"groups"` performs two-group Wilcoxon rank-sum tests for each displayed
+#'   program-zone combination; `"strata"` performs Kruskal-Wallis tests across
+#'   at least two retained strata; `"programs"` performs a block-paired
+#'   Friedman test across displayed programs separately in each zone and
+#'   requires `facet = FALSE`; `"none"` performs no test.
+#' @param group `NULL`, or one `colData(x)` column containing a group label that
+#'   is constant within every stored block. It supplies the curves and test
+#'   groups for `compare = "groups"`, filters for `within_group`, and can supply
+#'   descriptive curves for `compare = "none"`.
+#' @param group_levels `NULL` to use retained groups in encounter order, or an
+#'   ordered vector of group values to keep. A group comparison requires
+#'   exactly two retained levels, and their order controls display order.
+#' @param within_group `NULL`, or one value from `group` to retain before a
+#'   strata comparison or descriptive plot. Supplying it requires `group`.
+#' @param stratify_by `NULL`, or one `colData(x)` column containing a stratum
+#'   label that is constant within every block. It is required for
+#'   `compare = "strata"`.
+#' @param strata `NULL` to use retained strata in encounter order, or an
+#'   ordered vector of stratum values to keep. Supplying it requires
+#'   `stratify_by`; at least two retained strata are needed for inference.
+#' @param show_individual A single logical indicating whether faint block-level
+#'   trajectories are drawn behind the mean curves.
+#' @param show_significance A single logical indicating whether adjusted
+#'   q-values and significance symbols are annotated. Tests are still computed
+#'   and attached when this is `FALSE`.
+#' @param p_adjust_method One method accepted by [stats::p.adjust()]. For group
+#'   and strata comparisons, correction is over all displayed program-by-zone
+#'   tests together; for program comparisons, it is over displayed zones.
 #' @param colours Optional named colour vector for comparison levels. With
 #'   `facet = FALSE` and `compare = "none"` or `"programs"`, name colours by
-#'   program instead.
+#'   program instead. Every displayed colour level must be represented.
 #' @param facet Whether to draw one facet per program. Set to `FALSE` to overlay
-#'   all requested programs in one panel.
-#' @param facet_ncol Number of facet columns; ignored when `facet = FALSE`.
-#' @param title Optional title.
-#' @return A `ggplot` object. Block-level data, summaries, and tests are
+#'   all requested programs in one panel. Program comparisons require `FALSE`.
+#' @param facet_ncol A positive whole number of facet columns; ignored when
+#'   `facet = FALSE`.
+#' @param title `NULL` for no title, or a character value used as the plot title.
+#' @return A read-only `ggplot` object. The plotted block-level observations,
+#'   mean/standard-error summaries, and inferential table (including raw
+#'   `p_value`, adjusted `q_value`, sample counts, and skipped-test reasons) are
 #'   attached as `cellcharter_zonation_data`, `cellcharter_zonation_summary`,
 #'   and `cellcharter_zonation_tests` attributes.
 #' @export

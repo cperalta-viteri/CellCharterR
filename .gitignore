@@ -3,6 +3,8 @@
 /*.Rcheck/
 /*.tar.gz
 /*.tar.gz.sha256
+/src/*.o
+/src/*.so
 
 # Local workflow orchestration
 /scripts/codex-quota-watchdog.mjs

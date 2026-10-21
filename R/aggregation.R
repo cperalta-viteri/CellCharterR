@@ -1,7 +1,10 @@
 #' Remove the longest spatial graph edges
 #'
-#' @param adjacency symmetric sparse connectivity matrix.
-#' @param coordinates two-column coordinate matrix in the same row order.
+#' @param adjacency Square, symmetric, finite non-negative sparse `Matrix` with
+#'   one row and column per spot. Nonzero entries define edges; diagonal entries
+#'   are ignored and output weights are binary.
+#' @param coordinates Finite numeric matrix-like object in adjacency row order,
+#'   with x and y in its first two columns; extra columns are ignored.
 #' @param percentile edges longer than this global positive-distance percentile
 #'   are removed. CellCharter tutorials use 99. When `adjacency` is a combined
 #'   block-diagonal graph, one cutoff is therefore calculated across all blocks.
@@ -70,10 +73,14 @@ remove_long_links <- function(adjacency, coordinates, percentile = 99, cutoff = 
 #' all its positive entries. This helper reproduces the same cutoff without
 #' materialising the cohort-wide block-diagonal graph.
 #'
-#' @param adjacency_by_sample Named list of sample-local sparse graphs.
-#' @param coordinates_by_sample Named list of aligned coordinate matrices.
-#' @param percentile Distance percentile, normally 99.
-#' @return The scalar global distance cutoff.
+#' @param adjacency_by_sample Non-empty uniquely named list of square,
+#'   symmetric, finite non-negative sample-local sparse graphs.
+#' @param coordinates_by_sample List with names identical and in the same order
+#'   as `adjacency_by_sample`; each value is an aligned finite x/y matrix with
+#'   one row per graph node.
+#' @param percentile One finite number from 0 through 100; CellCharter uses 99.
+#' @return One numeric global positive-edge distance quantile, or `NA_real_`
+#'   when no sample graph contains a positive-length edge.
 #' @examples
 #' g1 <- Matrix::sparseMatrix(i = c(1, 2), j = c(2, 1), x = 1,
 #'                            dims = c(2, 2))
@@ -444,8 +451,13 @@ cellcharter_global_distance_cutoff <- function(
 #' Qhull options mirror SciPy's two-dimensional defaults. For coincident points,
 #' Qhull retains one representative and the omitted duplicates remain isolated.
 #'
-#' @param coordinates numeric matrix with x and y in columns one and two.
-#' @return Symmetric binary sparse adjacency matrix.
+#' @param coordinates Finite numeric matrix-like object with one row per spot
+#'   and at least two columns. Columns one and two are interpreted as x and y;
+#'   extra columns are ignored. Row names, when present, become both adjacency
+#'   dimnames. Empty, one-row, and two-row inputs are handled directly; inputs
+#'   with three or more spots must span two dimensions.
+#' @return A symmetric binary `Matrix` sparse adjacency with one row and column
+#'   per input spot, no diagonal edges, and input row names as dimnames.
 #' @examples
 #' xy <- rbind(c(0, 0), c(1, 0), c(0, 1), c(1, 1), c(0.5, 0.5))
 #' delaunay_graph(xy)

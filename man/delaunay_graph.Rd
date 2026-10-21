@@ -7,10 +7,15 @@
 delaunay_graph(coordinates)
 }
 \arguments{
-\item{coordinates}{numeric matrix with x and y in columns one and two.}
+\item{coordinates}{Finite numeric matrix-like object with one row per spot
+and at least two columns. Columns one and two are interpreted as x and y;
+extra columns are ignored. Row names, when present, become both adjacency
+dimnames. Empty, one-row, and two-row inputs are handled directly; inputs
+with three or more spots must span two dimensions.}
 }
 \value{
-Symmetric binary sparse adjacency matrix.
+A symmetric binary \code{Matrix} sparse adjacency with one row and column
+per input spot, no diagonal edges, and input row names as dimnames.
 }
 \description{
 This intentionally accepts coordinates from only one slide/sample. Call it

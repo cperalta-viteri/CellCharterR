@@ -21,7 +21,7 @@ At the 2026-10-12 checkpoint, the repository and Pages endpoints both returned
 HTTP 404. The workflow and rendered files exist locally; publication has not
 been claimed.
 
-## 2. Publish the portable full SCE
+## 2. Publish the portable full SPE
 
 Upload
 `results/CellCharterR_mouse_spleen_v2/portable/CellCharterR_mouse_spleen_sce.rds`
@@ -36,7 +36,7 @@ to a durable, versioned public data record such as Figshare or Zenodo. Record:
 - data licenses and citations from `inst/extdata/DATA_LICENSES.md`; and
 - the repository commit and package version that produced the record.
 
-After upload, insert the immutable DOI/download URL into the H5AD-to-SCE
+After upload, insert the immutable DOI/download URL into the H5AD-to-SPE
 vignette and `BIOCONDUCTOR.md`. Download it into a new temporary directory,
 verify SHA-256, and repeat the read-only checks documented in
 `PORTABILITY_VALIDATION.md`. Do not rerun the full analysis.

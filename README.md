@@ -31,16 +31,15 @@ References: [Varrone et al., *Nature Genetics* (2024)](https://doi.org/10.1038/s
 
 ## Motivation
 
-The Bioconductor ecosystem provides a high-performance foundation for
-single-cell analysis centred on `SingleCellExperiment` and its spatially aware
-subclass `SpatialExperiment`. These interoperable containers work with
+The Bioconductor ecosystem provides a high-performance foundation for spatial
+omics centred on `SpatialExperiment`. This interoperable container works with
 `DelayedArray` and `HDF5Array`, allowing assays and
 intermediate representations to remain on disk instead of requiring the whole
 dataset in memory. Implementing the CellCharter workflow in R lets large
 spatial datasets benefit from this infrastructure while remaining compatible
 with native Bioconductor annotation, visualization, testing, and statistical
-tools. CellCharterR therefore uses an SPE-first interface (while retaining SCE
-compatibility), sample-local graph processing, disk-backed checkpoints,
+tools. CellCharterR therefore uses a SpatialExperiment-native interface,
+sample-local graph processing, disk-backed checkpoints,
 bounded-memory prediction, a compiled multicore C++ CPU GMM, and an optional R
 Torch backend.
 

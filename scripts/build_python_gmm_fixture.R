@@ -2,7 +2,7 @@
 
 # Build a small, permanent prediction-parity fixture from the checksum-pinned
 # official PyCave K=11 model and its exact published X_cellcharter input.
-source("R/sce_workflow.R")
+source("R/spe_workflow.R")
 source("R/torch_gmm.R")
 source("R/autok.R")
 

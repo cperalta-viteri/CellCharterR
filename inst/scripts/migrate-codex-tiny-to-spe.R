@@ -40,6 +40,8 @@ legacy_trvae <- as.matrix(SingleCellExperiment::reducedDim(legacy, "X_trVAE"))
 legacy_spatial <- if (inherits(legacy, "SpatialExperiment")) {
   as.matrix(SpatialExperiment::spatialCoords(legacy))
 } else {
+  # Compatibility path for the historical teaching object that predated the
+  # SpatialExperiment migration.
   as.matrix(SingleCellExperiment::reducedDim(legacy, "spatial"))
 }
 stopifnot(
@@ -86,7 +88,7 @@ save(codex_mouse_spleen_tiny, file = "data/codex_mouse_spleen_tiny.rda",
 
 cat("Rebuilt native tiny SpatialExperiment:", tiny_rds, "\n")
 cat("Packaged data: data/codex_mouse_spleen_tiny.rda\n")
-cat("Cells:", ncol(codex_mouse_spleen_tiny), "\n")
+cat("Spots:", ncol(codex_mouse_spleen_tiny), "\n")
 cat("RDS SHA-256:", digest::digest(
   file = tiny_rds, algo = "sha256", serialize = FALSE
 ), "\n")

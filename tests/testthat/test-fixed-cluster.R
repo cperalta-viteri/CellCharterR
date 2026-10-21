@@ -1,13 +1,18 @@
-.fixed_sce <- function() {
-  ids <- paste0("cell", 1:8)
-  sce <- SingleCellExperiment::SingleCellExperiment(
+.fixed_spe <- function() {
+  ids <- paste0("spot", 1:8)
+  spe <- SpatialExperiment::SpatialExperiment(
     assays = list(counts = matrix(0, 1, 8, dimnames = list("g", ids))),
     reducedDims = S4Vectors::SimpleList(
       X_fixed = matrix(seq_len(16), nrow = 8, dimnames = list(ids, c("a", "b")))
-    )
+    ),
+    spatialCoords = structure(
+      cbind(x = seq_len(8), y = rep(0, 8)),
+      dimnames = list(ids, c("x", "y"))
+    ),
+    sample_id = rep("sample1", 8)
   )
-  CellCharterR:::.cc_sce_record_stage(
-    sce, "aggregation:X_fixed", list(output = "X_fixed")
+  CellCharterR:::.cc_spe_record_stage(
+    spe, "aggregation:X_fixed", list(output = "X_fixed")
   )
 }
 
@@ -21,7 +26,7 @@ test_that("fixed-K clustering fits exactly one requested K and attaches labels",
   predict <- function(model, newdata, ...) (seq_len(nrow(newdata)) - 1L) %% model$k
 
   result <- cellcharter_cluster_fixed(
-    .fixed_sce(), representation = "X_fixed", n_clusters = 3L,
+    .fixed_spe(), representation = "X_fixed", n_clusters = 3L,
     domain_col = "domain", seed = 9L, fit_fun = fit, predict_fun = predict
   )
 
@@ -43,7 +48,7 @@ test_that("fixed-K compatible checkpoint resumes without refitting", {
   }
   predict <- function(model, newdata, ...) (seq_len(nrow(newdata)) - 1L) %% model$k
   args <- list(
-    sce = .fixed_sce(), representation = "X_fixed", n_clusters = 2L,
+    spe = .fixed_spe(), representation = "X_fixed", n_clusters = 2L,
     checkpoint_dir = checkpoint, fit_fun = fit, predict_fun = predict
   )
   first <- do.call(cellcharter_cluster_fixed, args)
@@ -57,14 +62,14 @@ test_that("fixed-K compatible checkpoint resumes without refitting", {
 })
 
 test_that("fixed-K rejects stale stages and invalid labels", {
-  stale <- .fixed_sce()[, 1:6]
+  stale <- .fixed_spe()[, 1:6]
   expect_error(
     cellcharter_cluster_fixed(stale, representation = "X_fixed", n_clusters = 2L),
     "stale"
   )
   expect_error(
     cellcharter_cluster_fixed(
-      .fixed_sce(), representation = "X_fixed", n_clusters = 2L,
+      .fixed_spe(), representation = "X_fixed", n_clusters = 2L,
       fit_fun = function(x, n_clusters, seed, ...) list(k = n_clusters),
       predict_fun = function(model, newdata, ...) rep(2L, nrow(newdata))
     ),
@@ -74,7 +79,7 @@ test_that("fixed-K rejects stale stages and invalid labels", {
 
 test_that("fixed-K validates integers and does not reuse another implementation", {
   expect_error(
-    cellcharter_cluster_fixed(.fixed_sce(), "X_fixed", 2.5),
+    cellcharter_cluster_fixed(.fixed_spe(), "X_fixed", 2.5),
     "n_clusters"
   )
   checkpoint <- tempfile("fixed-implementation-")
@@ -90,11 +95,11 @@ test_that("fixed-K validates integers and does not reuse another implementation"
     list(label = 1L)
   }
   cellcharter_cluster_fixed(
-    .fixed_sce(), "X_fixed", 2L, checkpoint_dir = checkpoint,
+    .fixed_spe(), "X_fixed", 2L, checkpoint_dir = checkpoint,
     fit_fun = fit_a, predict_fun = predictor
   )
   result <- cellcharter_cluster_fixed(
-    .fixed_sce(), "X_fixed", 2L, checkpoint_dir = checkpoint,
+    .fixed_spe(), "X_fixed", 2L, checkpoint_dir = checkpoint,
     fit_fun = fit_b, predict_fun = predictor
   )
   expect_identical(calls$n, 2L)

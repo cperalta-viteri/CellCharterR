@@ -1,6 +1,5 @@
 # Utilities in this file keep the full workflow centred on a
-# SingleCellExperiment-compatible container. Spatial inputs use the
-# SpatialExperiment subclass while large numeric matrices remain in HDF5.
+# SpatialExperiment container while large numeric matrices remain in HDF5.
 
 .cc_h5ad_dataframe <- function(filepath, group) {
   listing <- rhdf5::h5ls(filepath, recursive = TRUE)
@@ -113,19 +112,60 @@
   list(index = match(target_ids, source_ids), reordered = TRUE)
 }
 
-.cc_validate_sce_identity <- function(
-    sce, context = "SingleCellExperiment checkpoint", reduced_dims = NULL,
+.cc_legacy_sce_as_spe <- function(x, spatial_reduced_dim = "spatial") {
+  if (inherits(x, "SpatialExperiment")) return(x)
+  if (!inherits(x, "SingleCellExperiment")) {
+    stop("Legacy object is not a SingleCellExperiment.", call. = FALSE)
+  }
+  if (!spatial_reduced_dim %in%
+      SingleCellExperiment::reducedDimNames(x)) {
+    stop(
+      "Legacy SingleCellExperiment lacks reducedDim `", spatial_reduced_dim,
+      "` required to reconstruct spatialCoords.", call. = FALSE
+    )
+  }
+  spatial <- as.matrix(SingleCellExperiment::reducedDim(
+    x, spatial_reduced_dim, withDimnames = TRUE
+  ))
+  if (!is.numeric(spatial) || nrow(spatial) != ncol(x) || ncol(spatial) < 2L ||
+      any(!is.finite(spatial[, seq_len(2L), drop = FALSE]))) {
+    stop("Legacy spatial reduced dimension must contain finite x/y coordinates.",
+         call. = FALSE)
+  }
+  spatial <- spatial[, seq_len(2L), drop = FALSE]
+  rownames(spatial) <- colnames(x)
+  if (is.null(colnames(spatial))) colnames(spatial) <- c("x", "y")
+
+  # Rebuild only the container shell. HDF5-backed assays and reduced dimensions
+  # remain lazy seeds; the small two-column coordinate matrix is the only value
+  # intentionally materialised for SpatialExperiment's canonical store.
+  SpatialExperiment::SpatialExperiment(
+    assays = SummarizedExperiment::assays(x, withDimnames = FALSE),
+    rowData = SummarizedExperiment::rowData(x),
+    colData = SummarizedExperiment::colData(x),
+    reducedDims = SingleCellExperiment::reducedDims(x),
+    altExps = SingleCellExperiment::altExps(x),
+    rowPairs = SingleCellExperiment::rowPairs(x),
+    colPairs = SingleCellExperiment::colPairs(x),
+    metadata = S4Vectors::metadata(x),
+    spatialCoords = spatial,
+    mainExpName = SingleCellExperiment::mainExpName(x)
+  )
+}
+
+.cc_validate_spe_identity <- function(
+    spe, context = "SpatialExperiment checkpoint", reduced_dims = NULL,
     recorded_order_sha256 = NULL) {
-  if (!inherits(sce, "SingleCellExperiment")) {
-    stop(context, " is not a SingleCellExperiment.", call. = FALSE)
+  if (!inherits(spe, "SpatialExperiment")) {
+    stop(context, " is not a SpatialExperiment.", call. = FALSE)
   }
   local_ids <- .cc_validate_observation_ids(
-    colnames(sce), paste0(context, " cell identifiers"),
+    colnames(spe), paste0(context, " spot identifiers"),
     allow_duplicates = TRUE
   )
   ids <- local_ids
   if (anyDuplicated(local_ids)) {
-    col_data <- SummarizedExperiment::colData(sce)
+    col_data <- SummarizedExperiment::colData(spe)
     if (!"sample_id" %in% colnames(col_data)) {
       duplicate <- local_ids[duplicated(local_ids)][[1L]]
       stop(
@@ -140,42 +180,42 @@
     )
     ids <- .cc_validate_observation_ids(
       paste(sample_ids, local_ids, sep = "\037"),
-      paste0(context, " sample-scoped cell identifiers")
+      paste0(context, " sample-scoped spot identifiers")
     )
   }
   .cc_align_observation_ids(
-    rownames(SummarizedExperiment::colData(sce)), local_ids,
-    paste0(context, " colData row names"), paste0(context, " cell identifiers"),
+    rownames(SummarizedExperiment::colData(spe)), local_ids,
+    paste0(context, " colData row names"), paste0(context, " spot identifiers"),
     allow_duplicates = TRUE
   )
-  if (is.null(reduced_dims)) reduced_dims <- SingleCellExperiment::reducedDimNames(sce)
+  if (is.null(reduced_dims)) reduced_dims <- SingleCellExperiment::reducedDimNames(spe)
   for (reduced_dim_name in reduced_dims) {
-    if (!reduced_dim_name %in% SingleCellExperiment::reducedDimNames(sce)) {
+    if (!reduced_dim_name %in% SingleCellExperiment::reducedDimNames(spe)) {
       stop(context, " lacks reduced dimension `", reduced_dim_name, "`.", call. = FALSE)
     }
     .cc_align_observation_ids(
-      rownames(SingleCellExperiment::reducedDim(sce, reduced_dim_name)), local_ids,
+      rownames(SingleCellExperiment::reducedDim(spe, reduced_dim_name)), local_ids,
       paste0(context, " `", reduced_dim_name, "` row names"),
-      paste0(context, " cell identifiers"), allow_duplicates = TRUE
+      paste0(context, " spot identifiers"), allow_duplicates = TRUE
     )
   }
-  if (inherits(sce, "SpatialExperiment")) {
-    spatial <- SpatialExperiment::spatialCoords(sce)
+  if (inherits(spe, "SpatialExperiment")) {
+    spatial <- SpatialExperiment::spatialCoords(spe)
     if (!is.numeric(spatial) || length(dim(spatial)) != 2L ||
-        nrow(spatial) != ncol(sce) || ncol(spatial) < 2L) {
+        nrow(spatial) != ncol(spe) || ncol(spatial) < 2L) {
       stop(context, " has invalid SpatialExperiment coordinates.", call. = FALSE)
     }
     .cc_align_observation_ids(
       rownames(spatial), local_ids,
       paste0(context, " spatialCoords row names"),
-      paste0(context, " cell identifiers"), allow_duplicates = TRUE
+      paste0(context, " spot identifiers"), allow_duplicates = TRUE
     )
   }
-  order_sha256 <- .cc_observation_order_sha256(ids, paste0(context, " cell identifiers"))
+  order_sha256 <- .cc_observation_order_sha256(ids, paste0(context, " spot identifiers"))
   if (!is.null(recorded_order_sha256) &&
       (!is.character(recorded_order_sha256) || length(recorded_order_sha256) != 1L ||
        is.na(recorded_order_sha256) || !identical(recorded_order_sha256, order_sha256))) {
-    stop(context, " cell order does not match its recorded SHA-256 identity.", call. = FALSE)
+    stop(context, " spot order does not match its recorded SHA-256 identity.", call. = FALSE)
   }
   invisible(list(ids = ids, cell_order_sha256 = order_sha256))
 }
@@ -259,8 +299,9 @@
 
 #' Compute a SHA-256 checksum without loading a file into R memory
 #'
-#' @param filepath Existing file.
-#' @return Lower-case hexadecimal SHA-256 digest.
+#' @param filepath One existing readable file path. The file is streamed by
+#'   [digest::digest()] and is not loaded into R memory.
+#' @return One 64-character lower-case hexadecimal SHA-256 digest.
 #' @examples
 #' example_file <- tempfile(fileext = ".txt")
 #' writeLines("CellCharterR", example_file)
@@ -278,19 +319,29 @@ cellcharter_file_sha256 <- function(filepath) {
 #' Read the fixed CODEX inputs as a disk-backed SpatialExperiment
 #'
 #' The marker assay is read from the historical tutorial H5AD and the immutable
-#' trVAE representation from the official clustered H5AD. Cell identifiers must
+#' trVAE representation from the official clustered H5AD. Spot identifiers must
 #' match exactly before either object is attached. The resulting
 #' `SpatialExperiment` contains an HDF5-backed protein assay and trVAE reduced
 #' dimension. Only the two-column coordinate matrix is realized, because
 #' `spatialCoords()` is the canonical SpatialExperiment coordinate store.
 #'
-#' @param raw_h5ad Official CODEX input H5AD (Figshare file 38538101).
-#' @param clustered_h5ad Official clustered H5AD containing `X_trVAE`
-#'   (Figshare file 46832722).
-#' @param representation_dataset HDF5 dataset holding the fixed representation.
-#' @param spatial_dataset HDF5 dataset holding x/y coordinates.
+#' @param raw_h5ad Path to the official CODEX input H5AD (Figshare file
+#'   38538101). Its dense `X` dataset becomes the HDF5-backed `protein` assay;
+#'   its `obs` and `var` tables populate `colData` and `rowData`.
+#' @param clustered_h5ad Path to the official clustered H5AD (Figshare file
+#'   46832722). Its published cluster labels are stored in
+#'   `colData(spe)$reference_cluster_cellcharter` after immutable spot-identity
+#'   alignment against `raw_h5ad`.
+#' @param representation_dataset Non-empty HDF5 path in `clustered_h5ad` to the
+#'   fixed trVAE spot-by-feature representation. It is attached disk-backed as
+#'   `reducedDim(spe, "X_trVAE")` and is not materialised.
+#' @param spatial_dataset Non-empty HDF5 path in `raw_h5ad` to the two-column
+#'   spatial coordinate matrix. Only these coordinates are materialised and
+#'   stored in `spatialCoords(spe)` with columns `x` and `y`.
 #' @return A `SpatialExperiment` with disk-backed `protein` and `X_trVAE`,
-#'   canonical `spatialCoords()`, and input provenance in `metadata()`.
+#'   canonical `spatialCoords()`, published labels in `colData`, and file paths,
+#'   checksums, pinned reference versions, and identity-alignment provenance in
+#'   `metadata(spe)$CellCharterR`.
 #' @examples
 #' raw <- system.file("extdata", "codex_mouse_spleen_tiny_raw.h5ad",
 #'                    package = "CellCharterR")
@@ -327,7 +378,7 @@ read_codex_spe <- function(
   spatial <- DelayedArray::t(HDF5Array::HDF5Array(raw_h5ad, spatial_dataset))
   if (ncol(marker_assay) != length(raw_ids) ||
       nrow(representation) != length(raw_ids) || nrow(spatial) != length(raw_ids)) {
-    stop("CODEX HDF5 matrix dimensions are inconsistent with cell metadata.")
+    stop("CODEX HDF5 matrix dimensions are inconsistent with spot metadata.")
   }
 
   if (nrow(clustered_col_data) != nrow(col_data) ||
@@ -391,52 +442,70 @@ read_codex_spe <- function(
   spe
 }
 
-#' @rdname read_codex_spe
-#' @description `read_codex_sce()` is retained as a backward-compatible alias;
-#'   it returns the same `SpatialExperiment` as `read_codex_spe()`.
-#' @export
-read_codex_sce <- function(
-    raw_h5ad, clustered_h5ad,
-    representation_dataset = "obsm/X_trVAE",
-    spatial_dataset = "obsm/spatial") {
-  read_codex_spe(
-    raw_h5ad = raw_h5ad,
-    clustered_h5ad = clustered_h5ad,
-    representation_dataset = representation_dataset,
-    spatial_dataset = spatial_dataset
-  )
-}
-
-#' Attach an HDF5-backed CellCharter representation to an SCE
+#' Attach an HDF5-backed representation to a SpatialExperiment
 #'
-#' @param sce A `SingleCellExperiment`.
-#' @param filepath HDF5 aggregation output.
-#' @param name Dataset name in `filepath`.
-#' @param reduced_dim_name Name to use in `reducedDims(sce)`.
-#' @param cell_ids Observation identifiers for the HDF5 rows. When omitted,
-#'   row names on the HDF5 dataset or a `<name>_cell_ids` HDF5 dataset are used.
-#' @param allow_reorder Whether an explicitly identified HDF5 matrix may be
-#'   reordered into SCE order. The reorder is recorded in SCE metadata.
-#' @return The updated SCE.
+#' The HDF5 dataset is attached without materialising its values. Its rows must
+#' identify the same spots as `spe`; order differences are rejected unless
+#' `allow_reorder = TRUE`. The returned object therefore remains dependent on
+#' `filepath` and the file must be moved together with the object.
+#'
+#' @param spe A `SpatialExperiment` whose columns are spatial spots.
+#' @param filepath Path to an existing HDF5 file containing the representation.
+#' @param name Non-empty name of the two-dimensional HDF5 dataset in
+#'   `filepath`.
+#' @param reduced_dim_name Non-empty name under which the disk-backed matrix is
+#'   stored in `reducedDim(spe, reduced_dim_name)`. It defaults to `name` and
+#'   replaces a reduced dimension with the same name.
+#' @param cell_ids Character vector identifying the HDF5 rows. When omitted,
+#'   row names on the HDF5 dataset or a `<name>_cell_ids` dataset in the same
+#'   file are used. Positional alignment without identifiers is rejected.
+#' @param allow_reorder A single logical value. If `TRUE`, rows with the same
+#'   unique identifiers may be reordered into `colnames(spe)` order. If
+#'   `FALSE`, their order must already match. The alignment decision and both
+#'   order checksums are stored in
+#'   `metadata(spe)$CellCharterR$identity_alignment[[reduced_dim_name]]`.
+#' @return The updated `SpatialExperiment`, with an `HDF5Array` stored in
+#'   `reducedDim(spe, reduced_dim_name)` and alignment provenance stored in
+#'   `metadata(spe)$CellCharterR$identity_alignment`.
 #' @examples
-#' ids <- paste0("cell", seq_len(3))
-#' example_sce <- SingleCellExperiment::SingleCellExperiment(
-#'   assays = list(counts = matrix(0, 1, 3, dimnames = list("marker", ids)))
+#' ids <- paste0("spot", seq_len(3))
+#' example_spe <- SpatialExperiment::SpatialExperiment(
+#'   assays = list(counts = matrix(0, 1, 3, dimnames = list("marker", ids))),
+#'   spatialCoords = matrix(seq_len(6), ncol = 2,
+#'                          dimnames = list(ids, c("x", "y")))
 #' )
 #' output <- tempfile(fileext = ".h5")
 #' HDF5Array::writeHDF5Array(matrix(seq_len(6), nrow = 3),
 #'                           filepath = output, name = "X_cellcharter")
-#' example_sce <- cellcharter_attach_hdf5_reduced_dim(
-#'   example_sce, output, cell_ids = ids
+#' example_spe <- cellcharter_attach_hdf5_reduced_dim(
+#'   spe = example_spe, filepath = output, cell_ids = ids
 #' )
-#' SingleCellExperiment::reducedDimNames(example_sce)
+#' SingleCellExperiment::reducedDimNames(example_spe)
 #' unlink(output)
 #' @export
 cellcharter_attach_hdf5_reduced_dim <- function(
-    sce, filepath, name = "X_cellcharter", reduced_dim_name = name,
+    spe, filepath, name = "X_cellcharter", reduced_dim_name = name,
     cell_ids = NULL, allow_reorder = FALSE) {
-  if (!inherits(sce, "SingleCellExperiment")) stop("`sce` must be a SingleCellExperiment.")
-  target <- .cc_validate_observation_ids(colnames(sce), "SCE cell identifiers")
+  if (!inherits(spe, "SpatialExperiment")) {
+    stop("`spe` must be a SpatialExperiment.", call. = FALSE)
+  }
+  if (!is.character(filepath) || length(filepath) != 1L || is.na(filepath) ||
+      !nzchar(filepath) || !file.exists(filepath)) {
+    stop("`filepath` must name one existing HDF5 file.", call. = FALSE)
+  }
+  names_to_validate <- list(name = name, reduced_dim_name = reduced_dim_name)
+  for (argument in names(names_to_validate)) {
+    value_name <- names_to_validate[[argument]]
+    if (!is.character(value_name) || length(value_name) != 1L ||
+        is.na(value_name) || !nzchar(value_name)) {
+      stop("`", argument, "` must be one non-empty name.", call. = FALSE)
+    }
+  }
+  if (!is.logical(allow_reorder) || length(allow_reorder) != 1L ||
+      is.na(allow_reorder)) {
+    stop("`allow_reorder` must be `TRUE` or `FALSE`.", call. = FALSE)
+  }
+  target <- .cc_validate_observation_ids(colnames(spe), "SPE spot identifiers")
   value <- HDF5Array::HDF5Array(filepath, name)
   if (is.null(cell_ids)) cell_ids <- rownames(value)
   if (is.null(cell_ids)) {
@@ -454,19 +523,19 @@ cellcharter_attach_hdf5_reduced_dim <- function(
   }
   alignment <- .cc_align_observation_ids(
     source, target, paste0("HDF5 dataset `", name, "` observation identifiers"),
-    "SCE cell identifiers", allow_reorder = allow_reorder
+    "SPE spot identifiers", allow_reorder = allow_reorder
   )
   if (alignment$reordered) value <- value[alignment$index, , drop = FALSE]
   rownames(value) <- target
-  SingleCellExperiment::reducedDim(sce, reduced_dim_name) <- value
-  if (is.null(S4Vectors::metadata(sce)$CellCharterR)) {
-    S4Vectors::metadata(sce)$CellCharterR <- list()
+  SingleCellExperiment::reducedDim(spe, reduced_dim_name) <- value
+  if (is.null(S4Vectors::metadata(spe)$CellCharterR)) {
+    S4Vectors::metadata(spe)$CellCharterR <- list()
   }
-  S4Vectors::metadata(sce)$CellCharterR$identity_alignment[[reduced_dim_name]] <- list(
+  S4Vectors::metadata(spe)$CellCharterR$identity_alignment[[reduced_dim_name]] <- list(
     source = normalizePath(filepath), dataset = name,
     source_cell_order_sha256 = .cc_observation_order_sha256(source),
     target_cell_order_sha256 = .cc_observation_order_sha256(target),
     reordered = alignment$reordered
   )
-  sce
+  spe
 }

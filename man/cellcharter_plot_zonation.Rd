@@ -24,46 +24,71 @@ cellcharter_plot_zonation(
 )
 }
 \arguments{
-\item{x}{An experiment containing a stored zonation result.}
+\item{x}{A \code{SpatialExperiment} containing a result previously stored by
+\code{\link[=cellcharter_zonation]{cellcharter_zonation()}}. Plotting is read-only and does not modify \code{x}.}
 
-\item{result_name}{Stored result name.}
+\item{result_name}{One non-empty key under
+\code{metadata(x)$CellCharterR$results}. The result's score, block, and
+parameter fingerprints are validated before plotting.}
 
-\item{programs}{Programs to display. \code{NULL} displays every non-zone program.}
+\item{programs}{Unique stored composition-program names to display, in plot
+order. \code{NULL} uses the result's response programs: normally every
+quantified non-zone program when \code{composition_programs} was not specified.}
 
-\item{compare}{One of \code{"groups"}, \code{"strata"}, \code{"programs"}, or
-\code{"none"}. \code{"programs"} performs a block-paired Friedman test among
-the displayed programs separately within each zone and requires
-\code{facet = FALSE}.}
+\item{compare}{One of \code{"groups"}, \code{"strata"}, \code{"programs"}, or \code{"none"}.
+\code{"groups"} performs two-group Wilcoxon rank-sum tests for each displayed
+program-zone combination; \code{"strata"} performs Kruskal-Wallis tests across
+at least two retained strata; \code{"programs"} performs a block-paired
+Friedman test across displayed programs separately in each zone and
+requires \code{facet = FALSE}; \code{"none"} performs no test.}
 
-\item{group}{\code{colData} column defining groups.}
+\item{group}{\code{NULL}, or one \code{colData(x)} column containing a group label that
+is constant within every stored block. It supplies the curves and test
+groups for \code{compare = "groups"}, filters for \code{within_group}, and can supply
+descriptive curves for \code{compare = "none"}.}
 
-\item{group_levels}{Optional ordered group levels to retain.}
+\item{group_levels}{\code{NULL} to use retained groups in encounter order, or an
+ordered vector of group values to keep. A group comparison requires
+exactly two retained levels, and their order controls display order.}
 
-\item{within_group}{For \code{compare = "strata"}, one group value to retain.}
+\item{within_group}{\code{NULL}, or one value from \code{group} to retain before a
+strata comparison or descriptive plot. Supplying it requires \code{group}.}
 
-\item{stratify_by}{Optional \code{colData} column defining strata.}
+\item{stratify_by}{\code{NULL}, or one \code{colData(x)} column containing a stratum
+label that is constant within every block. It is required for
+\code{compare = "strata"}.}
 
-\item{strata}{Optional ordered strata to retain.}
+\item{strata}{\code{NULL} to use retained strata in encounter order, or an
+ordered vector of stratum values to keep. Supplying it requires
+\code{stratify_by}; at least two retained strata are needed for inference.}
 
-\item{show_individual}{Draw faint block/patient trajectories.}
+\item{show_individual}{A single logical indicating whether faint block-level
+trajectories are drawn behind the mean curves.}
 
-\item{show_significance}{Add adjusted q-values to the plot.}
+\item{show_significance}{A single logical indicating whether adjusted
+q-values and significance symbols are annotated. Tests are still computed
+and attached when this is \code{FALSE}.}
 
-\item{p_adjust_method}{Method passed to \code{\link[stats:p.adjust]{stats::p.adjust()}}.}
+\item{p_adjust_method}{One method accepted by \code{\link[stats:p.adjust]{stats::p.adjust()}}. For group
+and strata comparisons, correction is over all displayed program-by-zone
+tests together; for program comparisons, it is over displayed zones.}
 
 \item{colours}{Optional named colour vector for comparison levels. With
-\code{facet = FALSE} and \code{compare = "none"} or \code{"programs"}, name
-colours by program instead.}
+\code{facet = FALSE} and \code{compare = "none"} or \code{"programs"}, name colours by
+program instead. Every displayed colour level must be represented.}
 
-\item{facet}{Whether to draw one facet per program. Set to \code{FALSE} to
-overlay all requested programs in one panel.}
+\item{facet}{Whether to draw one facet per program. Set to \code{FALSE} to overlay
+all requested programs in one panel. Program comparisons require \code{FALSE}.}
 
-\item{facet_ncol}{Number of facet columns; ignored when \code{facet = FALSE}.}
+\item{facet_ncol}{A positive whole number of facet columns; ignored when
+\code{facet = FALSE}.}
 
-\item{title}{Optional title.}
+\item{title}{\code{NULL} for no title, or a character value used as the plot title.}
 }
 \value{
-A \code{ggplot} object. Block-level data, summaries, and tests are
+A read-only \code{ggplot} object. The plotted block-level observations,
+mean/standard-error summaries, and inferential table (including raw
+\code{p_value}, adjusted \code{q_value}, sample counts, and skipped-test reasons) are
 attached as \code{cellcharter_zonation_data}, \code{cellcharter_zonation_summary},
 and \code{cellcharter_zonation_tests} attributes.
 }
@@ -71,5 +96,6 @@ and \code{cellcharter_zonation_tests} attributes.
 Plots compact block-level results from \code{\link[=cellcharter_zonation]{cellcharter_zonation()}}. It can
 compare two groups (for example High versus Low risk), compare metadata
 strata within one group (for example oral sites among High-risk patients),
-or display descriptive curves without inference.
+compare the displayed programs within each zone, or display descriptive
+curves without inference.
 }

@@ -7,10 +7,13 @@
 cellcharter_autok_best_k(object)
 }
 \arguments{
-\item{object}{A fitted \code{cellcharter_autok} object.}
+\item{object}{A valid \code{cellcharter_autok} result returned by
+\code{\link[=cellcharter_autok_fit]{cellcharter_autok_fit()}} with at least two completed runs and non-\code{NULL}
+\code{stability_mean} values aligned to \code{candidate_k}.}
 }
 \value{
-The first K attaining the maximum mean mirrored stability.
+One integer: the first selectable K attaining the maximum mean
+mirrored neighboring-K Fowlkes--Mallows stability.
 }
 \description{
 Return the most stable K from an AutoK fit

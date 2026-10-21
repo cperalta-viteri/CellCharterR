@@ -1,22 +1,22 @@
 #!/usr/bin/env Rscript
 
 # Reconstruct the two-file CODEX import layout from the already-packaged tiny
-# SCE. This script never opens or depends on either full H5AD.
+# SPE. This script never opens or depends on either full H5AD.
 
 input <- "data/codex_mouse_spleen_tiny.rda"
 raw_path <- "inst/extdata/codex_mouse_spleen_tiny_raw.h5ad"
 clustered_path <- "inst/extdata/codex_mouse_spleen_tiny_clustered.h5ad"
-if (!file.exists(input)) stop("Packaged tiny SCE is absent: ", input)
+if (!file.exists(input)) stop("Packaged tiny SPE is absent: ", input)
 if (file.exists(raw_path) || file.exists(clustered_path)) {
   stop("Tiny H5AD output already exists; remove it explicitly before regeneration.")
 }
 
 environment <- new.env(parent = emptyenv())
 load(input, envir = environment)
-sce <- environment$codex_mouse_spleen_tiny
-ids <- colnames(sce)
-markers <- rownames(sce)
-col_data <- as.data.frame(SummarizedExperiment::colData(sce))
+spe <- environment$codex_mouse_spleen_tiny
+ids <- colnames(spe)
+markers <- rownames(spe)
+col_data <- as.data.frame(SummarizedExperiment::colData(spe))
 
 write_obs <- function(path, data, ids) {
   rhdf5::h5createGroup(path, "obs")
@@ -34,11 +34,11 @@ write_obs(raw_path, col_data, ids)
 rhdf5::h5createGroup(raw_path, "var")
 rhdf5::h5write(markers, raw_path, "var/_index")
 rhdf5::h5write(
-  as.matrix(SummarizedExperiment::assay(sce, "protein")), raw_path, "X"
+  as.matrix(SummarizedExperiment::assay(spe, "protein")), raw_path, "X"
 )
 rhdf5::h5createGroup(raw_path, "obsm")
 rhdf5::h5write(
-  t(as.matrix(SingleCellExperiment::reducedDim(sce, "spatial"))),
+  t(as.matrix(SpatialExperiment::spatialCoords(spe))),
   raw_path, "obsm/spatial"
 )
 
@@ -51,7 +51,7 @@ clustered_obs <- data.frame(
 write_obs(clustered_path, clustered_obs, ids)
 rhdf5::h5createGroup(clustered_path, "obsm")
 rhdf5::h5write(
-  t(as.matrix(SingleCellExperiment::reducedDim(sce, "X_trVAE"))),
+  t(as.matrix(SingleCellExperiment::reducedDim(spe, "X_trVAE"))),
   clustered_path, "obsm/X_trVAE"
 )
 

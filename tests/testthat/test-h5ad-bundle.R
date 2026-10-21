@@ -31,6 +31,18 @@ expect_canonical_import_storage <- function(spe) {
   )
 }
 
+test_that("H5AD importer exposes its complete conversion contract", {
+  expect_identical(
+    names(formals(cellcharter_import_h5ad)),
+    c(
+      "h5ad_file", "output_dir", "assay_path", "assay_name", "obs_columns",
+      "var_columns", "spatial_path", "reduced_dims", "aucell_path",
+      "sample_column", "chunk_mib", "overwrite", "source_verification",
+      "materialize_block_mib", "max_materialized_gib", "progress"
+    )
+  )
+})
+
 test_that("H5AD import creates an independent movable SPE bundle", {
   source_file <- tempfile(fileext = ".h5ad")
   bundle <- tempfile(pattern = "cellcharterr-spe-")
@@ -332,7 +344,7 @@ test_that("H5AD import creates an independent movable SPE bundle", {
     normalizePath(S4Vectors::metadata(reloaded)$anndata_uns$filepath),
     normalizePath(file.path(moved, "arrays.h5"))
   )
-  expect_equal(as.matrix(.cc_sce_graph_matrix(
+  expect_equal(as.matrix(.cc_spe_graph_matrix(
     reloaded, "spatial_connectivities"
   ) != 0), expected_graph != 0)
   expect_true(methods::validObject(reloaded, test = TRUE))
@@ -632,20 +644,21 @@ test_that("unsupported sparse assay and matrix obsm layouts fail preflight", {
 })
 
 test_that("imported pair values are separated from graph topology semantics", {
-  sce <- SingleCellExperiment::SingleCellExperiment(
-    assays = list(x = matrix(0, nrow = 1L, ncol = 3L))
+  spe <- SpatialExperiment::SpatialExperiment(
+    assays = list(x = matrix(0, nrow = 1L, ncol = 3L)),
+    spatialCoords = matrix(seq_len(6), ncol = 2L)
   )
-  SingleCellExperiment::colPair(sce, "graph") <- S4Vectors::SelfHits(
+  SingleCellExperiment::colPair(spe, "graph") <- S4Vectors::SelfHits(
     from = c(1L, 2L), to = c(2L, 3L), nnode = 3L,
     value = c(0, 2), sort.by.query = FALSE
   )
-  topology <- .cc_sce_graph_matrix(sce, "graph")
+  topology <- .cc_spe_graph_matrix(spe, "graph")
   expect_identical(as.numeric(topology[1, 2]), 0)
   expect_identical(as.numeric(topology[2, 3]), 1)
 
-  SingleCellExperiment::colPair(sce, "negative") <- S4Vectors::SelfHits(
+  SingleCellExperiment::colPair(spe, "negative") <- S4Vectors::SelfHits(
     from = 1L, to = 2L, nnode = 3L,
     value = -1, sort.by.query = FALSE
   )
-  expect_error(.cc_sce_graph_matrix(sce, "negative"), "negative edge weights")
+  expect_error(.cc_spe_graph_matrix(spe, "negative"), "negative edge weights")
 })

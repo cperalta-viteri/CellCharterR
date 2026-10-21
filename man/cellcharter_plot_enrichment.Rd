@@ -16,30 +16,43 @@ cellcharter_plot_enrichment(
 )
 }
 \arguments{
-\item{x}{A \code{SingleCellExperiment}/\code{SpatialExperiment} containing a stored
-enrichment result, a list with an \code{enrichment} matrix, or the matrix itself.}
+\item{x}{A \code{SpatialExperiment} containing a stored enrichment result, a
+result list with a numeric log2-enrichment matrix, or a numeric matrix that
+the caller asserts already contains log2 fold changes. Stored and direct
+result lists explicitly marked \code{log2_fold_change = FALSE} are rejected so
+raw ratios cannot be mislabeled as positive log2 fold changes. Plotting is
+read-only and never changes \code{x}.}
 
-\item{result_name}{Result name under
-\code{metadata(x)$CellCharterR$results}; used only when \code{x} is an experiment.}
+\item{result_name}{One non-empty key under
+\code{metadata(x)$CellCharterR$results}. It is read only when \code{x} is a
+\code{SpatialExperiment}; stored input and parameter fingerprints are validated
+before the result is plotted.}
 
-\item{title}{Optional plot title.}
+\item{title}{\code{NULL} for no title, or a character value passed to the plot's
+title label.}
 
-\item{point_range}{Two positive numbers controlling the point-size range.}
+\item{point_range}{Two ordered positive finite numbers giving the minimum
+and maximum rendered point sizes.}
 
-\item{size_threshold}{Positive log2 fold-change at which point size is
-capped. The CellCharter CODEX tutorial uses \code{0.58}.}
+\item{size_threshold}{One positive finite log2 fold-change at which point
+size is capped. The CellCharter CODEX tutorial uses \code{0.58}.}
 
-\item{colour_threshold}{Positive log2 fold-change at which colour intensity
-is capped. The CellCharter CODEX tutorial uses \code{0.58}.}
+\item{colour_threshold}{One positive finite log2 fold-change at which the
+dark-red colour intensity is capped. It also separates weakly positive
+from enriched values for hierarchical ordering. The CellCharter CODEX
+tutorial uses \code{0.58}.}
 
-\item{cluster_domains}{Whether to order domains by complete-linkage
-clustering of the thresholded enrichment profiles, as in CellCharter.}
+\item{cluster_domains}{A single logical. When \code{TRUE}, domains are ordered by
+complete-linkage hierarchical clustering of ternary enrichment states:
+negative, weakly positive, and at least \code{colour_threshold}.}
 
-\item{cluster_programs}{Whether to order programs by complete-linkage
-clustering of their thresholded enrichment profiles.}
+\item{cluster_programs}{A single logical applying the same complete-linkage
+ordering to programs rather than retaining the input row order.}
 }
 \value{
-A \code{ggplot} object.
+A read-only, customizable \code{ggplot} object. Non-positive and
+non-finite enrichment entries are omitted from the displayed points but
+remain unchanged in the stored result.
 }
 \description{
 Draws a CellCharter-style dot plot that focuses on positive log2

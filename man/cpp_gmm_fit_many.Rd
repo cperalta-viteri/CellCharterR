@@ -19,27 +19,38 @@ cpp_gmm_fit_many(
 \arguments{
 \item{x}{Observation-by-feature numeric matrix-like object. The compiled
 backend materialises it once as a dense double matrix and makes one shared
-native row-major copy for concurrent fits.}
+native row-major copy plus a centered copy shared by concurrent fits.
+Each active fit additionally stores one observation-by-component
+double-precision posterior matrix.}
 
-\item{n_clusters}{Integer vector of component counts, one per fit.}
+\item{n_clusters}{Non-empty integer vector of component counts, one per fit;
+every value must be positive and no greater than the number of observations.}
 
-\item{seeds}{Integer seeds, recycled when length one.}
+\item{seeds}{Integer seeds, recycled only when length one. Otherwise the
+vector must have one seed per requested fit.}
 
-\item{workers}{Maximum concurrent native worker threads.}
+\item{workers}{Positive maximum number of independent fits run concurrently.
+Values above 32 are capped. This controls between-fit parallelism.}
 
-\item{threads_per_fit}{Native row-shard threads within each independent fit.}
+\item{threads_per_fit}{Positive native row-shard thread count within each
+independent fit. The product \code{workers * threads_per_fit} is capped at 32,
+with \code{threads_per_fit} reduced when necessary.}
 
-\item{max_iter}{maximum EM iterations.}
+\item{max_iter}{One positive integer maximum number of EM iterations.}
 
-\item{tolerance}{stop when per-observation NLL change is below this value.}
+\item{tolerance}{One finite positive stopping threshold for the absolute
+change in mean per-observation negative log likelihood.}
 
-\item{covariance_regularization}{diagonal ridge added before Cholesky.}
+\item{covariance_regularization}{One finite positive diagonal ridge added
+exactly once before each covariance Cholesky factorization.}
 
 \item{progress}{Whether to report native input preparation, completed fits,
 and a heartbeat during long periods without a completed fit.}
 }
 \value{
-A list of serializable \code{cpp_gmm} models inheriting from \code{torch_gmm}.
+A list in input order containing one serializable \code{cpp_gmm} model per
+\verb{(n_clusters, seed)} pair. Models inherit from \code{torch_gmm} for checkpoint
+compatibility but prediction remains on the Torch-free compiled path.
 }
 \description{
 Worker threads share one immutable copy of \code{x}; fitting kernels do not call

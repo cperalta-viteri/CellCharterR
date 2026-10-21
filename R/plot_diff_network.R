@@ -1,6 +1,10 @@
 .cc_diff_network_result <- function(x, result_name) {
-  if (inherits(x, "SingleCellExperiment")) {
-    record <- .cc_sce_require_result(
+  if (inherits(x, "SingleCellExperiment") &&
+      !inherits(x, "SpatialExperiment")) {
+    stop("Experiment input `x` must be a SpatialExperiment.", call. = FALSE)
+  }
+  if (inherits(x, "SpatialExperiment")) {
+    record <- .cc_spe_require_result(
       x, result_name,
       context = "Stored differential neighborhood-enrichment result"
     )
@@ -165,23 +169,38 @@
 #' columns are surrounding/neighbor domains. For experiment input, stored graph,
 #' annotation, and parameter fingerprints are checked before plotting.
 #'
-#' @param x A `SingleCellExperiment`/`SpatialExperiment` containing a stored
-#'   differential result, its stored result record, or the raw result list.
-#' @param result_name Stored result name, used only for an experiment input.
-#' @param alpha Significance threshold in `(0, 1]`.
-#' @param p_adjust_method Method passed to [stats::p.adjust()]. The default
-#'   `"none"` matches the reference CellCharter display.
-#' @param effect_threshold Minimum absolute effect retained for display.
-#' @param significant_only Display only statistically supported edges.
-#' @param top_n Optional maximum number of strongest edges per condition panel.
-#' @param edge_colours One colour for every arrow, or two colours optionally
-#'   named by condition.
-#' @param node_colours One node colour, or one colour per domain optionally
-#'   named by domain.
-#' @param show_edge_values Label arrows with absolute displayed effects.
-#' @return A customizable faceted `ggplot` object. Its transformed edge and
-#'   node tables are available in the `cellcharter_network_data` and
-#'   `cellcharter_node_coordinates` attributes.
+#' @param x A `SpatialExperiment` containing a stored differential result, its
+#'   stored result record, or the raw scientific result list. Plotting is
+#'   read-only and never changes the object or recomputes permutations.
+#' @param result_name One non-empty key under
+#'   `metadata(x)$CellCharterR$results`; read only when `x` is a
+#'   `SpatialExperiment`. Stored input and parameter fingerprints are checked
+#'   before plotting.
+#' @param alpha One finite number in `(0, 1]` used to classify adjusted or raw
+#'   directional empirical p-values as statistically supported.
+#' @param p_adjust_method One method from `stats::p.adjust.methods`. Adjustment
+#'   is performed jointly over every eligible finite, nonzero, off-diagonal
+#'   directed effect before `effect_threshold`, `significant_only`, or `top_n`
+#'   display filtering. The default `"none"` matches the reference CellCharter
+#'   display.
+#' @param effect_threshold One non-negative finite minimum absolute
+#'   differential effect. Directed edges below it are omitted.
+#' @param significant_only A single logical. If `TRUE`, retain only edges whose
+#'   p-value after `p_adjust_method` is at most `alpha`.
+#' @param top_n `NULL` for no rank filter, or a positive whole-number maximum
+#'   of the strongest absolute effects retained separately per condition.
+#' @param edge_colours One valid R colour for every arrow, or two colours
+#'   optionally named by the two inferential condition levels. Effect sign
+#'   selects which condition's colour is used.
+#' @param node_colours One valid R colour for every node, or one colour per
+#'   domain optionally named by domain. `NULL` uses grey for every domain.
+#' @param show_edge_values A single logical indicating whether arrows are
+#'   labelled with absolute effect magnitudes.
+#' @return A read-only, customizable faceted `ggplot` object. Matrix rows are
+#'   source/central domains, columns are surrounding/neighbor domains, and
+#'   closed arrowheads preserve that direction. The displayed edge and node
+#'   tables are attached as `cellcharter_network_data` and
+#'   `cellcharter_node_coordinates`, respectively.
 #' @examples
 #' spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 #' cellcharter_plot_graph_diff(spe, top_n = 10)

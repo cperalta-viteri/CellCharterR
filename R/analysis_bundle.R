@@ -560,21 +560,21 @@
   )
 }
 
-.cc_analysis_unpack_pair <- function(x, n_cells, name) {
+.cc_analysis_unpack_pair <- function(x, n_spots, name) {
   if (!identical(x$format, "SelfHits-v1") || !identical(as.integer(x$nnode),
-                                                          as.integer(n_cells)) ||
-      any(x$from < 1L | x$from > n_cells | x$to < 1L | x$to > n_cells)) {
+                                                          as.integer(n_spots)) ||
+      any(x$from < 1L | x$from > n_spots | x$to < 1L | x$to > n_spots)) {
     stop("Invalid bundled colPair `", name, "`.", call. = FALSE)
   }
   answer <- S4Vectors::SelfHits(
-    from = x$from, to = x$to, nnode = n_cells
+    from = x$from, to = x$to, nnode = n_spots
   )
   S4Vectors::mcols(answer) <- x$mcols
   S4Vectors::metadata(answer) <- x$metadata
   answer
 }
 
-.cc_analysis_save_sce <- function(
+.cc_analysis_save_spe <- function(
     x, directory, prefix, progress, artifact_root = directory,
     registry = .cc_analysis_new_registry()) {
   dir.create(directory, recursive = TRUE, showWarnings = FALSE)
@@ -614,7 +614,7 @@
   alt_names <- SingleCellExperiment::altExpNames(x)
   alternatives <- lapply(seq_along(alt_names), function(i) {
     subdir <- file.path(directory, paste0("alt_", i))
-    .cc_analysis_save_sce(SingleCellExperiment::altExp(x, i), subdir,
+    .cc_analysis_save_spe(SingleCellExperiment::altExp(x, i), subdir,
                         paste0(prefix, "_alt_", i), progress,
                         artifact_root = artifact_root, registry = registry)
   })
@@ -684,7 +684,7 @@
   answer
 }
 
-.cc_analysis_load_sce <- function(directory, id = "root", artifact_root = directory) {
+.cc_analysis_load_spe <- function(directory, id = "root", artifact_root = directory) {
   structure_file <- file.path(directory, "structure.rds")
   if (!file.exists(structure_file)) stop("Missing analysis structure: ", structure_file, call. = FALSE)
   z <- readRDS(structure_file)
@@ -711,7 +711,7 @@
       z$reducedDims[[i]], directory,
       paste0(id, "/reducedDim/", names(z$reducedDims)[i])
     )
-    if (nrow(value) != ncol(ans)) stop("Reduced dimension row count does not match cells.", call. = FALSE)
+    if (nrow(value) != ncol(ans)) stop("Reduced dimension row count does not match spots.", call. = FALSE)
     SingleCellExperiment::reducedDim(ans, names(z$reducedDims)[i]) <- value
   }
   for (nm in names(z$colPairs)) {
@@ -720,11 +720,11 @@
   }
   for (i in seq_along(z$altExps)) {
     subdir <- .cc_analysis_resolve(directory, z$altExps[[i]]$directory)
-    value <- .cc_analysis_load_sce(
+    value <- .cc_analysis_load_spe(
       subdir, paste0(id, "/altExp/", names(z$altExps)[i]),
       artifact_root = artifact_root
     )
-    if (ncol(value) != ncol(ans)) stop("Alternative experiment cell count does not match.", call. = FALSE)
+    if (ncol(value) != ncol(ans)) stop("Alternative experiment spot count does not match.", call. = FALSE)
     SingleCellExperiment::altExp(ans, names(z$altExps)[i]) <- value
   }
   SingleCellExperiment::mainExpName(ans) <- z$mainExpName
@@ -784,17 +784,27 @@
 #' original backing files. AnnData `/uns` content is copied separately without
 #' duplicating the complete source H5AD clone.
 #'
-#' @param spe A `SingleCellExperiment` or `SpatialExperiment`.
-#' @param output_dir Destination directory, which must not exist unless
-#'   `overwrite = TRUE`.
-#' @param overwrite Replace an existing valid destination transactionally.
-#' @param progress Show component- and HDF5-block-level progress messages.
-#' @return The normalized analysis directory, invisibly.
+#' @param spe A `SpatialExperiment` containing the assays, `rowData`,
+#'   `colData`, `spatialCoords`, reduced dimensions, `colPairs`, alternative
+#'   experiments, and metadata to preserve.
+#' @param output_dir One non-empty destination path. The function creates a
+#'   self-contained directory with an object manifest, analysis-owned HDF5
+#'   assays, native R payloads, file sizes, and SHA-256 checksums. The directory
+#'   must not already exist unless `overwrite = TRUE`.
+#' @param overwrite A single logical value. If `TRUE`, replace an existing
+#'   destination transactionally after the staged replacement validates. The
+#'   existing directory is restored if publication fails.
+#' @param progress A single logical value controlling component-, block-,
+#'   checksum-, validation-, and publication-progress messages.
+#' @return The normalized path to `output_dir`, invisibly. The input `spe` is
+#'   not modified. A later [cellcharter_load_analysis()] call reconstructs the
+#'   `SpatialExperiment` from this movable directory without the original H5AD
+#'   or other source backing files.
 #' @export
 cellcharter_save_analysis <- function(
     spe, output_dir, overwrite = FALSE, progress = interactive()) {
-  if (!methods::is(spe, "SingleCellExperiment"))
-    stop("`spe` must be a SingleCellExperiment or SpatialExperiment.", call. = FALSE)
+  if (!methods::is(spe, "SpatialExperiment"))
+    stop("`spe` must be a SpatialExperiment.", call. = FALSE)
   if (!is.character(output_dir) || length(output_dir) != 1L || is.na(output_dir) || !nzchar(output_dir))
     stop("`output_dir` must be one non-empty path.", call. = FALSE)
   if (!is.logical(overwrite) || length(overwrite) != 1L || is.na(overwrite) ||
@@ -811,7 +821,7 @@ cellcharter_save_analysis <- function(
   on.exit(if (dir.exists(stage)) unlink(stage, recursive = TRUE), add = TRUE)
   dir.create(stage, recursive = TRUE)
   .cc_analysis_progress(progress, "1/4", "writing portable components")
-  root_spec <- .cc_analysis_save_sce(spe, file.path(stage, "object"), "root", progress)
+  root_spec <- .cc_analysis_save_spe(spe, file.path(stage, "object"), "root", progress)
   manifest <- list(
     format = "CellCharterR-analysis-directory", format_version = .cc_analysis_version,
     created = format(Sys.time(), tz = "UTC", usetz = TRUE),
@@ -834,7 +844,7 @@ cellcharter_save_analysis <- function(
   # large HDF5 files here would double save-time I/O without adding evidence;
   # full checksum verification remains the default when the bundle is loaded.
   .cc_analysis_validate_files(manifest, stage, verify_checksums = FALSE)
-  test <- .cc_analysis_load_sce(file.path(stage, "object"))
+  test <- .cc_analysis_load_spe(file.path(stage, "object"))
   if (!identical(dim(test), dim(spe))) stop("Staged analysis failed dimension validation.", call. = FALSE)
   rm(test)
   .cc_analysis_progress(progress, "4/4", "publishing atomically")
@@ -855,10 +865,19 @@ cellcharter_save_analysis <- function(
 
 #' Load a portable completed CellCharterR analysis
 #'
-#' @param path Directory created by [cellcharter_save_analysis()].
-#' @param validate Verify all payload sizes and SHA-256 checksums before loading.
-#' @return A locally reconstructed `SpatialExperiment` or
-#'   `SingleCellExperiment` with analysis-owned HDF5 backing.
+#' @param path One existing directory created by
+#'   [cellcharter_save_analysis()]. Legacy version-1 directories remain
+#'   readable; symbolic-link payloads and paths escaping the directory are
+#'   rejected.
+#' @param validate A single logical value. If `TRUE`, verify every payload's
+#'   manifest-recorded size and SHA-256 checksum before reconstruction. If
+#'   `FALSE`, skip payload sizes and checksums; the manifest checksum, safe path
+#'   resolution, component dimensions and types, final object dimensions, and
+#'   reconstructed object validity are still checked.
+#' @return A locally reconstructed `SpatialExperiment`. Assays use
+#'   analysis-owned HDF5 files below `path`; `rowData`, `colData`,
+#'   `spatialCoords`, reduced dimensions, graphs, alternative experiments, and
+#'   metadata are restored in their corresponding Bioconductor compartments.
 #' @export
 cellcharter_load_analysis <- function(path, validate = TRUE) {
   if (!is.character(path) || length(path) != 1L || !dir.exists(path))
@@ -889,7 +908,7 @@ cellcharter_load_analysis <- function(path, validate = TRUE) {
   if (!(as.integer(manifest$format_version) %in% c(1L, .cc_analysis_version)))
     stop("Unsupported analysis-directory format version: ", manifest$format_version, call. = FALSE)
   if (isTRUE(validate)) .cc_analysis_validate_files(manifest, root)
-  ans <- .cc_analysis_load_sce(file.path(root, "object"))
+  ans <- .cc_analysis_load_spe(file.path(root, "object"))
   if (!identical(as.integer(dim(ans)), as.integer(manifest$root$dim)))
     stop("Loaded object dimensions disagree with the manifest.", call. = FALSE)
   ans

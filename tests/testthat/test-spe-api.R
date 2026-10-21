@@ -1,41 +1,28 @@
-.tiny_sce_fixture <- function() {
+.tiny_spe_fixture <- function() {
   sample <- rep(c("A1", "A2", "B1", "B2"), each = 4L)
   condition <- rep(c("healthy", "healthy", "lupus", "lupus"), each = 4L)
   local_xy <- rbind(c(0, 0), c(1, 0), c(0, 1), c(1.2, 1.1))
   spatial <- do.call(rbind, lapply(seq_len(4L), function(i) {
     sweep(local_xy, 2L, c(i * 10, i * 3), "+")
   }))
-  ids <- paste0("cell", seq_along(sample))
+  ids <- paste0("spot", seq_along(sample))
   representation <- cbind(
     x = rep(c(-2, -1, 1, 2), 4L),
     y = rep(c(-1, 1, -1, 1), 4L)
   )
   rownames(spatial) <- rownames(representation) <- ids
-  sce <- SingleCellExperiment::SingleCellExperiment(
+  spe <- SpatialExperiment::SpatialExperiment(
     assays = list(protein = matrix(seq_len(32L), nrow = 2L,
                                    dimnames = list(c("m1", "m2"), ids))),
     colData = S4Vectors::DataFrame(
       sample = sample, condition = factor(condition, levels = c("healthy", "lupus")),
       cell_type = rep(c("T", "B"), 8L), row.names = ids
     ),
-    reducedDims = S4Vectors::SimpleList(spatial = spatial, X_trVAE = representation)
-  )
-  sce
-}
-
-.tiny_spe_fixture <- function() {
-  sce <- .tiny_sce_fixture()
-  spatial <- SingleCellExperiment::reducedDim(sce, "spatial")
-  reduced <- SingleCellExperiment::reducedDims(sce)
-  reduced$spatial <- NULL
-  SpatialExperiment::SpatialExperiment(
-    assays = SummarizedExperiment::assays(sce),
-    rowData = SummarizedExperiment::rowData(sce),
-    colData = SummarizedExperiment::colData(sce),
-    reducedDims = reduced,
+    reducedDims = S4Vectors::SimpleList(X_trVAE = representation),
     spatialCoords = spatial,
-    sample_id = as.character(SummarizedExperiment::colData(sce)$sample)
+    sample_id = sample
   )
+  spe
 }
 
 .tiny_fit <- function(x, n_clusters, seed, ...) list(k = n_clusters, seed = seed)
@@ -45,27 +32,27 @@
 .tiny_nll <- function(model) as.numeric(model$k)
 
 test_that("colData domain labels need no CellCharterR clustering stage", {
-  sce <- .tiny_sce_fixture()
-  sce$python_domain <- factor(rep(c("domain_b", "domain_a"), 8L))
+  spe <- .tiny_spe_fixture()
+  spe$python_domain <- factor(rep(c("domain_b", "domain_a"), 8L))
   enriched <- cellcharter_enrichment(
-    sce, group_col = "cell_type", domain_col = "python_domain"
+    spe, group_col = "cell_type", domain_col = "python_domain"
   )
   expect_true("enrichment" %in% names(S4Vectors::metadata(enriched)$CellCharterR$results))
 })
 
 test_that("imported colPair graphs need no CellCharterR graph stage", {
-  sce <- .tiny_sce_fixture()
-  sce$python_domain <- factor(rep(c("domain_a", "domain_b"), 8L))
-  from <- unlist(lapply(seq(1L, ncol(sce), by = 4L), function(i) {
+  spe <- .tiny_spe_fixture()
+  spe$python_domain <- factor(rep(c("domain_a", "domain_b"), 8L))
+  from <- unlist(lapply(seq(1L, ncol(spe), by = 4L), function(i) {
     c(i, i + 1L, i + 1L, i + 2L, i + 2L, i + 3L)
   }), use.names = FALSE)
-  to <- unlist(lapply(seq(1L, ncol(sce), by = 4L), function(i) {
+  to <- unlist(lapply(seq(1L, ncol(spe), by = 4L), function(i) {
     c(i + 1L, i, i + 2L, i + 1L, i + 3L, i + 2L)
   }), use.names = FALSE)
-  SingleCellExperiment::colPair(sce, "spatial_connectivities") <-
-    S4Vectors::SelfHits(from, to, nnode = ncol(sce), value = 1)
+  SingleCellExperiment::colPair(spe, "spatial_connectivities") <-
+    S4Vectors::SelfHits(from, to, nnode = ncol(spe), value = 1)
   observed <- cellcharter_diff_nhood_enrichment(
-    sce, graph_name = "spatial_connectivities",
+    spe, graph_name = "spatial_connectivities",
     domain_col = "python_domain", condition_col = "condition",
     sample_col = "sample", condition_groups = c("healthy", "lupus"),
     n_perms = 3L, permutation_mode = "shuffle", progress = FALSE
@@ -75,16 +62,16 @@ test_that("imported colPair graphs need no CellCharterR graph stage", {
 })
 
 test_that("domain labels can be read from reducedDims", {
-  sce <- .tiny_sce_fixture()
+  spe <- .tiny_spe_fixture()
   labels <- matrix(rep(0:1, 8L), ncol = 1L,
-                   dimnames = list(colnames(sce), "python_domain"))
-  SingleCellExperiment::reducedDim(sce, "python_labels") <- labels
+                   dimnames = list(colnames(spe), "python_domain"))
+  SingleCellExperiment::reducedDim(spe, "python_labels") <- labels
 
   by_column <- cellcharter_enrichment(
-    sce, group_col = "cell_type", domain_col = "python_domain"
+    spe, group_col = "cell_type", domain_col = "python_domain"
   )
   by_dimension <- cellcharter_enrichment(
-    sce, group_col = "cell_type", domain_col = "python_labels",
+    spe, group_col = "cell_type", domain_col = "python_labels",
     result_name = "from_dimension"
   )
   expect_true("enrichment" %in% names(S4Vectors::metadata(by_column)$CellCharterR$results))
@@ -93,9 +80,9 @@ test_that("domain labels can be read from reducedDims", {
 
 test_that("public object API completes the tiny workflow without sample leakage", {
   skip_if_not_installed("geometry")
-  checkpoint <- tempfile("sce-autok-")
-  sce <- cellcharter_workflow(
-    .tiny_sce_fixture(), group_col = "cell_type", candidate_k = c(2L, 3L),
+  checkpoint <- tempfile("spe-autok-")
+  spe <- cellcharter_workflow(
+    .tiny_spe_fixture(), group_col = "cell_type", candidate_k = c(2L, 3L),
     checkpoint_dir = checkpoint, n_layers = 1L, n_perms = 4L, seed = 17L,
     autok_args = list(
       max_runs = 2L, convergence_tol = 0,
@@ -103,18 +90,18 @@ test_that("public object API completes the tiny workflow without sample leakage"
     )
   )
 
-  expect_s4_class(sce, "SingleCellExperiment")
-  expect_true("cellcharter_graph" %in% SingleCellExperiment::colPairNames(sce))
-  expect_true("X_cellcharter" %in% SingleCellExperiment::reducedDimNames(sce))
+  expect_s4_class(spe, "SpatialExperiment")
+  expect_true("cellcharter_graph" %in% SingleCellExperiment::colPairNames(spe))
+  expect_true("X_cellcharter" %in% SingleCellExperiment::reducedDimNames(spe))
   expect_identical(
-    rownames(SingleCellExperiment::reducedDim(sce, "X_cellcharter")), colnames(sce)
+    rownames(SingleCellExperiment::reducedDim(spe, "X_cellcharter")), colnames(spe)
   )
-  expect_true("cellcharter_domain" %in% colnames(SingleCellExperiment::colData(sce)))
+  expect_true("cellcharter_domain" %in% colnames(SingleCellExperiment::colData(spe)))
 
-  graph <- SingleCellExperiment::colPair(sce, "cellcharter_graph")
-  sample <- as.character(SingleCellExperiment::colData(sce)$sample)
+  graph <- SingleCellExperiment::colPair(spe, "cellcharter_graph")
+  sample <- as.character(SingleCellExperiment::colData(spe)$sample)
   expect_true(all(sample[S4Vectors::from(graph)] == sample[S4Vectors::to(graph)]))
-  results <- S4Vectors::metadata(sce)$CellCharterR$results
+  results <- S4Vectors::metadata(spe)$CellCharterR$results
   expect_true(all(c("enrichment", "nhood_enrichment", "diff_nhood_enrichment") %in%
                     names(results)))
   expect_identical(results$diff_nhood_enrichment$value$params$library_unit, "sample")
@@ -122,12 +109,12 @@ test_that("public object API completes the tiny workflow without sample leakage"
 
 test_that("SPE clustering records and enforces representation content identity", {
   skip_if_not_installed("geometry")
-  checkpoint <- tempfile("sce-content-identity-")
+  checkpoint <- tempfile("spe-content-identity-")
   on.exit(unlink(checkpoint, recursive = TRUE), add = TRUE)
-  sce <- cellcharter_graph(.tiny_sce_fixture(), progress = FALSE)
-  sce <- cellcharter_aggregate(sce, n_layers = 1L, progress = FALSE)
+  spe <- cellcharter_graph(.tiny_spe_fixture(), progress = FALSE)
+  spe <- cellcharter_aggregate(spe, n_layers = 1L, progress = FALSE)
   clustered <- cellcharter_cluster(
-    sce, candidate_k = c(2L, 3L), checkpoint_dir = checkpoint,
+    spe, candidate_k = c(2L, 3L), checkpoint_dir = checkpoint,
     max_runs = 2L, convergence_tol = 0,
     fit_fun = .tiny_fit, predict_fun = .tiny_predict,
     nll_fun = .tiny_nll, progress = FALSE
@@ -138,7 +125,7 @@ test_that("SPE clustering records and enforces representation content identity",
   expect_match(stage$parameters$representation_sha256, "^[0-9a-f]{64}$")
   expect_match(stage$parameters$autok_input_stage_sha256, "^[0-9a-f]{64}$")
 
-  changed <- sce
+  changed <- spe
   value <- SingleCellExperiment::reducedDim(changed, "X_cellcharter")
   value[[1L]] <- value[[1L]] + 0.25
   SingleCellExperiment::reducedDim(changed, "X_cellcharter") <- value
@@ -193,17 +180,17 @@ test_that("native SpatialExperiment coordinates survive the complete workflow", 
 })
 
 test_that("disk-backed numeric reduced dimensions pass validation without realization", {
-  sce <- .tiny_sce_fixture()
+  spe <- .tiny_spe_fixture()
   delayed <- DelayedArray::DelayedArray(
-    SingleCellExperiment::reducedDim(sce, "X_trVAE")
+    SingleCellExperiment::reducedDim(spe, "X_trVAE")
   )
-  SingleCellExperiment::reducedDim(sce, "X_delayed") <- delayed
+  SingleCellExperiment::reducedDim(spe, "X_delayed") <- delayed
 
-  observed <- .cc_sce_reduced_dim(sce, "X_delayed")
+  observed <- .cc_spe_reduced_dim(spe, "X_delayed")
 
   expect_s4_class(observed, "DelayedMatrix")
   expect_identical(DelayedArray::type(observed), "double")
-  expect_equal(dim(observed), c(ncol(sce), 2L))
+  expect_equal(dim(observed), c(ncol(spe), 2L))
 })
 
 test_that("enrichment plotting accepts stored results and direct result lists", {
@@ -249,6 +236,23 @@ test_that("enrichment plotting suppresses depletion and caps positive display va
   expect_identical(levels(plotted$data$domain), rev(colnames(values)))
 })
 
+test_that("enrichment plotting never labels raw ratios as log2 fold changes", {
+  skip_if_not_installed("ggplot2")
+  ratio_result <- list(
+    enrichment = matrix(
+      c(0.5, 2), nrow = 1L,
+      dimnames = list("program" = NULL, "domain" = NULL)
+    ),
+    params = list(log2_fold_change = FALSE)
+  )
+  rownames(ratio_result$enrichment) <- "program"
+  colnames(ratio_result$enrichment) <- c("A", "B")
+  expect_error(
+    cellcharter_plot_enrichment(ratio_result),
+    "requires log2 fold-change enrichment", fixed = TRUE
+  )
+})
+
 test_that("enrichment plotting clusters program profiles with hclust", {
   skip_if_not_installed("ggplot2")
   values <- matrix(
@@ -272,31 +276,31 @@ test_that("enrichment plotting clusters program profiles with hclust", {
 
 test_that("object API rejects positional identity and stale subset metadata", {
   skip_if_not_installed("geometry")
-  sce <- .tiny_sce_fixture()
+  spe <- .tiny_spe_fixture()
   expect_error(
-    .cc_align_observation_ids(rev(colnames(sce)), colnames(sce)),
+    .cc_align_observation_ids(rev(colnames(spe)), colnames(spe)),
     "order mismatch", fixed = TRUE
   )
 
-  sce <- cellcharter_graph(sce)
-  subset <- sce[, c(1:3, 5:7, 9:11, 13:15)]
+  spe <- cellcharter_graph(spe)
+  subset <- spe[, c(1:3, 5:7, 9:11, 13:15)]
   pairs <- SingleCellExperiment::colPair(subset, "cellcharter_graph")
   expect_true(all(S4Vectors::from(pairs) <= ncol(subset)))
   expect_true(all(S4Vectors::to(pairs) <= ncol(subset)))
   expect_error(
     cellcharter_aggregate(subset),
-    "stale after cell reordering or subsetting", fixed = TRUE
+    "stale after spot reordering or subsetting", fixed = TRUE
   )
 })
 
 test_that("graph stages reject changed coordinates, samples, and topology", {
   skip_if_not_installed("geometry")
-  original <- cellcharter_graph(.tiny_sce_fixture(), progress = FALSE)
+  original <- cellcharter_graph(.tiny_spe_fixture(), progress = FALSE)
 
   changed_coordinates <- original
-  coordinates <- SingleCellExperiment::reducedDim(changed_coordinates, "spatial")
+  coordinates <- SpatialExperiment::spatialCoords(changed_coordinates)
   coordinates[1L, 1L] <- coordinates[1L, 1L] + 0.25
-  SingleCellExperiment::reducedDim(changed_coordinates, "spatial") <- coordinates
+  SpatialExperiment::spatialCoords(changed_coordinates) <- coordinates
   expect_error(
     cellcharter_aggregate(changed_coordinates, n_layers = 1L, progress = FALSE),
     "`coordinates`.*changed"
@@ -320,31 +324,31 @@ test_that("graph stages reject changed coordinates, samples, and topology", {
 
 test_that("aggregation and clustering stages reject changed scientific inputs", {
   skip_if_not_installed("geometry")
-  sce <- cellcharter_graph(.tiny_sce_fixture(), progress = FALSE)
-  sce <- cellcharter_aggregate(sce, n_layers = 1L, progress = FALSE)
+  spe <- cellcharter_graph(.tiny_spe_fixture(), progress = FALSE)
+  spe <- cellcharter_aggregate(spe, n_layers = 1L, progress = FALSE)
 
-  changed_source <- sce
+  changed_source <- spe
   source <- SingleCellExperiment::reducedDim(changed_source, "X_trVAE")
   source[1L, 1L] <- source[1L, 1L] + 0.25
   SingleCellExperiment::reducedDim(changed_source, "X_trVAE") <- source
   expect_error(
-    .cc_sce_require_stage(changed_source, "aggregation:X_cellcharter"),
+    .cc_spe_require_stage(changed_source, "aggregation:X_cellcharter"),
     "`representation` representation contents changed"
   )
 
-  changed_output <- sce
+  changed_output <- spe
   output <- SingleCellExperiment::reducedDim(changed_output, "X_cellcharter")
   output[1L, 1L] <- output[1L, 1L] + 0.25
   SingleCellExperiment::reducedDim(changed_output, "X_cellcharter") <- output
   expect_error(
-    .cc_sce_require_stage(changed_output, "aggregation:X_cellcharter"),
+    .cc_spe_require_stage(changed_output, "aggregation:X_cellcharter"),
     "`output` representation contents changed"
   )
 
-  checkpoint <- tempfile("sce-stage-domain-")
+  checkpoint <- tempfile("spe-stage-domain-")
   on.exit(unlink(checkpoint, recursive = TRUE), add = TRUE)
   clustered <- cellcharter_cluster(
-    sce, candidate_k = c(2L, 3L), checkpoint_dir = checkpoint,
+    spe, candidate_k = c(2L, 3L), checkpoint_dir = checkpoint,
     max_runs = 2L, convergence_tol = 0,
     fit_fun = .tiny_fit, predict_fun = .tiny_predict,
     nll_fun = .tiny_nll, progress = FALSE
@@ -359,12 +363,12 @@ test_that("aggregation and clustering stages reject changed scientific inputs", 
 })
 
 test_that("aggregation rejects cross-sample imported graph edges", {
-  sce <- .tiny_sce_fixture()
-  SingleCellExperiment::colPair(sce, "imported_graph") <-
-    S4Vectors::SelfHits(1L, 5L, nnode = ncol(sce), value = 1)
+  spe <- .tiny_spe_fixture()
+  SingleCellExperiment::colPair(spe, "imported_graph") <-
+    S4Vectors::SelfHits(1L, 5L, nnode = ncol(spe), value = 1)
   expect_error(
     cellcharter_aggregate(
-      sce, graph_name = "imported_graph", n_layers = 1L, progress = FALSE
+      spe, graph_name = "imported_graph", n_layers = 1L, progress = FALSE
     ),
     "contains 1 cross-sample edge"
   )
@@ -372,36 +376,64 @@ test_that("aggregation rejects cross-sample imported graph edges", {
 
 test_that("graph errors identify a degenerate physical sample", {
   skip_if_not_installed("geometry")
-  sce <- .tiny_sce_fixture()
-  spatial <- SingleCellExperiment::reducedDim(sce, "spatial")
+  spe <- .tiny_spe_fixture()
+  spatial <- SpatialExperiment::spatialCoords(spe)
   spatial[1:4, ] <- cbind(1:4, 1:4)
-  SingleCellExperiment::reducedDim(sce, "spatial") <- spatial
-  expect_error(cellcharter_graph(sce), "sample-local graph for `A1`")
+  SpatialExperiment::spatialCoords(spe) <- spatial
+  expect_error(cellcharter_graph(spe), "sample-local graph for `A1`")
 })
 
 test_that("graph and aggregation APIs report progress", {
   skip_if_not_installed("geometry")
   expect_output(
-    sce <- cellcharter_graph(.tiny_sce_fixture(), progress = TRUE),
+    spe <- cellcharter_graph(.tiny_spe_fixture(), progress = TRUE),
     "100%",
     fixed = TRUE
   )
   expect_output(
-    sce <- cellcharter_aggregate(sce, n_layers = 1L, progress = TRUE),
+    spe <- cellcharter_aggregate(spe, n_layers = 1L, progress = TRUE),
     "100%",
     fixed = TRUE
   )
-  expect_true("X_cellcharter" %in% SingleCellExperiment::reducedDimNames(sce))
-  expect_error(cellcharter_graph(.tiny_sce_fixture(), progress = NA), "progress")
-  expect_error(cellcharter_aggregate(sce, progress = NA), "progress")
+  expect_true("X_cellcharter" %in% SingleCellExperiment::reducedDimNames(spe))
+  expect_error(cellcharter_graph(.tiny_spe_fixture(), progress = NA), "progress")
+  expect_error(cellcharter_aggregate(spe, progress = NA), "progress")
 })
 
-test_that("legacy SCE-prefixed functions warn and forward", {
+test_that("SPE-prefixed aliases forward to the canonical API", {
   skip_if_not_installed("geometry")
-  expect_warning(
-    result <- cellcharter_sce_graph(.tiny_spe_fixture()),
-    "deprecated"
-  )
+  expect_no_warning(result <- cellcharter_spe_graph(.tiny_spe_fixture()))
   expect_s4_class(result, "SpatialExperiment")
   expect_true("cellcharter_graph" %in% SingleCellExperiment::colPairNames(result))
+})
+
+test_that("SpatialExperiment APIs consistently expose `spe`", {
+  functions <- list(
+    cellcharter_graph,
+    cellcharter_aggregate,
+    cellcharter_cluster,
+    cellcharter_enrichment,
+    cellcharter_nhood_enrichment,
+    cellcharter_diff_nhood_enrichment,
+    cellcharter_workflow,
+    cellcharter_cluster_fixed,
+    cellcharter_spe_graph,
+    cellcharter_spe_aggregate,
+    cellcharter_spe_cluster,
+    cellcharter_spe_enrichment,
+    cellcharter_spe_nhood_enrichment,
+    cellcharter_spe_diff_nhood_enrichment,
+    cellcharter_spe_workflow
+  )
+  expect_true(all(vapply(
+    functions,
+    function(fun) identical(names(formals(fun))[[1L]], "spe"),
+    logical(1L)
+  )))
+
+  skip_if_not_installed("geometry")
+  expect_s4_class(
+    cellcharter_graph(spe = .tiny_spe_fixture(), progress = FALSE),
+    "SpatialExperiment"
+  )
 })

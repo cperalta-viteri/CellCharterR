@@ -18,34 +18,49 @@ cellcharter_plot_graph_diff(
 )
 }
 \arguments{
-\item{x}{A \code{SingleCellExperiment}/\code{SpatialExperiment} containing a stored
-differential result, its stored result record, or the raw result list.}
+\item{x}{A \code{SpatialExperiment} containing a stored differential result, its
+stored result record, or the raw scientific result list. Plotting is
+read-only and never changes the object or recomputes permutations.}
 
-\item{result_name}{Stored result name, used only for an experiment input.}
+\item{result_name}{One non-empty key under
+\code{metadata(x)$CellCharterR$results}; read only when \code{x} is a
+\code{SpatialExperiment}. Stored input and parameter fingerprints are checked
+before plotting.}
 
-\item{alpha}{Significance threshold in \verb{(0, 1]}.}
+\item{alpha}{One finite number in \verb{(0, 1]} used to classify adjusted or raw
+directional empirical p-values as statistically supported.}
 
-\item{p_adjust_method}{Method passed to \code{\link[stats:p.adjust]{stats::p.adjust()}}. The default
-\code{"none"} matches the reference CellCharter display.}
+\item{p_adjust_method}{One method from \code{stats::p.adjust.methods}. Adjustment
+is performed jointly over every eligible finite, nonzero, off-diagonal
+directed effect before \code{effect_threshold}, \code{significant_only}, or \code{top_n}
+display filtering. The default \code{"none"} matches the reference CellCharter
+display.}
 
-\item{effect_threshold}{Minimum absolute effect retained for display.}
+\item{effect_threshold}{One non-negative finite minimum absolute
+differential effect. Directed edges below it are omitted.}
 
-\item{significant_only}{Display only statistically supported edges.}
+\item{significant_only}{A single logical. If \code{TRUE}, retain only edges whose
+p-value after \code{p_adjust_method} is at most \code{alpha}.}
 
-\item{top_n}{Optional maximum number of strongest edges per condition panel.}
+\item{top_n}{\code{NULL} for no rank filter, or a positive whole-number maximum
+of the strongest absolute effects retained separately per condition.}
 
-\item{edge_colours}{One colour for every arrow, or two colours optionally
-named by condition.}
+\item{edge_colours}{One valid R colour for every arrow, or two colours
+optionally named by the two inferential condition levels. Effect sign
+selects which condition's colour is used.}
 
-\item{node_colours}{One node colour, or one colour per domain optionally
-named by domain.}
+\item{node_colours}{One valid R colour for every node, or one colour per
+domain optionally named by domain. \code{NULL} uses grey for every domain.}
 
-\item{show_edge_values}{Label arrows with absolute displayed effects.}
+\item{show_edge_values}{A single logical indicating whether arrows are
+labelled with absolute effect magnitudes.}
 }
 \value{
-A customizable faceted \code{ggplot} object. Its transformed edge and
-node tables are available in the \code{cellcharter_network_data} and
-\code{cellcharter_node_coordinates} attributes.
+A read-only, customizable faceted \code{ggplot} object. Matrix rows are
+source/central domains, columns are surrounding/neighbor domains, and
+closed arrowheads preserve that direction. The displayed edge and node
+tables are attached as \code{cellcharter_network_data} and
+\code{cellcharter_node_coordinates}, respectively.
 }
 \description{
 Uses a stored result from \code{\link[=cellcharter_diff_nhood_enrichment]{cellcharter_diff_nhood_enrichment()}} to draw two

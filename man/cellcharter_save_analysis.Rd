@@ -12,17 +12,27 @@ cellcharter_save_analysis(
 )
 }
 \arguments{
-\item{spe}{A \code{SingleCellExperiment} or \code{SpatialExperiment}.}
+\item{spe}{A \code{SpatialExperiment} containing the assays, \code{rowData},
+\code{colData}, \code{spatialCoords}, reduced dimensions, \code{colPairs}, alternative
+experiments, and metadata to preserve.}
 
-\item{output_dir}{Destination directory, which must not exist unless
-\code{overwrite = TRUE}.}
+\item{output_dir}{One non-empty destination path. The function creates a
+self-contained directory with an object manifest, analysis-owned HDF5
+assays, native R payloads, file sizes, and SHA-256 checksums. The directory
+must not already exist unless \code{overwrite = TRUE}.}
 
-\item{overwrite}{Replace an existing valid destination transactionally.}
+\item{overwrite}{A single logical value. If \code{TRUE}, replace an existing
+destination transactionally after the staged replacement validates. The
+existing directory is restored if publication fails.}
 
-\item{progress}{Show component- and HDF5-block-level progress messages.}
+\item{progress}{A single logical value controlling component-, block-,
+checksum-, validation-, and publication-progress messages.}
 }
 \value{
-The normalized analysis directory, invisibly.
+The normalized path to \code{output_dir}, invisibly. The input \code{spe} is
+not modified. A later \code{\link[=cellcharter_load_analysis]{cellcharter_load_analysis()}} call reconstructs the
+\code{SpatialExperiment} from this movable directory without the original H5AD
+or other source backing files.
 }
 \description{
 Large assays are copied blockwise into analysis-owned HDF5 files. Reduced

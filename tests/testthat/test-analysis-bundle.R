@@ -132,7 +132,7 @@ test_that("analysis bundle is independent, relocatable, and complete", {
                  force = TRUE), add = TRUE)
   fixture <- .analysis_bundle_fixture(source_dir)
 
-  cellcharter_save_analysis(fixture$spe, bundle)
+  cellcharter_save_analysis(spe = fixture$spe, output_dir = bundle)
   expect_true(dir.exists(bundle))
   dir.create(moved_parent)
   expect_true(file.rename(bundle, moved))

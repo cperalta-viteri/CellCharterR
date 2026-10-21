@@ -33,20 +33,37 @@
 #' @section Experimental status:
 #' Fixed-K fitting uses the experimental R Torch GMM path by default. For
 #' multi-million-observation datasets, consider fitting with Python CellCharter
-#' and storing its labels directly in `colData(sce)`.
+#' and storing its labels directly in `colData(spe)`.
 #'
-#' @param sce An aggregated `SingleCellExperiment` or `SpatialExperiment`.
-#' @param representation Aggregated representation in `reducedDims(sce)`.
-#' @param n_clusters Exact number of mixture components to fit.
-#' @param domain_col Output column in `colData(sce)`.
-#' @param checkpoint_dir Optional durable checkpoint directory.
-#' @param seed Deterministic GMM initialization seed.
-#' @param fit_args,predict_args Named additional arguments for `fit_fun` and
-#'   `predict_fun`, respectively.
-#' @param resume Reuse an exact compatible completed checkpoint when available.
-#' @param fit_fun,predict_fun Fitting and prediction hooks. Their defaults are
-#'   [torch_gmm_fit()] and [torch_gmm_predict()].
-#' @return The updated experiment with factor labels in `domain_col`.
+#' @param spe An aggregated `SpatialExperiment` with a current aggregation
+#'   stage for `representation`.
+#' @param representation Name of the numeric spot-by-feature matrix in
+#'   `reducedDims(spe)` used for fitting and prediction.
+#' @param n_clusters Positive integer number of mixture components, not greater
+#'   than the number of spots. Exactly this K is fitted once.
+#' @param domain_col Name of the zero-based factor labels written to
+#'   `colData(spe)`. Fit metadata is written to
+#'   `metadata(spe)$CellCharterR$fixed_k[[domain_col]]`, and stage provenance to
+#'   `metadata(spe)$CellCharterR$stages[[paste0("clustering:", domain_col)]]`.
+#' @param checkpoint_dir `NULL` or a non-empty durable directory. When set, the
+#'   completed model and labels are written atomically to
+#'   `fixed_k<n_clusters>.rds`; metadata then records the normalized path rather
+#'   than embedding the model and labels.
+#' @param seed Non-negative integer initialization seed passed to `fit_fun` and
+#'   included in checkpoint compatibility.
+#' @param fit_args Named list of additional arguments passed to `fit_fun`.
+#'   It must not contain `x`, `n_clusters`, or `seed`.
+#' @param predict_args Named list of additional arguments passed to
+#'   `predict_fun`. It must not contain `model` or `newdata`.
+#' @param resume A single logical value. When `TRUE`, reuse a complete checkpoint
+#'   only if spot order, representation, aggregation stage, K, seed, arguments,
+#'   and fitting implementations all match exactly.
+#' @param fit_fun Function called as `fit_fun(x, n_clusters, seed, ...)`.
+#'   The default is [torch_gmm_fit()].
+#' @param predict_fun Function called as `predict_fun(model, newdata, ...)`.
+#'   The default is [torch_gmm_predict()].
+#' @return The updated `SpatialExperiment` with factor labels in
+#'   `colData(spe)[[domain_col]]` and fit provenance in metadata.
 #' @examples
 #' spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 #' demo_fit <- function(x, n_clusters, seed, ...) list(k = n_clusters, seed = seed)
@@ -61,12 +78,12 @@
 #' table(spe$fixed_domain)
 #' @export
 cellcharter_cluster_fixed <- function(
-    sce, representation = "X_cellcharter", n_clusters,
+    spe, representation = "X_cellcharter", n_clusters,
     domain_col = "cellcharter_domain", checkpoint_dir = NULL, seed = 1L,
     fit_args = list(), predict_args = list(), resume = TRUE,
     fit_fun = torch_gmm_fit, predict_fun = torch_gmm_predict) {
-  x <- .cc_sce_reduced_dim(sce, representation)
-  aggregation <- .cc_sce_require_stage(sce, paste0("aggregation:", representation))
+  x <- .cc_spe_reduced_dim(spe, representation)
+  aggregation <- .cc_spe_require_stage(spe, paste0("aggregation:", representation))
   raw_n_clusters <- n_clusters
   raw_seed <- seed
   n_clusters <- as.integer(n_clusters)
@@ -75,7 +92,7 @@ cellcharter_cluster_fixed <- function(
       !is.finite(raw_n_clusters) || raw_n_clusters != n_clusters ||
       n_clusters < 1L ||
       n_clusters > nrow(x)) {
-    stop("`n_clusters` must be one integer between 1 and the number of cells.",
+    stop("`n_clusters` must be one integer between 1 and the number of spots.",
          call. = FALSE)
   }
   if (!is.numeric(raw_seed) || length(raw_seed) != 1L || is.na(raw_seed) || !is.finite(raw_seed) ||
@@ -97,7 +114,7 @@ cellcharter_cluster_fixed <- function(
     predict_args, c("model", "newdata"), "predict_args"
   )
 
-  identity <- .cc_validate_sce_identity(sce, reduced_dims = representation)
+  identity <- .cc_validate_spe_identity(spe, reduced_dims = representation)
   signature <- digest::digest(list(
     schema = 1L, cell_order_sha256 = identity$cell_order_sha256,
     representation = representation, dimensions = dim(x),
@@ -129,9 +146,9 @@ cellcharter_cluster_fixed <- function(
     ), fit_args))
     labels <- do.call(predict_fun, c(list(model = model, newdata = x), predict_args))
     labels <- as.integer(labels)
-    if (length(labels) != ncol(sce) || anyNA(labels) ||
+    if (length(labels) != ncol(spe) || anyNA(labels) ||
         any(labels < 0L | labels >= n_clusters)) {
-      stop("Fixed-K prediction must return one zero-based label in [0, K-1] per cell.",
+      stop("Fixed-K prediction must return one zero-based label in [0, K-1] per spot.",
            call. = FALSE)
     }
     artifact <- list(
@@ -144,13 +161,13 @@ cellcharter_cluster_fixed <- function(
   }
 
   labels <- artifact$labels
-  if (length(labels) != ncol(sce) || anyNA(labels) ||
+  if (length(labels) != ncol(spe) || anyNA(labels) ||
       any(labels < 0L | labels >= n_clusters)) {
-    stop("Fixed-K checkpoint labels do not align one-to-one with experiment cells.",
+    stop("Fixed-K checkpoint labels do not align one-to-one with SPE spots.",
          call. = FALSE)
   }
-  sce[[domain_col]] <- factor(labels, levels = seq.int(0L, n_clusters - 1L))
-  metadata <- .cc_sce_metadata(sce)
+  spe[[domain_col]] <- factor(labels, levels = seq.int(0L, n_clusters - 1L))
+  metadata <- .cc_spe_metadata(spe)
   metadata$fixed_k[[domain_col]] <- list(
     n_clusters = n_clusters, seed = seed, representation = representation,
     signature = signature, resumed = reused,
@@ -158,9 +175,9 @@ cellcharter_cluster_fixed <- function(
     model = if (is.null(checkpoint_path)) artifact$model else NULL,
     labels = if (is.null(checkpoint_path)) labels else NULL
   )
-  S4Vectors::metadata(sce)$CellCharterR <- metadata
-  .cc_sce_record_stage(
-    sce, paste0("clustering:", domain_col),
+  S4Vectors::metadata(spe)$CellCharterR <- metadata
+  .cc_spe_record_stage(
+    spe, paste0("clustering:", domain_col),
     list(representation = representation, n_clusters = n_clusters,
          domain_col = domain_col, seed = seed, fixed_k = TRUE,
          resumed = reused, checkpoint = metadata$fixed_k[[domain_col]]$checkpoint)

@@ -36,7 +36,7 @@
   synchronized subsetting tests, and stale-stage detection.
 - Added a portable 1,000-spot CODEX teaching SPE and exact miniature H5AD import
   fixtures under CC BY 4.0 attribution.
-- Added a CPU-only beginner vignette over K=2 through K=10, an H5AD-to-SCE
+- Added a CPU-only beginner vignette over K=2 through K=10, an H5AD-to-SPE
   conversion vignette, and the preserved full mouse-spleen reproducibility
   report as immediately viewable HTML.
 - Added a movable, separately distributed full mouse-spleen SPE checkpoint with
@@ -55,6 +55,13 @@
   historical Fowlkes--Mallows comparison. Representation caching now begins
   only for genuinely unfinished work, and an interrupted final run is
   recoverably quarantined and restarted from its first K.
-- Simplified the public workflow to neutral `cellcharter_*()` names. Numerical
-  matrix kernels now use internal `.cc_*()` names; the former
-  `cellcharter_sce_*()` entry points remain as deprecated compatibility wrappers.
+- Standardized the complete public interface on SpatialExperiment terminology.
+  Experiment arguments are now named `spe`, the explicit compatibility aliases
+  use `cellcharter_spe_*()`, and `read_codex_spe()` is the sole CODEX reader.
+  Named calls using the old `sce =` argument and old SCE-prefixed aliases are an
+  intentional breaking change. Frozen legacy checkpoint identifiers remain
+  readable so this terminology migration does not invalidate expensive work.
+  The CODEX workflow can adopt the verified pre-migration representation and
+  downstream contracts only when every artifact checksum and scientific field
+  still matches; its historical SingleCellExperiment checkpoint is validated
+  through an in-memory SpatialExperiment view without rewriting the artifact.

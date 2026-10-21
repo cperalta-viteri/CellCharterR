@@ -110,7 +110,7 @@ repository_root <- normalizePath(".", winslash = "/", mustWork = TRUE)
 dir.create(file.path(repository_root, "results"), recursive = TRUE, showWarnings = FALSE)
 results_root <- normalizePath("results", winslash = "/", mustWork = TRUE)
 input_path <- Sys.getenv(
-  "CODEX_AGGREGATED_SCE",
+  "CODEX_AGGREGATED_SPE",
   "results/CellCharterR_mouse_spleen_v2/aggregation_pinned_global/codex_sce_aggregated.rds"
 )
 output_dir <- Sys.getenv(
@@ -122,11 +122,11 @@ manifest_path <- Sys.getenv(
 )
 
 if (!file.exists(input_path)) {
-  stop("Missing aggregated mouse-spleen SCE: ", input_path, call. = FALSE)
+  stop("Missing aggregated mouse-spleen SpatialExperiment: ", input_path, call. = FALSE)
 }
 input_path <- normalizePath(input_path, winslash = "/", mustWork = TRUE)
 if (!startsWith(paste0(input_path, "/"), paste0(repository_root, "/"))) {
-  stop("CODEX_AGGREGATED_SCE must resolve inside this repository.", call. = FALSE)
+  stop("CODEX_AGGREGATED_SPE must resolve inside this repository.", call. = FALSE)
 }
 output_dir <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
 if (identical(output_dir, results_root) ||
@@ -184,20 +184,20 @@ if (file.exists(manifest_path)) {
   )
 }
 
-sce <- readRDS(input_path)
-if (!inherits(sce, "SingleCellExperiment")) {
-  stop("The input must be a SingleCellExperiment.", call. = FALSE)
+spe <- readRDS(input_path)
+if (!inherits(spe, "SpatialExperiment")) {
+  stop("The input must be a SpatialExperiment.", call. = FALSE)
 }
-if (!"X_cellcharter" %in% SingleCellExperiment::reducedDimNames(sce)) {
-  stop("The input lacks reducedDim(sce, 'X_cellcharter').", call. = FALSE)
+if (!"X_cellcharter" %in% SingleCellExperiment::reducedDimNames(spe)) {
+  stop("The input lacks reducedDim(spe, 'X_cellcharter').", call. = FALSE)
 }
-x <- SingleCellExperiment::reducedDim(sce, "X_cellcharter")
-if (length(dim(x)) != 2L || nrow(x) != ncol(sce) || nrow(x) < max(candidate_k) + 1L) {
+x <- SingleCellExperiment::reducedDim(spe, "X_cellcharter")
+if (length(dim(x)) != 2L || nrow(x) != ncol(spe) || nrow(x) < max(candidate_k) + 1L) {
   stop("The X_cellcharter representation has incompatible dimensions.", call. = FALSE)
 }
-cell_ids <- colnames(sce)
+cell_ids <- colnames(spe)
 if (is.null(cell_ids) || anyNA(cell_ids) || any(!nzchar(cell_ids)) || anyDuplicated(cell_ids)) {
-  stop("The input SCE must have complete, unique cell identifiers.", call. = FALSE)
+  stop("The input SpatialExperiment must have complete, unique spot identifiers.", call. = FALSE)
 }
 cell_order_sha256 <- digest::digest(as.character(cell_ids), algo = "sha256")
 if (!is.null(aggregation_manifest)) {
@@ -207,7 +207,7 @@ if (!is.null(aggregation_manifest)) {
   }
   if (!is.null(aggregation_manifest$cell_order_sha256) &&
       !identical(aggregation_manifest$cell_order_sha256, cell_order_sha256)) {
-    stop("Aggregation manifest cell order does not match the input SCE.", call. = FALSE)
+    stop("Aggregation manifest spot order does not match the input SpatialExperiment.", call. = FALSE)
   }
 }
 
@@ -265,8 +265,8 @@ if (!identical(autok$backend, backend) ||
 }
 selected_model <- CellCharterR::cellcharter_autok_model(autok)
 selected_labels <- selected_model$labels
-if (length(selected_labels) != ncol(sce)) {
-  stop("Selected model did not return one label per mouse-spleen cell.", call. = FALSE)
+if (length(selected_labels) != ncol(spe)) {
+  stop("Selected model did not return one label per mouse-spleen spot.", call. = FALSE)
 }
 
 # Fit the tutorial-matched K=11 sensitivity separately with its published seed.
@@ -283,8 +283,8 @@ k11_model <- CellCharterR::cpp_gmm_fit(
 )
 k11_finished <- Sys.time()
 k11_elapsed <- as.numeric(difftime(k11_finished, k11_started, units = "secs"))
-if (length(k11_model$labels) != ncol(sce)) {
-  stop("The K=11 sensitivity fit did not return one label per cell.", call. = FALSE)
+if (length(k11_model$labels) != ncol(spe)) {
+  stop("The K=11 sensitivity fit did not return one label per spot.", call. = FALSE)
 }
 
 best_row <- autok$best_index[autok$best_index$k == autok$best_k, , drop = FALSE]

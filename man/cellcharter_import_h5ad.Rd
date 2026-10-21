@@ -4,23 +4,105 @@
 \alias{cellcharter_import_h5ad}
 \title{Import an H5AD as an independent disk-backed SpatialExperiment}
 \usage{
-cellcharter_import_h5ad(h5ad_file, output_dir, ...)
+cellcharter_import_h5ad(
+  h5ad_file,
+  output_dir,
+  assay_path = "X",
+  assay_name = "expression",
+  obs_columns = NULL,
+  var_columns = NULL,
+  spatial_path = "obsm/spatial",
+  reduced_dims = c(PCA = "obsm/X_pca", cellcharter = "obsm/X_cellcharter"),
+  aucell_path = "obsm/score_aucell",
+  sample_column = "slide_id_concat",
+  chunk_mib = 128L,
+  overwrite = FALSE,
+  source_verification = c("sampled", "full"),
+  materialize_block_mib = 64,
+  max_materialized_gib = getOption("CellCharterR.import.max_materialized_gib", Inf),
+  progress = interactive()
+)
 }
 \arguments{
-\item{h5ad_file}{Path to the source H5AD.}
+\item{h5ad_file}{One existing source H5AD path. The file is read directly
+through HDF5; Python and AnnData are not required.}
 
-\item{output_dir}{Destination directory for \code{arrays.h5}, \code{spe.rds}, and the
-conversion manifest. Move these files together.}
+\item{output_dir}{One destination directory. The importer writes an
+independent \code{arrays.h5} clone, a reconstructed \code{spe.rds} convenience
+object, and \code{manifest.rds}. Move the complete directory when transporting
+the result. The returned object does not depend on \code{h5ad_file}.}
 
-\item{...}{Additional importer arguments such as \code{sample_column},
-\code{reduced_dims}, \code{chunk_mib}, \code{materialize_block_mib},
-\code{max_materialized_gib}, \code{source_verification}, and \code{progress}.
-\code{source_verification = "sampled"} is fast and assumes the source remains
-stable while copying; \code{"full"} performs an additional complete source read
-and requires its SHA-256 to equal the independent clone before publication.}
+\item{assay_path}{Non-empty HDF5 path to the feature-by-spot assay, by
+default AnnData \code{X}. It is exposed without materialisation as
+\code{assay(spe, assay_name)} backed by \code{output_dir/arrays.h5}.}
+
+\item{assay_name}{Non-empty name assigned to the imported assay in
+\code{assayNames(spe)}.}
+
+\item{obs_columns}{\code{NULL} to import every \code{obs} column, or a unique character
+vector selecting columns stored in \code{colData(spe)}. The AnnData observation
+index becomes \code{colnames(spe)} and \code{rownames(colData(spe))}.}
+
+\item{var_columns}{\code{NULL} to import every \code{var} column, or a unique character
+vector selecting columns stored in \code{rowData(spe)}. The AnnData variable
+index becomes \code{rownames(spe)} and \code{rownames(rowData(spe))}.}
+
+\item{spatial_path}{Non-empty HDF5 path to a dense AnnData spatial matrix.
+Through R's HDF5 dimension convention it must be two-by-spots; the importer
+transposes it blockwise to spots-by-two and stores it in
+\code{spatialCoords(spe)}.}
+
+\item{reduced_dims}{A uniquely named character vector mapping each desired
+\code{reducedDim} name to a dense AnnData \code{obsm} HDF5 path. Through R's HDF5
+dimension convention each dataset must be features-by-spots; it is
+transposed blockwise and stored as an ordinary spots-by-features matrix in
+\code{reducedDim(spe, name)}. Use \code{character()} to import none.}
+
+\item{aucell_path}{Non-empty HDF5 path to an AnnData dataframe-encoded AUCell
+\code{obsm} entry. Its named program columns are materialised blockwise as the
+ordinary spots-by-program matrix \code{reducedDim(spe, "AUCell")}. Use \code{NULL}
+to omit it; matrix-encoded and sparse AUCell entries are rejected.}
+
+\item{sample_column}{One imported \code{obs} column used as the
+\code{SpatialExperiment} sample identifier. Use \code{NULL} only for known
+single-sample data; all spots are then assigned \code{sample01}. When non-\code{NULL},
+it must be selected by \code{obs_columns} if a subset is requested.}
+
+\item{chunk_mib}{Positive copy-buffer target in MiB used while cloning the
+H5AD to \code{arrays.h5}. It controls I/O workspace, not the HDF5 assay's final
+size or the memory retained by the returned object.}
+
+\item{overwrite}{A single logical value. If \code{FALSE}, an existing published
+\code{spe.rds} is rejected. If \code{TRUE}, the destination is replaced under an
+ownership lock after the independent copy and reconstructed object pass
+validation.}
+
+\item{source_verification}{Source-copy verification mode. \code{"sampled"}
+validates sampled source regions while copying and assumes the source does
+not change concurrently. \code{"full"} additionally hashes the entire source
+and requires it to match \code{arrays.h5} before publication.}
+
+\item{materialize_block_mib}{Positive target size in MiB for temporary blocks
+used to materialise metadata, coordinates, reduced dimensions, AUCell, and
+sparse graphs. It does not materialise the count assay.}
+
+\item{max_materialized_gib}{Maximum allowed conservative GiB estimate for
+native metadata, coordinates, embeddings, graphs, object overhead, and
+bounded workspaces. The disk-backed assay is excluded. Defaults to option
+\code{CellCharterR.import.max_materialized_gib} or \code{Inf}; imports exceeding the
+limit stop before materialisation.}
+
+\item{progress}{A single logical value controlling copy, materialisation,
+graph-import, validation, and publication progress messages.}
 }
 \value{
-A disk-backed \code{SpatialExperiment}.
+A valid disk-backed \code{SpatialExperiment}. The assay is stored in
+\code{assay(spe, assay_name)}; \code{obs} and \code{var} annotations are in \code{colData} and
+\code{rowData}; coordinates are in \code{spatialCoords}; requested \code{obsm} matrices
+are in \code{reducedDims}; sparse \code{obsp} matrices are imported as weighted
+\code{SelfHits} in \code{colPairs}; and an \verb{/uns} locator plus conversion provenance
+is stored in \code{metadata(spe)$transitionR}. The independent directory also
+contains \code{arrays.h5}, \code{spe.rds}, and \code{manifest.rds}.
 }
 \description{
 The complete H5AD is cloned byte-for-byte into a resumable directory before a

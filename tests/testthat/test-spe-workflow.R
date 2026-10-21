@@ -76,23 +76,14 @@ test_that("SPE identity safely supports sample-local duplicated barcodes", {
   rownames(SpatialExperiment::spatialCoords(spe)) <- colnames(spe)
   SingleCellExperiment::reducedDim(spe, "scores") <- matrix(1:8, 4L, 2L)
 
-  identity <- .cc_validate_sce_identity(spe)
+  identity <- .cc_validate_spe_identity(spe)
   expect_match(identity$cell_order_sha256, "^[0-9a-f]{64}$")
 
   swapped <- spe[, c(3L, 2L, 1L, 4L)]
   expect_false(identical(
     identity$cell_order_sha256,
-    .cc_validate_sce_identity(swapped)$cell_order_sha256
+    .cc_validate_spe_identity(swapped)$cell_order_sha256
   ))
-
-  no_sample <- SingleCellExperiment::SingleCellExperiment(
-    assays = list(counts = matrix(0, 1L, 2L))
-  )
-  colnames(no_sample) <- c("x", "x")
-  expect_error(
-    .cc_validate_sce_identity(no_sample),
-    "add a non-missing `sample_id`"
-  )
 
   repeated_within_sample <- SpatialExperiment::SpatialExperiment(
     assays = list(counts = matrix(0, 1L, 4L)),
@@ -103,8 +94,8 @@ test_that("SPE identity safely supports sample-local duplicated barcodes", {
   rownames(SpatialExperiment::spatialCoords(repeated_within_sample)) <-
     colnames(repeated_within_sample)
   expect_error(
-    .cc_validate_sce_identity(repeated_within_sample),
-    "sample-scoped cell identifiers"
+    .cc_validate_spe_identity(repeated_within_sample),
+    "sample-scoped spot identifiers"
   )
 })
 
@@ -142,30 +133,38 @@ test_that("sample-scoped CODEX identities allow only unambiguous local IDs", {
   )
 })
 
-test_that("HDF5 representation attachment validates and records cell order", {
+test_that("HDF5 representation attachment validates and records spot order", {
   skip_if_not_installed("HDF5Array")
-  skip_if_not_installed("SingleCellExperiment")
+  skip_if_not_installed("SpatialExperiment")
+  expect_identical(
+    names(formals(cellcharter_attach_hdf5_reduced_dim))[[1L]], "spe"
+  )
   path <- tempfile(fileext = ".h5")
   source <- matrix(c(20, 10, 30, 2, 1, 3), ncol = 2L)
   HDF5Array::writeHDF5Array(source, filepath = path, name = "embedding")
-  sce <- SingleCellExperiment::SingleCellExperiment(
-    assays = list(counts = matrix(0, nrow = 1L, ncol = 3L))
+  spe <- SpatialExperiment::SpatialExperiment(
+    assays = list(counts = matrix(0, nrow = 1L, ncol = 3L)),
+    spatialCoords = matrix(seq_len(6), ncol = 2L)
   )
-  colnames(sce) <- c("c1", "c2", "c3")
+  colnames(spe) <- c("c1", "c2", "c3")
 
   expect_error(
-    cellcharter_attach_hdf5_reduced_dim(sce, path, "embedding"),
+    cellcharter_attach_hdf5_reduced_dim(
+      spe = spe, filepath = path, name = "embedding"
+    ),
     "positional alignment is not accepted", fixed = TRUE
   )
   expect_error(
     cellcharter_attach_hdf5_reduced_dim(
-      sce, path, "embedding", cell_ids = c("c2", "c1", "c3")
+      spe = spe, filepath = path, name = "embedding",
+      cell_ids = c("c2", "c1", "c3")
     ),
     "order mismatch", fixed = TRUE
   )
 
   attached <- cellcharter_attach_hdf5_reduced_dim(
-    sce, path, "embedding", cell_ids = c("c2", "c1", "c3"),
+    spe = spe, filepath = path, name = "embedding",
+    cell_ids = c("c2", "c1", "c3"),
     allow_reorder = TRUE
   )
   expect_identical(
@@ -261,4 +260,38 @@ test_that("version-neutral teaching workflow restores graph and results", {
   expect_identical(info$autok$tiny_domain$candidate_k, 2:10)
   expect_identical(info$autok$tiny_domain$max_runs, 3L)
   expect_error(cellcharter_mouse_spleen_tiny(with_results = NA), "TRUE or FALSE")
+})
+
+test_that("legacy SingleCellExperiment checkpoints can be viewed as SPE", {
+  ids <- paste0("spot", 1:4)
+  legacy <- SingleCellExperiment::SingleCellExperiment(
+    assays = list(counts = matrix(
+      seq_len(8), nrow = 2L,
+      dimnames = list(c("g1", "g2"), ids)
+    )),
+    colData = S4Vectors::DataFrame(sample_id = rep(c("a", "b"), each = 2L),
+                                   row.names = ids),
+    reducedDims = S4Vectors::SimpleList(
+      spatial = matrix(
+        c(0, 0, 1, 0, 0, 1, 1, 1), ncol = 2L, byrow = TRUE,
+        dimnames = list(ids, c("x", "y"))
+      ),
+      PCA = matrix(seq_len(12), nrow = 4L, dimnames = list(ids, NULL))
+    )
+  )
+  S4Vectors::metadata(legacy)$CellCharterR <- list(source = "legacy")
+
+  spe <- CellCharterR:::.cc_legacy_sce_as_spe(legacy)
+  expect_s4_class(spe, "SpatialExperiment")
+  expect_true(methods::validObject(spe, test = TRUE))
+  expect_identical(dim(spe), dim(legacy))
+  expect_identical(S4Vectors::metadata(spe), S4Vectors::metadata(legacy))
+  expect_equal(
+    SpatialExperiment::spatialCoords(spe),
+    SingleCellExperiment::reducedDim(legacy, "spatial")
+  )
+  expect_equal(
+    SingleCellExperiment::reducedDim(spe, "PCA"),
+    SingleCellExperiment::reducedDim(legacy, "PCA")
+  )
 })

@@ -7,21 +7,34 @@
 #' or an enrichment matrix. For experiment input, stored scientific-input and
 #' parameter fingerprints are checked before plotting.
 #'
-#' @param x A `SingleCellExperiment`/`SpatialExperiment` containing a stored
-#'   enrichment result, a list with an `enrichment` matrix, or the matrix itself.
-#' @param result_name Result name under
-#'   `metadata(x)$CellCharterR$results`; used only when `x` is an experiment.
-#' @param title Optional plot title.
-#' @param point_range Two positive numbers controlling the point-size range.
-#' @param size_threshold Positive log2 fold-change at which point size is
-#'   capped. The CellCharter CODEX tutorial uses `0.58`.
-#' @param colour_threshold Positive log2 fold-change at which colour intensity
-#'   is capped. The CellCharter CODEX tutorial uses `0.58`.
-#' @param cluster_domains Whether to order domains by complete-linkage
-#'   clustering of the thresholded enrichment profiles, as in CellCharter.
-#' @param cluster_programs Whether to order programs by complete-linkage
-#'   clustering of their thresholded enrichment profiles.
-#' @return A `ggplot` object.
+#' @param x A `SpatialExperiment` containing a stored enrichment result, a
+#'   result list with a numeric log2-enrichment matrix, or a numeric matrix that
+#'   the caller asserts already contains log2 fold changes. Stored and direct
+#'   result lists explicitly marked `log2_fold_change = FALSE` are rejected so
+#'   raw ratios cannot be mislabeled as positive log2 fold changes. Plotting is
+#'   read-only and never changes `x`.
+#' @param result_name One non-empty key under
+#'   `metadata(x)$CellCharterR$results`. It is read only when `x` is a
+#'   `SpatialExperiment`; stored input and parameter fingerprints are validated
+#'   before the result is plotted.
+#' @param title `NULL` for no title, or a character value passed to the plot's
+#'   title label.
+#' @param point_range Two ordered positive finite numbers giving the minimum
+#'   and maximum rendered point sizes.
+#' @param size_threshold One positive finite log2 fold-change at which point
+#'   size is capped. The CellCharter CODEX tutorial uses `0.58`.
+#' @param colour_threshold One positive finite log2 fold-change at which the
+#'   dark-red colour intensity is capped. It also separates weakly positive
+#'   from enriched values for hierarchical ordering. The CellCharter CODEX
+#'   tutorial uses `0.58`.
+#' @param cluster_domains A single logical. When `TRUE`, domains are ordered by
+#'   complete-linkage hierarchical clustering of ternary enrichment states:
+#'   negative, weakly positive, and at least `colour_threshold`.
+#' @param cluster_programs A single logical applying the same complete-linkage
+#'   ordering to programs rather than retaining the input row order.
+#' @return A read-only, customizable `ggplot` object. Non-positive and
+#'   non-finite enrichment entries are omitted from the displayed points but
+#'   remain unchanged in the stored result.
 #' @examples
 #' spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
 #' cellcharter_plot_enrichment(spe)
@@ -33,19 +46,33 @@ cellcharter_plot_enrichment <- function(
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     stop("Install `ggplot2` to plot CellCharter enrichment.", call. = FALSE)
   }
-  if (inherits(x, "SingleCellExperiment")) {
-    record <- .cc_sce_require_result(
+  if (inherits(x, "SingleCellExperiment") &&
+      !inherits(x, "SpatialExperiment")) {
+    stop("Experiment input `x` must be a SpatialExperiment.", call. = FALSE)
+  }
+  if (inherits(x, "SpatialExperiment")) {
+    record <- .cc_spe_require_result(
       x, result_name, context = "Stored enrichment result"
     )
     if (is.null(record$value$enrichment)) {
-      stop("SCE lacks stored enrichment result `", result_name,
+      stop("SpatialExperiment lacks stored enrichment result `", result_name,
            "`; run `cellcharter_enrichment()` first.", call. = FALSE)
     }
     values <- record$value$enrichment
+    log2_fold_change <- record$parameters$log2_fold_change %||%
+      record$value$params$log2_fold_change
   } else if (is.list(x) && !is.null(x$enrichment)) {
     values <- x$enrichment
+    log2_fold_change <- x$params$log2_fold_change
   } else {
     values <- x
+    log2_fold_change <- TRUE
+  }
+  if (!is.null(log2_fold_change) && !isTRUE(log2_fold_change)) {
+    stop(
+      "`cellcharter_plot_enrichment()` requires log2 fold-change enrichment; ",
+      "recompute with `log2_fold_change = TRUE`.", call. = FALSE
+    )
   }
   if (!is.matrix(values) || !is.numeric(values) ||
       any(dim(values) == 0L) || is.null(rownames(values)) ||

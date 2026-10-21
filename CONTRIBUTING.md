@@ -2,7 +2,7 @@
 
 Please open an issue before a substantial change so its scientific scope and
 reference target can be agreed first. Contributions should be focused, use
-explicit package namespaces, preserve `SingleCellExperiment` cell identity,
+explicit package namespaces, preserve `SpatialExperiment` spot identity,
 and avoid materialising cohort-scale assays or graphs.
 
 Add deterministic tests for changed behavior. Run the smallest affected tests

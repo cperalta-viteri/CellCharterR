@@ -81,3 +81,57 @@ test_that("checkpoint reuse checks contracts and artifact content", {
   writeLines("changed artifact", artifact)
   expect_false(cellcharter_checkpoint_reusable(record_path, expected, c(output = artifact)))
 })
+
+test_that("an allowlisted symbol-only digest migration preserves legacy artifacts", {
+  artifact <- tempfile(fileext = ".txt")
+  record_path <- tempfile(fileext = ".rds")
+  on.exit(unlink(c(artifact, record_path)), add = TRUE)
+  writeLines("immutable expensive result", artifact)
+
+  legacy_digest <- cellcharter_implementation_digest(
+    functions = list(old_name = function(sce) sce)
+  )
+  current_digest <- cellcharter_implementation_digest(
+    functions = list(new_name = function(spe) spe)
+  )
+  make_contract <- function(implementation_digest) {
+    cellcharter_stage_contract(
+      stage = "fixture", implementation_digest = implementation_digest,
+      upstream = list(input = "same"),
+      cell_order_sha256 = paste(rep("a", 64L), collapse = ""),
+      parameters = list(method = "same"), seeds = list(seed = NA_integer_),
+      versions = list(CellCharterR = if (identical(
+        implementation_digest, legacy_digest
+      )) "0.2.0.9000" else "0.99.0", reference = "same"), runtime = list()
+    )
+  }
+  legacy <- make_contract(legacy_digest)
+  current <- make_contract(current_digest)
+  cellcharter_record_checkpoint(
+    legacy, c(output = artifact), path = record_path
+  )
+  artifact_mtime <- file.info(artifact)$mtime
+
+  adopted <- CellCharterR:::.cc_adopt_legacy_implementation_contract(
+    record_path, current, c(output = artifact), legacy_digest,
+    allowed_version_values = list(CellCharterR = "0.2.0.9000")
+  )
+  expect_identical(adopted, legacy)
+  expect_identical(file.info(artifact)$mtime, artifact_mtime)
+  expect_null(CellCharterR:::.cc_adopt_legacy_implementation_contract(
+    record_path, current, c(output = artifact), current_digest,
+    allowed_version_values = list(CellCharterR = "0.2.0.9000")
+  ))
+
+  changed <- current
+  changed$parameters$method <- "different"
+  changed$contract_id <- NULL
+  changed$contract_id <- digest::digest(
+    CellCharterR:::.cc_contract_canonical(changed),
+    algo = "sha256", serialize = TRUE
+  )
+  expect_null(CellCharterR:::.cc_adopt_legacy_implementation_contract(
+    record_path, changed, c(output = artifact), legacy_digest,
+    allowed_version_values = list(CellCharterR = "0.2.0.9000")
+  ))
+})

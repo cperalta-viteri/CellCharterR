@@ -17,22 +17,26 @@ cpp_gmm_fit(
 \arguments{
 \item{x}{Observation-by-feature numeric matrix-like object. The compiled
 backend materialises it once as a dense double matrix and makes one shared
-native row-major copy plus a centered copy shared by concurrent fits. Each
-active fit additionally stores one observation-by-component double-precision
-posterior matrix.}
+native row-major copy plus a centered copy shared by concurrent fits.
+Each active fit additionally stores one observation-by-component
+double-precision posterior matrix.}
 
-\item{n_clusters}{number of mixture components.}
+\item{n_clusters}{One positive integer no greater than \code{nrow(x)} giving the
+number of full-covariance mixture components.}
 
-\item{max_iter}{maximum EM iterations.}
+\item{max_iter}{One positive integer maximum number of EM iterations.}
 
-\item{tolerance}{stop when per-observation NLL change is below this value.}
+\item{tolerance}{One finite positive stopping threshold for the absolute
+change in mean per-observation negative log likelihood.}
 
-\item{covariance_regularization}{diagonal ridge added before Cholesky.}
+\item{covariance_regularization}{One finite positive diagonal ridge added
+exactly once before each covariance Cholesky factorization.}
 
-\item{seed}{initialisation seed.}
+\item{seed}{One non-negative integer controlling deterministic initialization.}
 
-\item{num_threads}{Requested CPU thread count, or \code{NULL} to retain Torch's
-current setting.}
+\item{num_threads}{Positive number of native row-shard threads used by this
+fit. Values above 32 are capped with a warning. Unlike the Torch backend,
+\code{NULL} is not accepted.}
 }
 \value{
 A serializable \code{cpp_gmm} model inheriting from \code{torch_gmm}.

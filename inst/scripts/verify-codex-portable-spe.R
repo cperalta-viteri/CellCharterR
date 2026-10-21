@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 
-# Read-only relocation and integrity verifier for the portable full SCE. This
+# Read-only relocation and integrity verifier for the portable full SPE. This
 # script never rebuilds a graph, embedding, clustering, or statistic.
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -12,7 +12,8 @@ output_rds <- if (length(args) >= 3L) args[[3L]] else
   "results/CellCharterR_mouse_spleen_v2/portable/portable_validation_result.rds"
 
 required_packages <- c(
-  "digest", "S4Vectors", "SingleCellExperiment", "SummarizedExperiment"
+  "digest", "S4Vectors", "SingleCellExperiment", "SpatialExperiment",
+  "SummarizedExperiment"
 )
 missing_packages <- required_packages[!vapply(
   required_packages, requireNamespace, logical(1), quietly = TRUE
@@ -44,39 +45,39 @@ if (!identical(source_sha256, relocated_sha256)) {
   stop("The relocated RDS checksum differs from its source.")
 }
 
-sce <- readRDS(relocated_rds)
+spe <- readRDS(relocated_rds)
 tiny <- readRDS(tiny_rds)
-if (!inherits(sce, "SingleCellExperiment") ||
-    !inherits(tiny, "SingleCellExperiment")) {
-  stop("Both artifacts must be SingleCellExperiment objects.")
+if (!inherits(spe, "SpatialExperiment") ||
+    !inherits(tiny, "SpatialExperiment")) {
+  stop("Both artifacts must be SpatialExperiment objects.")
 }
 
 expected_assays <- "protein"
-expected_reduced_dims <- c("X_trVAE", "spatial", "X_cellcharter")
+expected_reduced_dims <- c("X_trVAE", "X_cellcharter")
 required_labels <- c(
   "reference_cluster_cellcharter", "r_domain_k4",
   "r_domain_k11_sensitivity"
 )
-if (!identical(SummarizedExperiment::assayNames(sce), expected_assays)) {
-  stop("The full SCE does not contain exactly the required protein assay.")
+if (!identical(SummarizedExperiment::assayNames(spe), expected_assays)) {
+  stop("The full SPE does not contain exactly the required protein assay.")
 }
 if (!setequal(
-  SingleCellExperiment::reducedDimNames(sce), expected_reduced_dims
+  SingleCellExperiment::reducedDimNames(spe), expected_reduced_dims
 )) {
-  stop("The full SCE lacks a required reduced dimension.")
+  stop("The full SPE lacks a required reduced dimension.")
 }
-if (!all(required_labels %in% colnames(SummarizedExperiment::colData(sce)))) {
-  stop("The full SCE lacks required published, K=4, or K=11 labels.")
+if (!all(required_labels %in% colnames(SummarizedExperiment::colData(spe)))) {
+  stop("The full SPE lacks required published, K=4, or K=11 labels.")
 }
-if (!identical(dim(sce), c(29L, 707474L))) {
-  stop("Unexpected full SCE dimensions: ", paste(dim(sce), collapse = " x "))
+if (!identical(dim(spe), c(29L, 707474L))) {
+  stop("Unexpected full SPE dimensions: ", paste(dim(spe), collapse = " x "))
 }
 
 large_fields <- list(
-  protein = SummarizedExperiment::assay(sce, "protein"),
-  X_trVAE = SingleCellExperiment::reducedDim(sce, "X_trVAE"),
-  spatial = SingleCellExperiment::reducedDim(sce, "spatial"),
-  X_cellcharter = SingleCellExperiment::reducedDim(sce, "X_cellcharter")
+  protein = SummarizedExperiment::assay(spe, "protein"),
+  X_trVAE = SingleCellExperiment::reducedDim(spe, "X_trVAE"),
+  spatial = SpatialExperiment::spatialCoords(spe),
+  X_cellcharter = SingleCellExperiment::reducedDim(spe, "X_cellcharter")
 )
 if (!all(vapply(large_fields, is.matrix, logical(1)))) {
   stop("Every large portable field must be an ordinary in-object R matrix.")
@@ -116,25 +117,25 @@ find_forbidden <- function(x, where = "root") {
 }
 forbidden <- c(
   unlist(lapply(large_fields, find_forbidden), use.names = FALSE),
-  find_forbidden(S4Vectors::metadata(sce), "metadata")
+  find_forbidden(S4Vectors::metadata(spe), "metadata")
 )
 if (length(forbidden)) {
-  stop("Portable SCE retains an external dependency: ", forbidden[[1L]])
+  stop("Portable SPE retains an external dependency: ", forbidden[[1L]])
 }
 
 tiny_info <- S4Vectors::metadata(tiny)$CellCharterR$tiny_subset
 if (is.null(tiny_info) || length(tiny_info$source_column_indices) != ncol(tiny)) {
-  stop("The tiny SCE lacks its recorded full-object source indices.")
+  stop("The tiny SPE lacks its recorded full-object source indices.")
 }
 indices <- tiny_info$source_column_indices
-if (!identical(colnames(tiny), colnames(sce)[indices])) {
-  stop("Tiny cell identities do not match the recorded full-object subset.")
+if (!identical(colnames(tiny), colnames(spe)[indices])) {
+  stop("Tiny spot identities do not match the recorded full-object subset.")
 }
 if (!identical(
   digest::digest(colnames(tiny), algo = "sha256"),
   tiny_info$cell_order_sha256
 )) {
-  stop("Tiny ordered-cell digest does not match its metadata.")
+  stop("Tiny ordered-spot digest does not match its metadata.")
 }
 if (!identical(
   SummarizedExperiment::assay(tiny, "protein"),
@@ -151,29 +152,35 @@ for (name in expected_reduced_dims) {
   }
 }
 if (!identical(
-  SummarizedExperiment::colData(tiny),
-  SummarizedExperiment::colData(sce)[indices, , drop = FALSE]
+  SpatialExperiment::spatialCoords(tiny),
+  large_fields$spatial[indices, , drop = FALSE]
 )) {
-  stop("Tiny cell metadata differ from the recorded full-object subset.")
+  stop("Tiny spatial coordinates differ from the full object.")
+}
+if (!identical(
+  SummarizedExperiment::colData(tiny),
+  SummarizedExperiment::colData(spe)[indices, , drop = FALSE]
+)) {
+  stop("Tiny spot metadata differ from the recorded full-object subset.")
 }
 
 result <- list(
   format_version = 1L,
   status = "PASS",
   validation_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
-  verifier = "inst/scripts/verify-codex-portable-sce.R",
+  verifier = "inst/scripts/verify-codex-portable-spe.R",
   analytical_recomputation = FALSE,
   source_filename = basename(full_rds),
   source_sha256 = source_sha256,
   relocated_sha256 = relocated_sha256,
   serialized_size_bytes = unname(file.info(full_rds)$size),
-  object_size_bytes = as.numeric(utils::object.size(sce)),
-  dimensions = dim(sce),
-  assays = SummarizedExperiment::assayNames(sce),
+  object_size_bytes = as.numeric(utils::object.size(spe)),
+  dimensions = dim(spe),
+  assays = SummarizedExperiment::assayNames(spe),
   reduced_dims = vapply(large_fields[-1L], ncol, integer(1)),
   labels = stats::setNames(
     lapply(required_labels, function(name) {
-      value <- SummarizedExperiment::colData(sce)[[name]]
+      value <- SummarizedExperiment::colData(spe)[[name]]
       list(levels = levels(factor(value)), sha256 = digest::digest(value, algo = "sha256"))
     }),
     required_labels
@@ -192,6 +199,6 @@ result <- list(
 )
 dir.create(dirname(output_rds), recursive = TRUE, showWarnings = FALSE)
 saveRDS(result, output_rds, version = 3L)
-cat("Portable SCE validation: PASS\n")
+cat("Portable SPE validation: PASS\n")
 cat("Full SHA-256:", source_sha256, "\n")
 cat("Machine-readable result:", output_rds, "\n")

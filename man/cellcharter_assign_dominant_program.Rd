@@ -5,7 +5,7 @@
 \title{Assign a block-wise dominant program}
 \usage{
 cellcharter_assign_dominant_program(
-  sce,
+  spe,
   scores = "AUCell",
   assay_name = "score",
   block = NULL,
@@ -17,31 +17,44 @@ cellcharter_assign_dominant_program(
 )
 }
 \arguments{
-\item{sce}{A \code{SpatialExperiment} or compatible \code{SingleCellExperiment}.}
+\item{spe}{A \code{SpatialExperiment} containing program scores for every spot.}
 
-\item{scores}{Name of an AUCell \code{altExp} (programs by spots) or \code{reducedDim}
-(spots by programs).}
+\item{scores}{One non-empty string naming either an \code{altExp} whose rows are
+programs and columns are spots, or a \code{reducedDim} whose rows are spots and
+columns are programs. Program names must be unique and non-empty.}
 
-\item{assay_name}{Assay used when \code{scores} identifies an \code{altExp}.}
+\item{assay_name}{One non-empty string naming the assay to read when
+\code{scores} identifies an \code{altExp}; ignored for a \code{reducedDim} source.}
 
-\item{block}{Optional patient/subject column in \code{colData(sce)}. \code{NULL}
-treats the complete object as one block and performs global scaling.}
+\item{block}{\code{NULL} for a single global standardization, or one \code{colData(spe)}
+column containing non-missing patient, subject, slide, or sample IDs.
+Scores are centered and scaled independently within every block; this is
+a scaling unit, not a statistical correction for block effects.}
 
-\item{programs}{Programs allowed to compete for the assignment. \code{NULL} uses
-every program in \code{scores}.}
+\item{programs}{Unique program names allowed to compete for assignment, in
+tie-breaking and output-factor order. \code{NULL} uses every program available
+from \code{scores}. Ties are resolved in favor of the first listed program.}
 
-\item{output}{Name of the \code{colData} column receiving the assignment.}
+\item{output}{One non-empty name for the factor written to
+\code{colData(spe)[[output]]}. The stage record is written under
+\code{metadata(spe)$CellCharterR$stages[[paste0("dominant_program:", output)]]}.}
 
 \item{require_positive}{If \code{TRUE}, leave a spot unassigned when its largest
-block-standardized score is not positive. This matches zonation assignment.}
+block-standardized score is zero or negative. If \code{FALSE}, every spot is
+assigned, including spots for which all standardized scores are negative.}
 
-\item{overwrite}{Whether an existing \code{output} column may be replaced.}
+\item{overwrite}{A single logical indicating whether an existing
+\code{colData(spe)[[output]]} column may be replaced. Nothing is overwritten
+when this is \code{FALSE}.}
 
-\item{progress}{Whether to display a block progress bar.}
+\item{progress}{A single logical indicating whether to display progress over
+blocks. It does not affect the result.}
 }
 \value{
-The updated experiment with a factor in \code{colData(sce)[[output]]} and
-provenance recorded under \code{metadata(sce)$CellCharterR$stages}.
+The updated \code{SpatialExperiment}. The dominant-program factor is in
+\code{colData(spe)[[output]]}; parameters, spot count, and spot-order identity
+are in the corresponding \code{metadata(spe)$CellCharterR$stages} record. No
+score matrix or external file is created.
 }
 \description{
 Standardizes every selected score program independently within each

@@ -7,10 +7,14 @@
 torch_gmm_device(device = c("auto", "cuda", "cpu"))
 }
 \arguments{
-\item{device}{\code{"auto"}, \code{"cpu"}, or \code{"cuda"}.}
+\item{device}{Exactly one of \code{"auto"}, \code{"cpu"}, or \code{"cuda"}. \code{"auto"}
+resolves to CUDA only when \code{\link[torch:cuda_is_available]{torch::cuda_is_available()}} is true; requesting
+unavailable CUDA raises an error rather than silently falling back.}
 }
 \value{
-A \code{torch_device} selecting the resolved CPU or CUDA device.
+A \code{torch_device} selecting the resolved CPU or CUDA device. Calling
+this function requires the optional \code{torch} package and working Lantern
+libraries.
 }
 \description{
 CUDA is used when it is visible to R Torch; otherwise the exact same batched

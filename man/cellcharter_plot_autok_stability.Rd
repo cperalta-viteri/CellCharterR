@@ -12,15 +12,19 @@ cellcharter_plot_autok_stability(
 )
 }
 \arguments{
-\item{object}{A fitted \code{cellcharter_autok} object.}
+\item{object}{A valid \code{cellcharter_autok} result with repeated \code{stability},
+aligned \code{stability_mean}, \code{candidate_k}, and \code{best_k} fields.}
 
-\item{k_range}{Integer K values to display. Defaults to the inclusive range
-from one through the largest selectable K.}
+\item{k_range}{\code{NULL} for the inclusive range from one through the largest
+selectable K, or unique increasing positive integers to display. Values
+outside the selectable range are retained with non-estimable \code{NA} means.}
 
-\item{highlight_k}{K values to mark for interpretation, such as a published
-sensitivity analysis. Highlighting does not alter selection.}
+\item{highlight_k}{A possibly empty vector of positive integer K values to
+mark for interpretation, such as a published sensitivity fit.
+Highlighting never changes AutoK selection.}
 
-\item{title}{Plot title.}
+\item{title}{\code{NULL} for no title or one character plot title passed to
+\code{\link[ggplot2:labs]{ggplot2::labs()}}.}
 }
 \value{
 A \code{ggplot} object. The exact diagnostic tables are attached as the

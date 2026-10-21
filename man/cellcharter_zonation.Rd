@@ -5,7 +5,7 @@
 \title{Compute authors-style score-defined zonation}
 \usage{
 cellcharter_zonation(
-  sce,
+  spe,
   scores = "AUCell",
   assay_name = "score",
   block = NULL,
@@ -21,42 +21,60 @@ cellcharter_zonation(
 )
 }
 \arguments{
-\item{sce}{A \code{SpatialExperiment} or compatible \code{SingleCellExperiment}.}
+\item{spe}{A \code{SpatialExperiment} containing program scores for every spot.}
 
-\item{scores}{Name of an AUCell \code{altExp} (programs by spots) or legacy
-\code{reducedDim} (spots by programs).}
+\item{scores}{One non-empty string naming either an \code{altExp} whose rows are
+programs and columns are spots, or a \code{reducedDim} whose rows are spots and
+columns are programs.}
 
-\item{assay_name}{Assay name used when \code{scores} identifies an \code{altExp}.}
+\item{assay_name}{One non-empty string naming the assay to read when
+\code{scores} identifies an \code{altExp}; ignored for a \code{reducedDim} source.}
 
-\item{block}{Optional patient/subject column in \code{colData(sce)}. \code{NULL}
-treats the complete object as one block and supports descriptive plots,
-but not block-level group inference.}
+\item{block}{\code{NULL} to treat all spots as one descriptive block, or one
+\code{colData(spe)} column containing complete patient, subject, slide, or
+sample IDs. Score standardization, rarefaction, and inferential units are
+block-specific when supplied. Group inference in
+\code{\link[=cellcharter_plot_zonation]{cellcharter_plot_zonation()}} requires a non-\code{NULL} block.}
 
-\item{zone_programs}{Ordered programs defining mutually exclusive zones.}
+\item{zone_programs}{At least two unique score-program names in biological
+order. Within every block, each program is z-scored and each spot is
+assigned to its largest positive zone score; ties follow this vector's
+order and spots with no positive maximum remain unassigned.}
 
-\item{composition_programs}{Response programs quantified across the ordered
-zones. They need not include \code{zone_programs}. \code{NULL} uses every available
-program and treats non-zone programs as the default plotting responses.}
+\item{composition_programs}{Unique response-program names quantified across
+the ordered zones. They may overlap \code{zone_programs}. \code{NULL} quantifies all
+available programs and makes non-zone programs the default plot set.}
 
-\item{result_name}{Storage name under
-\code{metadata(sce)$CellCharterR$results}.}
+\item{result_name}{One non-empty storage key. The complete freshness-checked
+record is written to
+\code{metadata(spe)$CellCharterR$results[[result_name]]}; scientific outputs
+such as \code{block_results} and \code{zone_audit} are in that record's \verb{$value}.
+Reusing a key replaces its previous record.}
 
-\item{zone_col}{Optional \code{colData} column receiving spot-level zone labels.}
+\item{zone_col}{\code{NULL} to avoid adding spot-level labels, or one non-empty
+name for the ordered zone factor written to \code{colData(spe)[[zone_col]]}.}
 
-\item{min_spots_per_zone}{Zones with this many or fewer spots are excluded.}
+\item{min_spots_per_zone}{A non-negative whole number. A block-zone is
+retained only when its spot count is strictly greater than this value.}
 
-\item{sample_size}{Equal rarefaction depth used when available.}
+\item{sample_size}{A positive whole number giving the target rarefaction
+depth. Each block uses the smaller of this value and its smallest retained
+zone total.}
 
-\item{n_iterations}{Number of rarefaction iterations.}
+\item{n_iterations}{A positive whole number of rarefaction draws whose
+program counts are averaged for every retained block-zone.}
 
-\item{score_threshold}{Minimum within-spot composition retained after
-positive-score normalization.}
+\item{score_threshold}{A finite number in \verb{[0, 1)}. After negative z-scores
+are set to zero and positive scores are normalized within a spot,
+proportions below this value are discarded and the remainder renormalized.}
 
-\item{seed}{Deterministic rarefaction seed.}
+\item{seed}{A positive whole-number seed for deterministic rarefaction.}
 }
 \value{
-The updated experiment with compact block-level results stored in
-\code{metadata} and, when requested, spot-level zones in \code{colData}.
+The updated \code{SpatialExperiment}. The result record is stored in
+\code{metadata(spe)$CellCharterR$results[[result_name]]}; when \code{zone_col} is not
+\code{NULL}, the ordered spot-level zone factor is also stored in
+\code{colData(spe)[[zone_col]]}. No graph, distance, or external file is made.
 }
 \description{
 Adapts the equal-depth zonal enrichment mechanics used by Simkin et al. to

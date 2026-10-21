@@ -96,7 +96,7 @@ test_that("plot_graph_diff uses stable shared coordinates and black arrows", {
 test_that("plot_graph_diff extracts and validates a stored experiment result", {
   skip_if_not_installed("ggplot2")
   spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
-  identity <- .cc_validate_sce_identity(spe)
+  identity <- .cc_validate_spe_identity(spe)
   metadata <- S4Vectors::metadata(spe)$CellCharterR
   metadata$results$diff_nhood_enrichment <- list(
     value = .diff_network_fixture(), n_cells = ncol(spe),

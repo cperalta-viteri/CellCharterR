@@ -129,7 +129,7 @@ test_that("neighborhood results detect topology, weight, and domain changes", {
   S4Vectors::mcols(pairs)[[1L]][[1L]] <- 2
   SingleCellExperiment::colPair(changed_weight, "graph") <- pairs
   expect_error(
-    .cc_sce_require_result(changed_weight, "nhood_enrichment"),
+    .cc_spe_require_result(changed_weight, "nhood_enrichment"),
     "stale.*graph"
   )
 
@@ -137,14 +137,14 @@ test_that("neighborhood results detect topology, weight, and domain changes", {
   pairs <- SingleCellExperiment::colPair(changed_topology, "graph")
   SingleCellExperiment::colPair(changed_topology, "graph") <- pairs[-1L]
   expect_error(
-    .cc_sce_require_result(changed_topology, "nhood_enrichment"),
+    .cc_spe_require_result(changed_topology, "nhood_enrichment"),
     "stale.*graph"
   )
 
   changed_domain <- spe
   changed_domain$domain[[1L]] <- "D2"
   expect_error(
-    .cc_sce_require_result(changed_domain, "nhood_enrichment"),
+    .cc_spe_require_result(changed_domain, "nhood_enrichment"),
     "stale.*domain"
   )
 })

@@ -6,10 +6,14 @@
 #' selected function definitions and/or explicitly delimited source regions;
 #' unrelated edits elsewhere in a source file do not invalidate a stage.
 #'
-#' @param functions A named list of functions relevant to one stage.
-#' @param source_regions A named list whose elements contain `path`, `begin`,
-#'   and `end`.  Only source strictly between the unique marker lines is hashed.
-#' @return A SHA-256 hexadecimal digest.
+#' @param functions A uniquely named list of function objects whose formals and
+#'   deparsed bodies define material stage behavior. Names and function content
+#'   enter the canonical digest; an unnamed or non-function element is rejected.
+#' @param source_regions A uniquely named list whose elements contain scalar
+#'   `path`, `begin`, and `end` fields. Each path must be readable and each exact
+#'   marker line must occur once, with `begin` before `end`. Only source strictly
+#'   between those marker lines is hashed, allowing unrelated edits elsewhere.
+#' @return One 64-character SHA-256 hexadecimal implementation digest.
 #' @examples
 #' implementation <- cellcharter_implementation_digest(
 #'   functions = list(enrichment = cellcharter_enrichment)
@@ -36,12 +40,14 @@ cellcharter_implementation_digest <- function(functions = list(), source_regions
   if (!is.list(functions) || !is.list(source_regions)) {
     stop("`functions` and `source_regions` must be lists.", call. = FALSE)
   }
-  if (length(functions) && (is.null(names(functions)) || any(!nzchar(names(functions))))) {
-    stop("`functions` must be named.", call. = FALSE)
+  if (length(functions) && (is.null(names(functions)) ||
+      any(!nzchar(names(functions))) || anyDuplicated(names(functions)))) {
+    stop("`functions` must be uniquely named.", call. = FALSE)
   }
   if (length(source_regions) &&
-      (is.null(names(source_regions)) || any(!nzchar(names(source_regions))))) {
-    stop("`source_regions` must be named.", call. = FALSE)
+      (is.null(names(source_regions)) || any(!nzchar(names(source_regions))) ||
+       anyDuplicated(names(source_regions)))) {
+    stop("`source_regions` must be uniquely named.", call. = FALSE)
   }
   function_source <- lapply(functions, function(fun) {
     if (!is.function(fun)) stop("Every `functions` element must be a function.", call. = FALSE)
@@ -54,6 +60,13 @@ cellcharter_implementation_digest <- function(functions = list(), source_regions
     required <- c("path", "begin", "end")
     if (!is.list(region) || !all(required %in% names(region))) {
       stop("Every source region must contain `path`, `begin`, and `end`.", call. = FALSE)
+    }
+    scalar_string <- vapply(region[required], function(value) {
+      is.character(value) && length(value) == 1L && !is.na(value) && nzchar(value)
+    }, logical(1L))
+    if (!all(scalar_string)) {
+      stop("Every source-region `path`, `begin`, and `end` must be one non-empty string.",
+           call. = FALSE)
     }
     lines <- readLines(region$path, warn = FALSE)
     begin <- which(lines == region$begin)
@@ -92,19 +105,26 @@ cellcharter_implementation_digest <- function(functions = list(), source_regions
 }
 
 #' @rdname cellcharter_implementation_digest
-#' @param stage One workflow-stage name.
+#' @param stage One non-empty workflow-stage name.
 #' @param implementation_digest Digest from
 #'   [cellcharter_implementation_digest()].
-#' @param upstream Exact upstream artifact hashes and/or immutable data IDs.
-#' @param cell_order_sha256 Canonical ordered-cell SHA-256.
-#' @param parameters Complete material stage parameters.
-#' @param seeds Complete named seeds (an explicitly named `NA_integer_` is
+#' @param upstream A uniquely named list of exact upstream artifact hashes,
+#'   contract IDs, and/or immutable data IDs. Empty names and duplicates are
+#'   rejected; values are recursively canonicalized before hashing.
+#' @param cell_order_sha256 One 64-character SHA-256 for the canonical ordered
+#'   spot identifiers consumed by the stage.
+#' @param parameters A uniquely named list of all scientifically material stage
+#'   parameters; include values even when they equal defaults.
+#' @param seeds A uniquely named list of all seeds (an explicitly named
+#'   `NA_integer_` is
 #'   permitted when a stage is deterministic and consumes no seed).
-#' @param versions Package and pinned-reference versions.
-#' @param runtime Device/runtime fields relevant to reuse; use a named empty
-#'   list for device-independent stages.
-#' @param schema_version Contract schema version.
-#' @return A canonical contract with its own `contract_id`.
+#' @param versions A uniquely named list of package, runtime, and pinned
+#'   reference versions that constrain safe reuse.
+#' @param runtime A uniquely named list of device/runtime fields relevant to
+#'   reuse; use `list()` for a device-independent stage.
+#' @param schema_version One positive integer contract-schema version.
+#' @return A recursively canonicalized contract list containing all supplied
+#'   fields plus its own 64-character `contract_id` SHA-256.
 #' @export
 cellcharter_stage_contract <- function(
     stage, implementation_digest, upstream, cell_order_sha256, parameters,
@@ -150,6 +170,64 @@ cellcharter_stage_contract <- function(
   )
 }
 
+.cc_adopt_legacy_implementation_contract <- function(
+    record, expected, artifact_paths, allowed_implementation_digests,
+    allowed_version_values = list()) {
+  if (is.character(record) && length(record) == 1L) {
+    if (!file.exists(record)) return(NULL)
+    record <- try(readRDS(record), silent = TRUE)
+    if (inherits(record, "try-error")) return(NULL)
+  }
+  if (!is.character(allowed_implementation_digests) ||
+      anyNA(allowed_implementation_digests) ||
+      any(!grepl("^[0-9a-f]{64}$", allowed_implementation_digests))) {
+    stop(
+      "`allowed_implementation_digests` must contain SHA-256 hexadecimal digests.",
+      call. = FALSE
+    )
+  }
+  if (!is.list(allowed_version_values) ||
+      (length(allowed_version_values) &&
+       (is.null(names(allowed_version_values)) ||
+        any(!nzchar(names(allowed_version_values))) ||
+        anyDuplicated(names(allowed_version_values))))) {
+    stop("`allowed_version_values` must be a uniquely named list.",
+         call. = FALSE)
+  }
+  if (!is.list(record) || !.cc_contract_integral(expected) ||
+      !is.list(record$expected_contract) ||
+      !.cc_contract_integral(record$expected_contract) ||
+      !record$expected_contract$implementation_digest %in%
+        allowed_implementation_digests ||
+      !cellcharter_checkpoint_reusable(
+        record, record$expected_contract, artifact_paths
+      )) {
+    return(NULL)
+  }
+
+  # A public-symbol/argument rename changes a function digest without changing
+  # an already-created artifact. Adoption is deliberately narrow: after
+  # replacing only the allowlisted implementation digest, every remaining
+  # contract field must be byte-for-byte equivalent to the current expectation.
+  normalized <- record$expected_contract
+  normalized$implementation_digest <- expected$implementation_digest
+  for (name in names(allowed_version_values)) {
+    legacy_value <- normalized$versions[[name]]
+    if (is.null(legacy_value) ||
+        !legacy_value %in% allowed_version_values[[name]] ||
+        is.null(expected$versions[[name]])) {
+      return(NULL)
+    }
+    normalized$versions[[name]] <- expected$versions[[name]]
+  }
+  normalized$contract_id <- NULL
+  normalized$contract_id <- digest::digest(
+    .cc_contract_canonical(normalized), algo = "sha256", serialize = TRUE
+  )
+  if (!identical(normalized, expected)) return(NULL)
+  record$expected_contract
+}
+
 #' Compare a saved checkpoint contract with an expected contract
 #'
 #' Verification/migration records store the expected contract separately from
@@ -157,9 +235,15 @@ cellcharter_stage_contract <- function(
 #' are reusable only while the full contract and artifact hashes still match.
 #'
 #' @rdname cellcharter_implementation_digest
-#' @param record Saved record or path to an RDS record.
-#' @param expected Expected contract.
-#' @param artifact_paths Named paths whose current SHA-256 values must match.
+#' @param record A checkpoint-record list or one path to an existing RDS record.
+#'   Missing, unreadable, malformed, or non-integral records return `FALSE`.
+#' @param expected An integral contract returned by
+#'   [cellcharter_stage_contract()].
+#' @param artifact_paths A uniquely named character vector of existing files.
+#'   During reuse its names must exactly match the recorded artifacts and every
+#'   current SHA-256 must match. During recording, absolute paths, SHA-256
+#'   digests, and byte sizes are saved. Files are streamed rather than loaded
+#'   into memory and their contents are never modified.
 #' @return `TRUE` only for an exact, internally valid match.
 #' @export
 cellcharter_checkpoint_reusable <- function(record, expected, artifact_paths) {
@@ -186,13 +270,17 @@ cellcharter_checkpoint_reusable <- function(record, expected, artifact_paths) {
 #' Record creation or read-only verification of checkpoint artifacts
 #'
 #' @rdname cellcharter_implementation_digest
-#' @param expected Expected stage contract.
-#' @param artifact_paths Uniquely named existing artifact paths.
+#' @param expected An integral stage contract returned by
+#'   [cellcharter_stage_contract()].
 #' @param status Either `"created_under_contract"` or
 #'   `"verified_existing_checkpoint"`.
-#' @param evidence Named validation evidence. Required for legacy verification.
-#' @param path Destination RDS path, written atomically.
-#' @return The saved record, invisibly.
+#' @param evidence A named validation-evidence list. It must be non-empty when
+#'   `status = "verified_existing_checkpoint"` so provenance does not imply
+#'   that a legacy artifact was created under a contract it predates.
+#' @param path One destination RDS path. Parent directories are created and the
+#'   record is published by an atomic same-directory rename.
+#' @return The saved checkpoint-record list, invisibly. Artifact contents are
+#'   never modified.
 #' @export
 cellcharter_record_checkpoint <- function(
     expected, artifact_paths, status = "created_under_contract", evidence = list(), path) {

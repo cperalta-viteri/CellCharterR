@@ -19,40 +19,57 @@ cellcharter_aucell(
 )
 }
 \arguments{
-\item{spe}{A \link[SpatialExperiment:SpatialExperiment]{SpatialExperiment::SpatialExperiment} or compatible
-\link[SingleCellExperiment:SingleCellExperiment]{SingleCellExperiment::SingleCellExperiment}.}
+\item{spe}{A \link[SpatialExperiment:SpatialExperiment]{SpatialExperiment::SpatialExperiment} with unique, non-empty
+row names and a non-empty numeric assay. Rows are features and columns are
+spatial spots; dense, sparse, and disk-backed assays are accepted.}
 
-\item{gene_sets}{A named list of character vectors containing assay feature
-identifiers.}
+\item{gene_sets}{A non-empty named list of character vectors containing
+assay feature identifiers. Program names must be unique and non-empty.
+Duplicate markers within a program are removed, absent markers are
+ignored, programs with no matches are rejected, and programs with at
+least 80 percent of markers absent are rejected.}
 
-\item{assay_name}{Name of the assay to rank.}
+\item{assay_name}{One non-empty string naming the feature-by-spot assay to
+rank independently within each spot.}
 
-\item{auc_max_rank}{Rank cutoff. AUCell uses \code{round(auc_max_rank)} and
-includes ranks strictly below that value.}
+\item{auc_max_rank}{One finite number whose rounded value must be between 2
+and the assay feature count. The AUCell sum includes ranks strictly below
+this cutoff; the default is five percent of all features.}
 
-\item{norm_auc}{Must be \code{TRUE}; scores use the normalized AUCell formula.}
+\item{norm_auc}{A single logical that currently must be \code{TRUE}. Scores are
+divided by the maximum attainable recovery area for the available marker
+count and chosen cutoff.}
 
-\item{tie_method}{Either \code{"random"} for deterministic randomized ties or
-\code{"ordinal"} for assay-row-order ties.}
+\item{tie_method}{Either \code{"random"} for deterministic counter-based random
+ordering of equal values or \code{"ordinal"} for assay-row-order ties. Random
+results are invariant to chunking and thread scheduling for a fixed seed,
+but do not reproduce AUCell's R random-number stream bit for bit.}
 
-\item{output}{Name of the reduced dimension receiving the in-memory
+\item{output}{One non-empty name for the reduced dimension receiving the in-memory
 spot-by-program matrix. An existing reduced dimension of this name is
 replaced only after successful completion.}
 
 \item{memory_mib}{Working-memory budget in MiB for assay chunks, coercion
 workspace, and native worker scratch. It excludes the final score matrix,
-which uses \code{8 * ncol(spe) * length(gene_sets)} bytes.}
+the already loaded \code{SpatialExperiment}, package/runtime overhead, and
+transient allocator overhead. The final matrix alone requires
+\code{8 * ncol(spe) * length(gene_sets)} bytes.}
 
-\item{threads}{Number of native CPU worker threads, from 1 through 32.}
+\item{threads}{A whole number from 1 through 32 giving the number of native
+CPU worker threads used within each assay chunk. It does not change the
+deterministic result.}
 
 \item{seed}{Non-negative integer seed for deterministic random tie ordering.
 It has no effect when \code{tie_method = "ordinal"}.}
 
-\item{progress}{Whether to display chunk progress.}
+\item{progress}{A single logical indicating whether to display progress over
+assay chunks. It does not affect the result.}
 }
 \value{
-\code{spe} with a spot-by-program matrix in \code{reducedDim(spe, output)}.
-No checkpoint, output file, or metadata record is created.
+The updated \code{SpatialExperiment}, with a dense, in-memory,
+spot-by-program double matrix in \code{reducedDim(spe, output)}. Row names are
+spot identifiers and column names are gene-set names. No \code{colData},
+\code{metadata}, checkpoint, or external file is created.
 }
 \description{
 Ranks assay features independently within each spot and calculates the

@@ -7,13 +7,22 @@
 cellcharter_load_analysis(path, validate = TRUE)
 }
 \arguments{
-\item{path}{Directory created by \code{\link[=cellcharter_save_analysis]{cellcharter_save_analysis()}}.}
+\item{path}{One existing directory created by
+\code{\link[=cellcharter_save_analysis]{cellcharter_save_analysis()}}. Legacy version-1 directories remain
+readable; symbolic-link payloads and paths escaping the directory are
+rejected.}
 
-\item{validate}{Verify all payload sizes and SHA-256 checksums before loading.}
+\item{validate}{A single logical value. If \code{TRUE}, verify every payload's
+manifest-recorded size and SHA-256 checksum before reconstruction. If
+\code{FALSE}, skip payload sizes and checksums; the manifest checksum, safe path
+resolution, component dimensions and types, final object dimensions, and
+reconstructed object validity are still checked.}
 }
 \value{
-A locally reconstructed \code{SpatialExperiment} or
-\code{SingleCellExperiment} with analysis-owned HDF5 backing.
+A locally reconstructed \code{SpatialExperiment}. Assays use
+analysis-owned HDF5 files below \code{path}; \code{rowData}, \code{colData},
+\code{spatialCoords}, reduced dimensions, graphs, alternative experiments, and
+metadata are restored in their corresponding Bioconductor compartments.
 }
 \description{
 Load a portable completed CellCharterR analysis

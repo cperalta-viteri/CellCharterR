@@ -7,9 +7,12 @@
 remove_long_links(adjacency, coordinates, percentile = 99, cutoff = NULL)
 }
 \arguments{
-\item{adjacency}{symmetric sparse connectivity matrix.}
+\item{adjacency}{Square, symmetric, finite non-negative sparse \code{Matrix} with
+one row and column per spot. Nonzero entries define edges; diagonal entries
+are ignored and output weights are binary.}
 
-\item{coordinates}{two-column coordinate matrix in the same row order.}
+\item{coordinates}{Finite numeric matrix-like object in adjacency row order,
+with x and y in its first two columns; extra columns are ignored.}
 
 \item{percentile}{edges longer than this global positive-distance percentile
 are removed. CellCharter tutorials use 99. When \code{adjacency} is a combined

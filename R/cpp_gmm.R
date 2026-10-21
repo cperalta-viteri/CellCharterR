@@ -19,6 +19,9 @@
 #'   native row-major copy plus a centered copy shared by concurrent fits.
 #'   Each active fit additionally stores one observation-by-component
 #'   double-precision posterior matrix.
+#' @param num_threads Positive number of native row-shard threads used by this
+#'   fit. Values above 32 are capped with a warning. Unlike the Torch backend,
+#'   `NULL` is not accepted.
 #' @inheritParams torch_gmm_fit
 #' @return A serializable `cpp_gmm` model inheriting from `torch_gmm`.
 #' @useDynLib CellCharterR, .registration=TRUE
@@ -67,14 +70,21 @@ cpp_gmm_fit <- function(x, n_clusters, max_iter = 100L, tolerance = 1e-3,
 #' Worker threads share one immutable copy of `x`; fitting kernels do not call
 #' the R API or use R's global RNG. R objects are assembled after all workers
 #' join. This is intended for the independent fits in an AutoK campaign.
-#' @param n_clusters Integer vector of component counts, one per fit.
-#' @param seeds Integer seeds, recycled when length one.
-#' @param workers Maximum concurrent native worker threads.
-#' @param threads_per_fit Native row-shard threads within each independent fit.
+#' @param n_clusters Non-empty integer vector of component counts, one per fit;
+#'   every value must be positive and no greater than the number of observations.
+#' @param seeds Integer seeds, recycled only when length one. Otherwise the
+#'   vector must have one seed per requested fit.
+#' @param workers Positive maximum number of independent fits run concurrently.
+#'   Values above 32 are capped. This controls between-fit parallelism.
+#' @param threads_per_fit Positive native row-shard thread count within each
+#'   independent fit. The product `workers * threads_per_fit` is capped at 32,
+#'   with `threads_per_fit` reduced when necessary.
 #' @param progress Whether to report native input preparation, completed fits,
 #'   and a heartbeat during long periods without a completed fit.
 #' @inheritParams cpp_gmm_fit
-#' @return A list of serializable `cpp_gmm` models inheriting from `torch_gmm`.
+#' @return A list in input order containing one serializable `cpp_gmm` model per
+#'   `(n_clusters, seed)` pair. Models inherit from `torch_gmm` for checkpoint
+#'   compatibility but prediction remains on the Torch-free compiled path.
 #' @export
 cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), workers = 1L,
                              threads_per_fit = 1L,
@@ -182,7 +192,6 @@ cpp_gmm_predict <- function(model, newdata, batch_size = 8192L) {
 #' Dispatches compiled models to the double-precision compiled-model scorer
 #' without loading Torch or materialising a complete posterior matrix.
 #' @param object A model returned by [cpp_gmm_fit()].
-#' @inheritParams cpp_gmm_predict
 #' @param ... Additional arguments passed to [cpp_gmm_predict()].
 #' @return Zero-based component labels.
 #' @rdname cpp_gmm_predict
@@ -282,6 +291,9 @@ cpp_gmm_predict_proba <- function(model, newdata, batch_size = 8192L) {
 
 #' Mean log likelihood from a compiled GMM without requiring Torch
 #' @inheritParams cpp_gmm_predict
+#' @param batch_size Positive number of rows read and scored at once. Only one
+#'   `batch_size`-by-K score block and a scalar running sum are retained; no
+#'   complete observation-by-component matrix is allocated.
 #' @return Mean per-observation log likelihood.
 #' @export
 cpp_gmm_log_likelihood <- function(model, newdata, batch_size = 8192L) {

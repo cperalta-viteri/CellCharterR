@@ -11,9 +11,9 @@ cpp_gmm_log_likelihood(model, newdata, batch_size = 8192L)
 
 \item{newdata}{Numeric observation-by-feature matrix or \code{DelayedMatrix}.}
 
-\item{batch_size}{Maximum rows read and scored at once. Label prediction
-retains only one \code{batch_size}-by-K score block in memory; posterior
-prediction explicitly returns the complete observation-by-K matrix.}
+\item{batch_size}{Positive number of rows read and scored at once. Only one
+\code{batch_size}-by-K score block and a scalar running sum are retained; no
+complete observation-by-component matrix is allocated.}
 }
 \value{
 Mean per-observation log likelihood.

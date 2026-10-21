@@ -6,8 +6,10 @@
 \alias{CellCharterR-package}
 \title{CellCharterR: disk-backed spatial-domain analysis}
 \description{
-CellCharterR provides an SPE-first implementation of the post-representation
-CellCharter workflow, while retaining compatibility with ordinary SCEs.
+CellCharterR provides a \code{SpatialExperiment}-native implementation of the
+post-representation CellCharter workflow. Large assays may remain
+disk-backed while spatial coordinates, graph edges, reduced representations,
+annotations, and analysis results stay in their standard SPE compartments.
 Start with \code{\link[=cellcharter_workflow]{cellcharter_workflow()}} for a compact
 example or use the staged graph, aggregation, clustering, and enrichment
 adapters when durable checkpoints are required.

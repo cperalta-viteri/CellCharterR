@@ -14,7 +14,10 @@ cellcharter_load_spe(
 )
 }
 \arguments{
-\item{path}{Directory created by \code{\link[=cellcharter_import_h5ad]{cellcharter_import_h5ad()}}.}
+\item{path}{One existing directory created by
+\code{\link[=cellcharter_import_h5ad]{cellcharter_import_h5ad()}}. Move \code{arrays.h5}, \code{manifest.rds}, and
+\code{spe.rds} together; reconstruction uses the manifest and local
+\code{arrays.h5}, not the original H5AD or the serialized convenience object.}
 
 \item{verify}{Integrity verification mode. \code{"auto"} (the default) trusts the
 size and modification-time fingerprint recorded when the SHA-256 was
@@ -39,10 +42,15 @@ overhead, and bounded import workspaces. The count assay is excluded
 because it remains HDF5-backed. Defaults to the
 \code{CellCharterR.import.max_materialized_gib} option or \code{Inf}.}
 
-\item{progress}{Whether to display column- and block-level import progress.}
+\item{progress}{A single logical value controlling column-, matrix-block-,
+graph-, validation-, and reconstruction-progress messages.}
 }
 \value{
-A valid disk-backed \code{SpatialExperiment}.
+A valid disk-backed \code{SpatialExperiment}. The assay points to
+\code{path/arrays.h5}; native \code{colData}, \code{rowData}, \code{spatialCoords},
+\code{reducedDims}, and weighted \code{colPairs} are rebuilt from the recorded import
+specification; and the \verb{/uns} locator and reconstruction provenance are in
+\code{metadata(spe)$transitionR}.
 }
 \description{
 Reconstructs the S4 experiment shell with the locally installed

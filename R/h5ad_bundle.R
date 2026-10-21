@@ -1319,23 +1319,94 @@ load_transition_spe <- function(
 #' estimates before allocating these slots and reads matrices and graphs in
 #' bounded blocks without creating a second full transposed matrix.
 #'
-#' @param h5ad_file Path to the source H5AD.
-#' @param output_dir Destination directory for `arrays.h5`, `spe.rds`, and the
-#'   conversion manifest. Move these files together.
-#' @param ... Additional importer arguments such as `sample_column`,
-#'   `reduced_dims`, `chunk_mib`, `materialize_block_mib`,
-#'   `max_materialized_gib`, `source_verification`, and `progress`.
-#'   `source_verification = "sampled"` is fast and assumes the source remains
-#'   stable while copying; `"full"` performs an additional complete source read
-#'   and requires its SHA-256 to equal the independent clone before publication.
-#' @return A disk-backed `SpatialExperiment`.
+#' @param h5ad_file One existing source H5AD path. The file is read directly
+#'   through HDF5; Python and AnnData are not required.
+#' @param output_dir One destination directory. The importer writes an
+#'   independent `arrays.h5` clone, a reconstructed `spe.rds` convenience
+#'   object, and `manifest.rds`. Move the complete directory when transporting
+#'   the result. The returned object does not depend on `h5ad_file`.
+#' @param assay_path Non-empty HDF5 path to the feature-by-spot assay, by
+#'   default AnnData `X`. It is exposed without materialisation as
+#'   `assay(spe, assay_name)` backed by `output_dir/arrays.h5`.
+#' @param assay_name Non-empty name assigned to the imported assay in
+#'   `assayNames(spe)`.
+#' @param obs_columns `NULL` to import every `obs` column, or a unique character
+#'   vector selecting columns stored in `colData(spe)`. The AnnData observation
+#'   index becomes `colnames(spe)` and `rownames(colData(spe))`.
+#' @param var_columns `NULL` to import every `var` column, or a unique character
+#'   vector selecting columns stored in `rowData(spe)`. The AnnData variable
+#'   index becomes `rownames(spe)` and `rownames(rowData(spe))`.
+#' @param spatial_path Non-empty HDF5 path to a dense AnnData spatial matrix.
+#'   Through R's HDF5 dimension convention it must be two-by-spots; the importer
+#'   transposes it blockwise to spots-by-two and stores it in
+#'   `spatialCoords(spe)`.
+#' @param reduced_dims A uniquely named character vector mapping each desired
+#'   `reducedDim` name to a dense AnnData `obsm` HDF5 path. Through R's HDF5
+#'   dimension convention each dataset must be features-by-spots; it is
+#'   transposed blockwise and stored as an ordinary spots-by-features matrix in
+#'   `reducedDim(spe, name)`. Use `character()` to import none.
+#' @param aucell_path Non-empty HDF5 path to an AnnData dataframe-encoded AUCell
+#'   `obsm` entry. Its named program columns are materialised blockwise as the
+#'   ordinary spots-by-program matrix `reducedDim(spe, "AUCell")`. Use `NULL`
+#'   to omit it; matrix-encoded and sparse AUCell entries are rejected.
+#' @param sample_column One imported `obs` column used as the
+#'   `SpatialExperiment` sample identifier. Use `NULL` only for known
+#'   single-sample data; all spots are then assigned `sample01`. When non-`NULL`,
+#'   it must be selected by `obs_columns` if a subset is requested.
+#' @param chunk_mib Positive copy-buffer target in MiB used while cloning the
+#'   H5AD to `arrays.h5`. It controls I/O workspace, not the HDF5 assay's final
+#'   size or the memory retained by the returned object.
+#' @param overwrite A single logical value. If `FALSE`, an existing published
+#'   `spe.rds` is rejected. If `TRUE`, the destination is replaced under an
+#'   ownership lock after the independent copy and reconstructed object pass
+#'   validation.
+#' @param source_verification Source-copy verification mode. `"sampled"`
+#'   validates sampled source regions while copying and assumes the source does
+#'   not change concurrently. `"full"` additionally hashes the entire source
+#'   and requires it to match `arrays.h5` before publication.
+#' @param materialize_block_mib Positive target size in MiB for temporary blocks
+#'   used to materialise metadata, coordinates, reduced dimensions, AUCell, and
+#'   sparse graphs. It does not materialise the count assay.
+#' @param max_materialized_gib Maximum allowed conservative GiB estimate for
+#'   native metadata, coordinates, embeddings, graphs, object overhead, and
+#'   bounded workspaces. The disk-backed assay is excluded. Defaults to option
+#'   `CellCharterR.import.max_materialized_gib` or `Inf`; imports exceeding the
+#'   limit stop before materialisation.
+#' @param progress A single logical value controlling copy, materialisation,
+#'   graph-import, validation, and publication progress messages.
+#' @return A valid disk-backed `SpatialExperiment`. The assay is stored in
+#'   `assay(spe, assay_name)`; `obs` and `var` annotations are in `colData` and
+#'   `rowData`; coordinates are in `spatialCoords`; requested `obsm` matrices
+#'   are in `reducedDims`; sparse `obsp` matrices are imported as weighted
+#'   `SelfHits` in `colPairs`; and an `/uns` locator plus conversion provenance
+#'   is stored in `metadata(spe)$transitionR`. The independent directory also
+#'   contains `arrays.h5`, `spe.rds`, and `manifest.rds`.
 #' @export
 #' @examples
 #' \dontrun{
 #' spe <- cellcharter_import_h5ad("large.h5ad", "large-spe")
 #' }
-cellcharter_import_h5ad <- function(h5ad_file, output_dir, ...) {
-    read_transition_h5ad_spe(h5ad_file = h5ad_file, output_dir = output_dir, ...)
+cellcharter_import_h5ad <- function(
+        h5ad_file, output_dir, assay_path = "X", assay_name = "expression",
+        obs_columns = NULL, var_columns = NULL, spatial_path = "obsm/spatial",
+        reduced_dims = c(PCA = "obsm/X_pca", cellcharter = "obsm/X_cellcharter"),
+        aucell_path = "obsm/score_aucell", sample_column = "slide_id_concat",
+        chunk_mib = 128L, overwrite = FALSE,
+        source_verification = c("sampled", "full"),
+        materialize_block_mib = 64,
+        max_materialized_gib = getOption("CellCharterR.import.max_materialized_gib", Inf),
+        progress = interactive()) {
+    read_transition_h5ad_spe(
+        h5ad_file = h5ad_file, output_dir = output_dir,
+        assay_path = assay_path, assay_name = assay_name,
+        obs_columns = obs_columns, var_columns = var_columns,
+        spatial_path = spatial_path, reduced_dims = reduced_dims,
+        aucell_path = aucell_path, sample_column = sample_column,
+        chunk_mib = chunk_mib, overwrite = overwrite,
+        source_verification = source_verification,
+        materialize_block_mib = materialize_block_mib,
+        max_materialized_gib = max_materialized_gib, progress = progress
+    )
 }
 
 #' Load a movable disk-backed SpatialExperiment
@@ -1345,7 +1416,10 @@ cellcharter_import_h5ad <- function(h5ad_file, output_dir, ...) {
 #' avoids cross-release serialization dependencies such as `Seqinfo`. Use this
 #' function after moving the complete directory.
 #'
-#' @param path Directory created by [cellcharter_import_h5ad()].
+#' @param path One existing directory created by
+#'   [cellcharter_import_h5ad()]. Move `arrays.h5`, `manifest.rds`, and
+#'   `spe.rds` together; reconstruction uses the manifest and local
+#'   `arrays.h5`, not the original H5AD or the serialized convenience object.
 #' @param verify Integrity verification mode. `"auto"` (the default) trusts the
 #'   size and modification-time fingerprint recorded when the SHA-256 was
 #'   computed, and re-hashes after that fingerprint changes (for example after
@@ -1365,8 +1439,13 @@ cellcharter_import_h5ad <- function(h5ad_file, output_dir, ...) {
 #'   overhead, and bounded import workspaces. The count assay is excluded
 #'   because it remains HDF5-backed. Defaults to the
 #'   `CellCharterR.import.max_materialized_gib` option or `Inf`.
-#' @param progress Whether to display column- and block-level import progress.
-#' @return A valid disk-backed `SpatialExperiment`.
+#' @param progress A single logical value controlling column-, matrix-block-,
+#'   graph-, validation-, and reconstruction-progress messages.
+#' @return A valid disk-backed `SpatialExperiment`. The assay points to
+#'   `path/arrays.h5`; native `colData`, `rowData`, `spatialCoords`,
+#'   `reducedDims`, and weighted `colPairs` are rebuilt from the recorded import
+#'   specification; and the `/uns` locator and reconstruction provenance are in
+#'   `metadata(spe)$transitionR`.
 #' @export
 #' @examples
 #' \dontrun{

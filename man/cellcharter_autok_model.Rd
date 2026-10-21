@@ -7,12 +7,17 @@
 cellcharter_autok_model(object, k = NULL)
 }
 \arguments{
-\item{object}{A fitted \code{cellcharter_autok} object.}
+\item{object}{A valid \code{cellcharter_autok} result returned by
+\code{\link[=cellcharter_autok_fit]{cellcharter_autok_fit()}}. Its selected-artifact index and any referenced
+checkpoint files must remain intact.}
 
-\item{k}{Cluster count. Defaults to the most stable K.}
+\item{k}{\code{NULL} to use \code{\link[=cellcharter_autok_best_k]{cellcharter_autok_best_k()}}, or one positive fitted
+cluster count present exactly once in \code{object$best_index}.}
 }
 \value{
-The checkpointed fitted model.
+The lowest-negative-log-likelihood fitted model for \code{k}, loaded from
+its durable checkpoint when checkpointing was enabled or returned from the
+embedded best artifact when \code{checkpoint_mode = "none"}.
 }
 \description{
 Load the lowest-NLL model fitted for K

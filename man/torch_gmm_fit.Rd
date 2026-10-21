@@ -20,38 +20,50 @@ torch_gmm_fit(
 )
 }
 \arguments{
-\item{x}{observation-by-feature matrix or DelayedMatrix. Rows are read in
-chunks and never materialised jointly.}
+\item{x}{Non-empty numeric observation-by-feature matrix or \code{DelayedMatrix}.
+Rows are read in chunks; values must be finite and representable as
+float32. A trusted cache created internally by AutoK is also accepted.}
 
-\item{n_clusters}{number of mixture components.}
+\item{n_clusters}{One positive integer no greater than \code{nrow(x)} giving the
+number of full-covariance mixture components.}
 
-\item{batch_size}{Maximum observations transferred per E-step, or \code{"auto"}
-for conservative CUDA-memory-aware selection.}
+\item{batch_size}{One positive integer giving the maximum observations
+transferred per E-step, or \code{"auto"} for conservative CUDA-memory-aware
+selection. It changes memory/transfer topology, not the fitted objective.}
 
-\item{max_iter}{maximum EM iterations.}
+\item{max_iter}{One positive integer maximum number of EM iterations.}
 
-\item{tolerance}{stop when per-observation NLL change is below this value.}
+\item{tolerance}{One finite positive stopping threshold for the absolute
+change in mean per-observation negative log likelihood.}
 
-\item{covariance_regularization}{diagonal ridge added before Cholesky.}
+\item{covariance_regularization}{One finite positive diagonal ridge added
+exactly once before each covariance Cholesky factorization.}
 
-\item{device}{Torch device selection.}
+\item{device}{Exactly one of \code{"auto"}, \code{"cpu"}, or \code{"cuda"}; see
+\code{\link[=torch_gmm_device]{torch_gmm_device()}}.}
 
-\item{seed}{initialisation seed.}
+\item{seed}{One non-negative integer controlling deterministic initialization.}
 
 \item{num_threads}{Requested CPU thread count, or \code{NULL} to retain Torch's
 current setting.}
 
-\item{initialization_method}{\code{"legacy"} for the original base-R streamed
-initializer or \code{"torch"} for the accelerated full-data Torch initializer.}
+\item{initialization_method}{\code{"legacy"} for the bounded-memory base-R
+streamed initializer or \code{"torch"} for the accelerated full-data Torch
+initializer. Both are deterministic for a fixed runtime and seed but are
+not sklearn-RNG-identical.}
 
-\item{validate_input}{Whether to scan every input block for finite values
-before fitting. AutoK may perform this scan once for the whole campaign.}
+\item{validate_input}{A single logical. When \code{TRUE}, scan every input block
+for finite float32-compatible values before fitting. AutoK may safely set
+this to \code{FALSE} after validating the shared representation once.}
 
 \item{.oom_retries}{Internal maximum number of complete-fit CUDA OOM retries.
 AutoK sets this to zero because it owns campaign-level batch-size retries.}
 }
 \value{
-A \code{torch_gmm} model.  Only mixture parameters are retained in memory.
+A serializable \code{torch_gmm} list containing fitted weights, means,
+full covariance matrices, final/monitored likelihoods, convergence and
+regularization diagnostics, initialization diagnostics, and runtime
+provenance. Observation-level posterior probabilities are not retained.
 }
 \description{
 This is EM, not gradient-based neural-network training. Thus Torch performs

@@ -28,7 +28,10 @@ cellcharter_autok_fit(
 )
 }
 \arguments{
-\item{x}{Observation-by-feature matrix accepted by \code{fit_fun}.}
+\item{x}{Non-empty numeric observation-by-feature matrix-like object. The
+built-in Torch backend accepts matrices and \code{DelayedMatrix} inputs; the C++
+backend materialises the representation once as a dense double matrix.
+Assays are never read implicitly.}
 
 \item{n_clusters}{A numeric vector of exactly two integer bounds for
 selectable K. The fitted grid is expanded by one at each boundary, as in
@@ -37,9 +40,16 @@ silently treating their endpoints as non-selectable sentinels. An R list
 instead denotes an already-expanded consecutive grid whose first and last
 values are the explicit sentinel K values.}
 
-\item{checkpoint_dir}{Directory for atomic per-fit and state checkpoints.}
+\item{checkpoint_dir}{One non-empty path. It is used when \code{checkpoint_mode}
+is \code{"fit"} or \code{"round"}: per-fit mode writes one artifact per K and run,
+whereas round mode writes one atomic bundle after all K values in a run
+finish. A path is still required syntactically with
+\code{checkpoint_mode = "none"}, but no directory or checkpoint is created and
+completed models and labels remain embedded in the returned object.}
 
-\item{max_runs}{Maximum repeated fits for each K.}
+\item{max_runs}{Positive maximum number of repeated fits for each K. Each run
+uses one seed across the fitted K grid; convergence can stop the campaign
+after the third completed run.}
 
 \item{convergence_tol}{Stop when the MAPE between consecutive stability
 curves is below this non-negative threshold. The first possible stop is
@@ -47,16 +57,25 @@ after run three, matching CellCharter 0.2.0.}
 
 \item{seed}{Base seed. Run \code{i} uses \code{seed + i - 1} for every K.}
 
-\item{fit_fun}{Function called as \code{fit_fun(x, n_clusters, seed, ...)}.}
+\item{fit_fun}{\code{NULL} for the selected built-in backend, or a custom function
+called as \code{fit_fun(x, n_clusters, seed, ...)} in per-fit checkpoint mode.
+Custom hooks are not supported by \code{backend = "cpp"}.}
 
-\item{predict_fun}{Function called as \code{predict_fun(model, newdata, ...)}.}
+\item{predict_fun}{\code{NULL} for the selected built-in backend, or a custom
+function called as \code{predict_fun(model, newdata, ...)}. It must return one
+non-missing label per row of \code{newdata}.}
 
-\item{nll_fun}{Function returning the model's scalar negative log-likelihood.}
+\item{nll_fun}{\code{NULL} for the selected built-in backend, or a custom function
+returning one finite scalar negative log likelihood for model selection.}
 
-\item{similarity_fun}{Label-agreement function. Defaults to the
-Fowlkes--Mallows score.}
+\item{similarity_fun}{Function accepting two equal-length label vectors and
+returning one finite scalar agreement score. The default is
+\code{\link[=cellcharter_fowlkes_mallows]{cellcharter_fowlkes_mallows()}}.}
 
-\item{fit_args, predict_args}{Additional named arguments for the hooks.}
+\item{fit_args, predict_args}{Named lists forwarded to the fitting and
+prediction hooks. Reserved call arguments cannot be overridden. With the
+C++ backend, \code{fit_args} may contain only \code{max_iter}, \code{tolerance}, and
+\code{covariance_regularization}, and \code{predict_args} must be empty.}
 
 \item{data_id}{Optional immutable upstream provenance ID. Independently of
 this value, AutoK computes a bounded-memory SHA-256 fingerprint of the
@@ -75,49 +94,66 @@ arguments. A committed campaign with
 a different representation, fitting contract, or execution contract fails
 closed and is never overwritten during resume.}
 
-\item{resume}{Reuse matching fully committed runs. Historical stability is
+\item{resume}{A single logical. When \code{TRUE}, reuse matching fully committed
+runs. Historical stability is
 restored without recomputation; artifacts from an interrupted final run
 are moved to a recoverable \verb{quarantine/} directory and that run restarts
 from its first K.}
 
-\item{cache_representation}{Either \code{"none"} for the bounded-memory reader or
-\code{"ram"} to materialise only the observation-by-feature representation once
-as a CPU float32 Torch tensor and reuse it throughout AutoK. The latter can
-substantially accelerate repeated GPU fits and never materialises assays.}
+\item{cache_representation}{Torch-backend representation policy. \code{"none"}
+streams through the bounded-memory reader; \code{"ram"} materialises only the
+observation-by-feature representation once as a CPU float32 Torch tensor
+and reuses it. It never materialises assays. The C++ backend always
+materialises this representation once as a double matrix and therefore
+ignores this Torch-only setting. Custom fitting hooks require \code{"none"}.}
 
-\item{backend}{GMM implementation. \code{"torch"} preserves the original path;
-\code{"cpp"} fits all requested K values for a run through \code{cpp_gmm_fit_many()}.}
+\item{backend}{Exactly \code{"cpp"} for the supported compiled double-precision
+CPU backend or \code{"torch"} for the experimental float32 R Torch backend.
+C++ fits requested K values through \code{\link[=cpp_gmm_fit_many]{cpp_gmm_fit_many()}}.}
 
-\item{workers, threads_per_fit}{Positive parallelism controls for the C++ backend.}
+\item{workers}{Positive number of independent K fits that the C++ backend may
+run concurrently. This controls between-fit parallelism and has no effect
+for \code{backend = "torch"}.}
 
-\item{progress}{Whether to emit C++ round progress and estimated time remaining.}
+\item{threads_per_fit}{Positive number of native threads used within each C++
+fit. The implementation caps the product of \code{workers} and
+\code{threads_per_fit} at 32 to avoid nested oversubscription. It has no effect
+for \code{backend = "torch"}.}
+
+\item{progress}{A single logical controlling status messages. For compiled
+rounds this includes completed-fit counts and estimated time remaining.}
 
 \item{checkpoint_mode}{Checkpoint granularity. \code{"fit"} writes the historical
 per-K artifacts immediately and therefore runs C++ K values sequentially;
 an interruption loses at most the active K. \code{"round"} parallelizes K fits
 and writes one atomic bundle after the complete C++ round; an interrupted
 active round is recomputed. \code{"none"} performs no writes, parallelizes K
-fits, and retains every model and label vector in RAM.}
+fits, and retains every model and label vector in RAM. \code{"round"} and
+\code{"none"} require \code{backend = "cpp"}; Torch and custom-hook runs use \code{"fit"}.}
 }
 \value{
-A \code{cellcharter_autok} object containing stability, convergence
-history, and paths to the lowest-NLL model checkpoint for every K. Label
-vectors remain in the per-fit RDS files rather than being duplicated in RAM.
+A \code{cellcharter_autok} object containing the fitted/selectable K grids,
+repeated stability values, convergence history, lowest-negative-log-
+likelihood index, selected K, representation fingerprint, and numerical
+execution contract. In \code{"fit"} and \code{"round"} modes the index points to
+durable RDS artifacts; in \code{"none"} mode the best model and labels for every
+K are embedded in \code{embedded_best_artifacts} and no path is written.
 }
 \description{
 Reproduces the neighboring-K stability algorithm in CellCharter 0.2.0. For
 every run, labels at K are compared with all earlier-run labels at K+1. The
-two edges incident to each interior K are then mirrored and combined. Fits
-are checkpointed individually before stability is updated, so an interrupted
-analysis resumes without repeating completed fits.
+two edges incident to each interior K are then mirrored and combined. With
+\code{checkpoint_mode = "fit"}, fits are checkpointed individually before
+stability is updated. The compiled backend also supports atomic per-round
+checkpoints or a no-checkpoint run, with the trade-offs described below.
 }
 \section{Experimental status}{
 
-The R AutoK fitting path is experimental for multi-million-observation
-datasets because repeated R Torch GMM fits may be substantially slower than
-Python CellCharter. Its outputs and stability utilities remain available for
-validation and moderate-size analyses. External Python domain labels can be
-stored directly in \code{colData(sce)} for downstream R analysis.
+The compiled CPU backend (\code{backend = "cpp"}) is the supported scalable path.
+The optional R Torch backend remains experimental for large datasets because
+repeated fits can be substantially slower and more memory-sensitive. Both
+backends return the same AutoK result structure, but their deterministic
+initializers are not expected to produce identical cluster labels.
 }
 
 \examples{

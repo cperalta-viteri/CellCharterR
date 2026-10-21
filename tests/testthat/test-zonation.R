@@ -31,10 +31,16 @@ make_zonation_spe <- function(use_alt_exp = FALSE) {
   spe
 }
 
+test_that("zonation public APIs name their experiment argument spe", {
+  expect_identical(names(formals(cellcharter_assign_dominant_program))[[1L]], "spe")
+  expect_identical(names(formals(cellcharter_zonation))[[1L]], "spe")
+})
+
 test_that("dominant programs are assigned block-wise without running zonation", {
   spe <- make_zonation_spe()
   observed <- cellcharter_assign_dominant_program(
-    spe, block = "patient", programs = c("Pre-EMT", "Early-EMT", "Late-EMT"),
+    spe = spe, block = "patient",
+    programs = c("Pre-EMT", "Early-EMT", "Late-EMT"),
     output = "dominant_emt", progress = FALSE
   )
   expect_identical(
@@ -65,7 +71,7 @@ test_that("zonation is deterministic, block-aware, and stores audit data", {
   set.seed(812L)
   before <- .Random.seed
   observed <- cellcharter_zonation(
-    spe, block = "patient", min_spots_per_zone = 2L,
+    spe = spe, block = "patient", min_spots_per_zone = 2L,
     sample_size = 2L, n_iterations = 4L, seed = 19L
   )
   expect_identical(.Random.seed, before)

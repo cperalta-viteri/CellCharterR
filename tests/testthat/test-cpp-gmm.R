@@ -404,7 +404,7 @@ test_that("C++ round checkpoints survive an observability-only wrapper upgrade",
 test_that("SPE clustering adapter attaches labels from C++ memory and round artifacts", {
   for (mode in c("none", "round")) {
     spe <- cellcharter_mouse_spleen_tiny(with_results = TRUE)
-    checkpoint_dir <- tempfile(paste0("cpp-sce-", mode, "-"))
+    checkpoint_dir <- tempfile(paste0("cpp-spe-", mode, "-"))
     spe <- cellcharter_cluster(
       spe,
       representation = "X_cellcharter_tiny",

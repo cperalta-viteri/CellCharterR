@@ -12,16 +12,22 @@ torch_gmm_runtime_info(
 )
 }
 \arguments{
-\item{device}{Selected Torch device.}
+\item{device}{Exactly one of \code{"auto"}, \code{"cpu"}, or \code{"cuda"}, resolved as in
+\code{\link[=torch_gmm_device]{torch_gmm_device()}}. Explicit unavailable CUDA is an error.}
 
-\item{batch_size}{Maximum observations per device batch.}
+\item{batch_size}{One positive integer giving the maximum observations per
+disk-to-device batch; recorded as provenance without allocating a batch.}
 
-\item{seed}{Initialization seed.}
+\item{seed}{One non-negative integer initialization seed recorded verbatim.}
 
-\item{num_threads}{Requested CPU thread count, or \code{NULL} to retain Torch's setting.}
+\item{num_threads}{\code{NULL} to report Torch's current CPU thread count, or one
+positive integer temporarily set while collecting the runtime record. The
+previous Torch setting is restored before return.}
 }
 \value{
-A named list suitable for checkpoint provenance.
+A named list containing resolved \code{device}, installed \code{torch_version},
+\code{cuda_available}, visible \code{gpu_name} when discoverable, \code{batch_size},
+\code{seed}, and effective \code{cpu_threads}; no model is fitted.
 }
 \description{
 Report the Torch execution environment

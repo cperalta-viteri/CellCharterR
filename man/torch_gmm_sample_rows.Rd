@@ -7,14 +7,19 @@
 torch_gmm_sample_rows(x, n = 10000L, seed = 1L)
 }
 \arguments{
-\item{x}{observation-by-feature matrix or DelayedMatrix.}
+\item{x}{Non-empty numeric observation-by-feature matrix or \code{DelayedMatrix};
+sampled blocks must be finite and float32-compatible.}
 
-\item{n}{number of rows to sample.}
+\item{n}{One positive integer requested sample size. If \code{n > nrow(x)}, all
+rows are returned once in seeded random order; sampling is without
+replacement.}
 
-\item{seed}{random seed.}
+\item{seed}{One non-negative integer passed through \code{\link[withr:with_seed]{withr::with_seed()}} so
+the caller's global RNG state is restored after sampling.}
 }
 \value{
-A numeric matrix containing at most \code{n} sampled rows.
+A dense numeric matrix containing \code{min(n, nrow(x))} sampled rows and
+all input features. This sampled matrix is materialised in RAM.
 }
 \description{
 The sampled matrix is intentionally the only sizeable object retained on the

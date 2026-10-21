@@ -2,24 +2,33 @@
 % Please edit documentation in R/torch_gmm.R
 \name{torch_gmm_predict_proba}
 \alias{torch_gmm_predict_proba}
-\title{Posterior GMM probabilities in bounded-size batches}
+\title{Posterior GMM probabilities computed in bounded-size batches}
 \usage{
 torch_gmm_predict_proba(model, newdata, batch_size = 8192L, device = "auto")
 }
 \arguments{
-\item{model}{a fitted \code{torch_gmm}.}
+\item{model}{A valid fitted \code{torch_gmm} containing numeric component weights,
+means, full covariance matrices, feature count, cluster count, and positive
+covariance regularization as returned by \code{\link[=torch_gmm_fit]{torch_gmm_fit()}}.}
 
-\item{newdata}{observation-by-feature matrix or DelayedMatrix.}
+\item{newdata}{Non-empty numeric observation-by-feature matrix or
+\code{DelayedMatrix} with exactly \code{model$n_features} columns and finite,
+float32-compatible values. Returned rows preserve this observation order.}
 
-\item{batch_size}{disk-to-device chunk size.}
+\item{batch_size}{Positive disk-to-device row chunk size. It bounds temporary
+scoring tensors, but the complete observation-by-component result is still
+allocated and returned in RAM.}
 
-\item{device}{Torch device selection.}
+\item{device}{Exactly one of \code{"auto"}, \code{"cpu"}, or \code{"cuda"}; see
+\code{\link[=torch_gmm_device]{torch_gmm_device()}}. Model parameters and each input block are copied to
+the resolved device for scoring.}
 }
 \value{
-A numeric observation-by-component posterior-probability matrix.
+A dense numeric observation-by-component posterior-probability matrix
+in RAM. Rows follow \code{newdata}; columns follow the fitted component order.
 }
 \description{
-Posterior GMM probabilities in bounded-size batches
+Posterior GMM probabilities computed in bounded-size batches
 }
 \examples{
 \dontshow{if (requireNamespace("torch", quietly = TRUE)) withAutoprint(\{ # examplesIf}
