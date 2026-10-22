@@ -83,9 +83,22 @@ test_that("imported colPair graphs need no CellCharterR graph stage", {
 
 test_that("domain labels can be read from reducedDims", {
   spe <- .tiny_spe_fixture()
-  labels <- matrix(rep(0:1, 8L), ncol = 1L,
+  labels <- matrix(rep(c("old_a", "old_b"), 8L), ncol = 1L,
                    dimnames = list(colnames(spe), "python_domain"))
   SingleCellExperiment::reducedDim(spe, "python_labels") <- labels
+  spe <- .cc_spe_record_stage(
+    spe,
+    "clustering:python_labels",
+    parameters = list(domain_col = "python_labels"),
+    input_specs = list(
+      domain = list(kind = "domain", name = "python_labels")
+    )
+  )
+  replacement <- matrix(
+    rep(0:1, 8L), ncol = 1L,
+    dimnames = list(colnames(spe), "python_domain")
+  )
+  SingleCellExperiment::reducedDim(spe, "python_labels") <- replacement
 
   by_column <- cellcharter_enrichment(
     spe, group_col = "cell_type", domain_col = "python_domain"
@@ -96,6 +109,80 @@ test_that("domain labels can be read from reducedDims", {
   )
   expect_true("enrichment" %in% names(S4Vectors::metadata(by_column)$CellCharterR$results))
   expect_true("from_dimension" %in% names(S4Vectors::metadata(by_dimension)$CellCharterR$results))
+})
+
+test_that("downstream analysis accepts intentionally replaced domain labels", {
+  spe <- .tiny_spe_fixture()
+  spe$python_domain <- factor(
+    rep(c("old_a", "old_b"), length.out = ncol(spe))
+  )
+  spe <- .cc_spe_record_stage(
+    spe,
+    "clustering:python_domain",
+    parameters = list(domain_col = "python_domain"),
+    input_specs = list(
+      domain = list(kind = "domain", name = "python_domain")
+    )
+  )
+  spe$python_domain <- factor(
+    rep(c(0L, 1L), length.out = ncol(spe)),
+    levels = 0:1
+  )
+  expect_error(
+    .cc_spe_require_stage(spe, "clustering:python_domain"),
+    "`domain` domain input changed"
+  )
+
+  from <- unlist(lapply(seq(1L, ncol(spe), by = 4L), function(i) {
+    c(i, i + 1L, i + 1L, i + 2L, i + 2L, i + 3L)
+  }), use.names = FALSE)
+  to <- unlist(lapply(seq(1L, ncol(spe), by = 4L), function(i) {
+    c(i + 1L, i, i + 2L, i + 1L, i + 3L, i + 2L)
+  }), use.names = FALSE)
+  SingleCellExperiment::colPair(spe, "replacement_graph") <-
+    S4Vectors::SelfHits(from, to, nnode = ncol(spe), value = 1)
+
+  expect_silent(
+    updated <- cellcharter_enrichment(
+      spe,
+      group_col = "cell_type",
+      domain_col = "python_domain",
+      result_name = "replacement",
+      progress = FALSE
+    )
+  )
+  expect_identical(
+    colnames(
+      S4Vectors::metadata(updated)$CellCharterR$results$replacement$value$enrichment
+    ),
+    c("0", "1")
+  )
+  expect_silent(
+    updated <- cellcharter_nhood_enrichment(
+      updated,
+      graph_name = "replacement_graph",
+      domain_col = "python_domain",
+      result_name = "replacement_nhood"
+    )
+  )
+  expect_silent(
+    updated <- cellcharter_diff_nhood_enrichment(
+      updated,
+      graph_name = "replacement_graph",
+      domain_col = "python_domain",
+      condition_col = "condition",
+      sample_col = "sample",
+      condition_groups = c("healthy", "lupus"),
+      result_name = "replacement_diff",
+      n_perms = 2L,
+      permutation_mode = "shuffle",
+      progress = FALSE
+    )
+  )
+  expect_true(all(
+    c("replacement", "replacement_nhood", "replacement_diff") %in%
+      names(S4Vectors::metadata(updated)$CellCharterR$results)
+  ))
 })
 
 test_that("public object API completes the tiny workflow without sample leakage", {
@@ -342,7 +429,7 @@ test_that("graph stages reject changed coordinates, samples, and topology", {
   )
 })
 
-test_that("aggregation and clustering stages reject changed scientific inputs", {
+test_that("stage records detect changed scientific inputs without blocking labels", {
   skip_if_not_installed("geometry")
   spe <- cellcharter_graph(.tiny_spe_fixture(), progress = FALSE)
   spe <- cellcharter_aggregate(spe, n_layers = 1L, progress = FALSE)
@@ -375,10 +462,17 @@ test_that("aggregation and clustering stages reject changed scientific inputs", 
   )
   clustered$cellcharter_domain[[1L]] <- clustered$cellcharter_domain[[2L]]
   expect_error(
-    cellcharter_enrichment(
-      clustered, group_col = "cell_type", domain_col = "cellcharter_domain"
-    ),
+    .cc_spe_require_stage(clustered, "clustering:cellcharter_domain"),
     "`domain` domain input changed"
+  )
+  expect_silent(
+    enriched <- cellcharter_enrichment(
+      clustered, group_col = "cell_type", domain_col = "cellcharter_domain"
+    )
+  )
+  expect_true(
+    "enrichment" %in%
+      names(S4Vectors::metadata(enriched)$CellCharterR$results)
   )
 })
 

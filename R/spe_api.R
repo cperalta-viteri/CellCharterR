@@ -58,10 +58,11 @@
     stop("Cluster labels `", name,
          "` must contain one non-missing value per observation.", call. = FALSE)
   }
-  clustering_stage <- paste0("clustering:", name)
-  if (!is.null(.cc_spe_metadata(spe)$stages[[clustering_stage]])) {
-    .cc_spe_require_stage(spe, clustering_stage)
-  }
+  # Domain labels are valid downstream inputs independently of how they were
+  # produced. A caller may intentionally replace a previously fitted label
+  # column (for example, to select another already-fitted AutoK solution).
+  # Each downstream result fingerprints the labels it actually consumes, so a
+  # superseded clustering-stage record must not block that analysis.
   value
 }
 
