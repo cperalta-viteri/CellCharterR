@@ -178,9 +178,18 @@
       as.character(col_data$sample_id), paste0(context, " sample_id values"),
       allow_duplicates = TRUE
     )
+    # Bioconductor permits duplicated column names, and some spatial imports
+    # use a slide-level label rather than a barcode as the observation name.
+    # In that valid layout, many spots from the same sample intentionally have
+    # the same sample/name pair. The SpatialExperiment container itself keeps
+    # every assay, colData row, reducedDim row, spatial coordinate, and colPair
+    # aligned by position, so duplicated labels must not invalidate otherwise
+    # aligned observations. Scientific inputs receive separate content hashes
+    # when stages and results are stored.
     ids <- .cc_validate_observation_ids(
       paste(sample_ids, local_ids, sep = "\037"),
-      paste0(context, " sample-scoped spot identifiers")
+      paste0(context, " sample-scoped spot identifiers"),
+      allow_duplicates = TRUE
     )
   }
   .cc_align_observation_ids(
@@ -211,7 +220,9 @@
       paste0(context, " spot identifiers"), allow_duplicates = TRUE
     )
   }
-  order_sha256 <- .cc_observation_order_sha256(ids, paste0(context, " spot identifiers"))
+  order_sha256 <- .cc_observation_order_sha256(
+    ids, paste0(context, " spot identifiers"), allow_duplicates = TRUE
+  )
   if (!is.null(recorded_order_sha256) &&
       (!is.character(recorded_order_sha256) || length(recorded_order_sha256) != 1L ||
        is.na(recorded_order_sha256) || !identical(recorded_order_sha256, order_sha256))) {

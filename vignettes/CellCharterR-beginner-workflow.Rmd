@@ -165,6 +165,41 @@ The call below records the exact compiled C++ settings that generated the
 packaged teaching result loaded later in this vignette. The settings are
 intentionally small for the 1,000-spot object.
 
+#### Configure CPU threading before a parallel C++ run
+
+The compiled backend parallelizes at two levels: `workers` fits can run at the
+same time, and each fit can use `threads_per_fit` threads. A multithreaded BLAS
+under every worker would add a hidden third level of parallelism. This nested
+oversubscription can create far more runnable threads than the machine has CPU
+cores, increasing memory pressure and often making the analysis substantially
+slower.
+
+For a parallel compiled run, place the following entries in the analysis
+project's `.Renviron` file **before starting R**, then restart R. In RStudio,
+`file.edit(".Renviron")` opens the project-local file.
+
+```text
+OPENBLAS_NUM_THREADS=1
+OMP_NUM_THREADS=1
+MKL_NUM_THREADS=1
+BLIS_NUM_THREADS=1
+VECLIB_MAXIMUM_THREADS=1
+GOTO_NUM_THREADS=1
+```
+
+These settings make only the linked BLAS/OpenMP runtime single-threaded; they
+do not make CellCharterR sequential. CellCharterR still uses up to
+`workers * threads_per_fit` threads. Setting all six variables makes the setup
+portable across common BLAS implementations. Confirm the values before
+loading CellCharterR:
+
+```{r verify-cpu-thread-environment, eval=FALSE}
+Sys.getenv(c(
+  "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+  "BLIS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "GOTO_NUM_THREADS"
+))
+```
+
 ```{r staged-clustering, eval=FALSE}
 spe <- cellcharter_cluster(
   spe,

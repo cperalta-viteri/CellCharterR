@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdint>
 #include <exception>
 #include <future>
@@ -87,10 +88,35 @@ struct ThreadJoiner {
   }
 };
 
+enum class JobOutcome { Success, Cancelled, Failed };
+
 struct CompletionEvent {
   int index;
   double elapsed_seconds;
+  JobOutcome outcome;
 };
+
+// Keep long-running native progress compact and readable without calling the
+// R API from worker threads. Durations are diagnostic only and never affect a
+// fit, its scheduling, or numerical results.
+std::string format_progress_duration(double seconds) {
+  if (!std::isfinite(seconds) || seconds < 0.0) return "unknown";
+  const long long total = static_cast<long long>(std::llround(seconds));
+  char buffer[64];
+  if (total >= 86400) {
+    std::snprintf(buffer, sizeof(buffer), "%lldd %lldh",
+                  total / 86400, (total % 86400) / 3600);
+  } else if (total >= 3600) {
+    std::snprintf(buffer, sizeof(buffer), "%lldh %lldm",
+                  total / 3600, (total % 3600) / 60);
+  } else if (total >= 60) {
+    std::snprintf(buffer, sizeof(buffer), "%lldm %llds",
+                  total / 60, total % 60);
+  } else {
+    std::snprintf(buffer, sizeof(buffer), "%.1fs", seconds);
+  }
+  return std::string(buffer);
+}
 
 inline double &at(std::vector<double>& a, int cols, int i, int j) {
   return a[static_cast<size_t>(i) * cols + j];
@@ -772,18 +798,22 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
       int position=next.fetch_add(1);
       if(position>=jobs || cancelled.load(std::memory_order_relaxed)) break;
       int i=job_order[position];
+      JobOutcome outcome=JobOutcome::Success;
       const auto fit_started=std::chrono::steady_clock::now();
       try {
         fits[i]=fit_restart(d,native_ks[i],native_seeds[i],max_iter,tol,reg,
                             threads_per_fit,&cancelled);
       } catch(const FitCancelled&) {
+        outcome=JobOutcome::Cancelled;
         // Interruption is reported once by the main R thread after every
         // worker has unwound and joined. A peer job can also request the same
         // cooperative cancellation after its first fatal native failure.
       } catch(const std::exception& e) {
+        outcome=JobOutcome::Failed;
         errors[i]=e.what();
         cancelled.store(true,std::memory_order_relaxed);
       } catch(...) {
+        outcome=JobOutcome::Failed;
         errors[i]="unknown native exception";
         cancelled.store(true,std::memory_order_relaxed);
       }
@@ -792,7 +822,7 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
       fit_elapsed_seconds[i]=fit_seconds;
       {
         std::lock_guard<std::mutex> lock(progress_mutex);
-        completion_events[published_events++]=CompletionEvent{i,fit_seconds};
+        completion_events[published_events++]=CompletionEvent{i,fit_seconds,outcome};
       }
       progress_condition.notify_one();
     }
@@ -810,8 +840,9 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
   // native round effectively uninterruptible. R_ToplevelExec() contains the
   // interrupt longjmp; cancellation then follows normal C++ unwinding.
   int reported=0;
+  int successful_reported=0;
   bool interrupted=false;
-  auto last_heartbeat=native_started;
+  double completed_fit_seconds=0.0;
   for(;;) {
     std::unique_lock<std::mutex> lock(progress_mutex);
     progress_condition.wait_for(lock,std::chrono::milliseconds(100),[&](){
@@ -820,10 +851,29 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
     while(reported<published_events) {
       CompletionEvent event=completion_events[reported];
       ++reported;
-      if(progress) {
+      if(event.outcome==JobOutcome::Success) {
+        ++successful_reported;
+        completed_fit_seconds+=event.elapsed_seconds;
+      }
+      if(progress && event.outcome==JobOutcome::Success) {
         lock.unlock();
-        Rprintf("CellCharterR C++ GMM: %d/%d jobs finished; K=%d; fit %.1fs.\n",
-                reported,jobs,native_ks[event.index],event.elapsed_seconds);
+        const double round_elapsed=std::chrono::duration<double>(
+          std::chrono::steady_clock::now()-native_started).count();
+        const double mean_fit_seconds=completed_fit_seconds/successful_reported;
+        const int remaining_jobs=jobs-successful_reported;
+        // Estimate complete worker-sized batches rather than dividing a tail
+        // job by every worker. K-dependent runtimes still make this a rough
+        // planning estimate, which is stated explicitly in the output.
+        const int remaining_batches=(remaining_jobs+pool_size-1)/pool_size;
+        const double estimated_remaining=mean_fit_seconds*remaining_batches;
+        const std::string fit_duration=format_progress_duration(event.elapsed_seconds);
+        const std::string elapsed_duration=format_progress_duration(round_elapsed);
+        const std::string eta_duration=format_progress_duration(estimated_remaining);
+        Rprintf(
+          "CellCharterR C++ GMM: job %d/%d complete; K=%d; fit=%s; "
+          "round elapsed=%s; rough round ETA=%s.\n",
+          successful_reported,jobs,native_ks[event.index],fit_duration.c_str(),
+          elapsed_duration.c_str(),eta_duration.c_str());
         R_FlushConsole();
         lock.lock();
       }
@@ -835,15 +885,6 @@ extern "C" SEXP C_cpp_gmm_fit_many(SEXP xs, SEXP kss, SEXP seedss, SEXP maxs, SE
       interrupted=true;
       cancelled.store(true,std::memory_order_relaxed);
       progress_condition.notify_all();
-    }
-    const auto now=std::chrono::steady_clock::now();
-    if(progress && !interrupted &&
-       std::chrono::duration_cast<std::chrono::seconds>(now-last_heartbeat).count()>=60) {
-      const double elapsed=std::chrono::duration<double>(now-native_started).count();
-      Rprintf("CellCharterR C++ GMM: still fitting; %d/%d jobs finished; elapsed %.1fs.\n",
-              reported,jobs,elapsed);
-      R_FlushConsole();
-      last_heartbeat=now;
     }
     if(all_workers_finished) break;
   }

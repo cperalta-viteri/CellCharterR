@@ -135,6 +135,25 @@ test_that("compiled multi-fit rounds cooperate with SIGINT when progress is off"
   .expect_cpp_interrupt_result(result)
 })
 
+test_that("compiled multi-fit progress remains interruptible without heartbeats", {
+  skip_on_os("windows")
+
+  set.seed(1206)
+  x <- matrix(stats::rnorm(150000L * 24L), ncol = 24L)
+  result <- .expect_cpp_sigint(
+    cpp_gmm_fit_many(
+      x,
+      n_clusters = 12:15,
+      seeds = 106:109,
+      workers = 2L,
+      threads_per_fit = 2L,
+      max_iter = 100L,
+      progress = TRUE
+    )
+  )
+  .expect_cpp_interrupt_result(result)
+})
+
 test_that("exported compiled single fits cooperate with SIGINT", {
   skip_on_os("windows")
 

@@ -40,6 +40,23 @@ test_that("colData domain labels need no CellCharterR clustering stage", {
   expect_true("enrichment" %in% names(S4Vectors::metadata(enriched)$CellCharterR$results))
 })
 
+test_that("enrichment accepts repeated observation labels within a sample", {
+  spe <- .tiny_spe_fixture()
+  spe$python_domain <- factor(rep(c("domain_b", "domain_a"), 8L))
+  colnames(spe) <- rep(c("slide_A", "slide_B"), each = 8L)
+  coordinates <- SpatialExperiment::spatialCoords(spe)
+  rownames(coordinates) <- colnames(spe)
+  SpatialExperiment::spatialCoords(spe) <- coordinates
+
+  enriched <- cellcharter_enrichment(
+    spe, group_col = "cell_type", domain_col = "python_domain",
+    progress = FALSE
+  )
+
+  expect_true("enrichment" %in%
+                names(S4Vectors::metadata(enriched)$CellCharterR$results))
+})
+
 test_that("imported colPair graphs need no CellCharterR graph stage", {
   spe <- .tiny_spe_fixture()
   spe$python_domain <- factor(rep(c("domain_a", "domain_b"), 8L))

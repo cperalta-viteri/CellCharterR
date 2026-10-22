@@ -293,6 +293,38 @@ in-memory neighborhood representation, AutoK fit, selected domains, and
 downstream statistics. The evaluated sections that follow load the corresponding
 precomputed artifacts and display their outputs.
 
+## CPU threading required by the parallel C++ backend
+
+CellCharterR schedules `workers` simultaneous fits and gives each fit
+`threads_per_fit` threads. The linked BLAS must use one thread so it does not
+create another thread pool inside every fit. Without this restriction, nested
+oversubscription can exhaust CPU and memory bandwidth and make fitting much
+slower.
+
+Before starting R, add the following entries to the analysis project's
+`.Renviron` file (use `file.edit(".Renviron")` in RStudio), save it, and restart
+R:
+
+```text
+OPENBLAS_NUM_THREADS=1
+OMP_NUM_THREADS=1
+MKL_NUM_THREADS=1
+BLIS_NUM_THREADS=1
+VECLIB_MAXIMUM_THREADS=1
+GOTO_NUM_THREADS=1
+```
+
+This restricts BLAS/OpenMP nesting, not CellCharterR itself. The call below can
+still use up to `workers * threads_per_fit` threads. Verify that all six values
+are `"1"` before loading CellCharterR:
+
+```{r verify-cpu-thread-environment, eval=FALSE}
+Sys.getenv(c(
+  "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+  "BLIS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "GOTO_NUM_THREADS"
+))
+```
+
 ```{r full-staged-workflow, eval=FALSE}
 full_spe <- readRDS("results/CellCharterR_mouse_spleen_v2/representation/codex_sce.rds")
 
@@ -322,7 +354,7 @@ saveRDS(
 full_spe <- cellcharter_cluster(
   full_spe,
   representation = "X_cellcharter",
-  candidate_k = 2:20,
+  candidate_k = c(2L, 20L),
   checkpoint_dir = "results/CellCharterR_mouse_spleen_cpp_v1/unused-no-checkpoints",
   domain_col = "cellcharter_domain",
   max_runs = 10L,
@@ -383,7 +415,7 @@ full_spe <- readRDS(
 full_spe <- cellcharter_cluster(
   full_spe,
   representation = "X_cellcharter",
-  candidate_k = 2:20,
+  candidate_k = c(2L, 20L),
   checkpoint_dir = "results/CellCharterR_mouse_spleen_cpp_resumable/autok",
   domain_col = "cellcharter_domain",
   max_runs = 10L,
@@ -416,7 +448,7 @@ available RAM, add `filepath = ...` and retain that optional HDF5 file with the 
 full_spe <- cellcharter_workflow(
   full_spe,
   group_col = "cell_type",
-  candidate_k = 2:20,
+  candidate_k = c(2L, 20L),
   checkpoint_dir = "results/CellCharterR_mouse_spleen_cpp_v1/unused-no-checkpoints",
   representation = "X_trVAE",
   sample_col = "sample",

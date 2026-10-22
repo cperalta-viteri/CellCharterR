@@ -44,8 +44,11 @@ change in mean per-observation negative log likelihood.}
 \item{covariance_regularization}{One finite positive diagonal ridge added
 exactly once before each covariance Cholesky factorization.}
 
-\item{progress}{Whether to report native input preparation, completed fits,
-and a heartbeat during long periods without a completed fit.}
+\item{progress}{Whether to report native input preparation and one update
+after each completed fit. Each completion update includes that fit's wall
+time, elapsed round time, and a rough round ETA estimated from completed
+fits. Failed or cancelled fits are never reported as complete or included
+in the ETA. No timed heartbeat is printed while fits are still running.}
 }
 \value{
 A list in input order containing one serializable \code{cpp_gmm} model per

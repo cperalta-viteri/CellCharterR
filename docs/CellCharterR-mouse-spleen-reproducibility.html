@@ -440,7 +440,7 @@ display: none;
 <h1 class="title toc-ignore">Full downstream mouse-spleen reproduction:
 compiled C++ AutoK and K=11 sensitivity</h1>
 <h4 class="author">CellCharterR contributors</h4>
-<h4 class="date">2026-10-16 12:52 UTC</h4>
+<h4 class="date">2026-10-21 17:17 UTC</h4>
 
 </div>
 
@@ -453,9 +453,11 @@ benchmark</a></li>
 </ul></li>
 <li><a href="#from-input-spe-to-saved-results" id="toc-from-input-spe-to-saved-results"><span class="toc-section-number">2</span> From input SPE to saved results</a>
 <ul>
-<li><a href="#optional-resumable-compiled-c-run" id="toc-optional-resumable-compiled-c-run"><span class="toc-section-number">2.1</span> Optional resumable compiled C++
+<li><a href="#cpu-threading-required-by-the-parallel-c-backend" id="toc-cpu-threading-required-by-the-parallel-c-backend"><span class="toc-section-number">2.1</span> CPU threading required by the
+parallel C++ backend</a></li>
+<li><a href="#optional-resumable-compiled-c-run" id="toc-optional-resumable-compiled-c-run"><span class="toc-section-number">2.2</span> Optional resumable compiled C++
 run</a></li>
-<li><a href="#optional-compact-wrapper" id="toc-optional-compact-wrapper"><span class="toc-section-number">2.2</span> Optional compact wrapper</a></li>
+<li><a href="#optional-compact-wrapper" id="toc-optional-compact-wrapper"><span class="toc-section-number">2.3</span> Optional compact wrapper</a></li>
 </ul></li>
 <li><a href="#autok-stability-and-k-selection" id="toc-autok-stability-and-k-selection"><span class="toc-section-number">3</span> AutoK stability and K
 selection</a></li>
@@ -721,6 +723,32 @@ create the graph, in-memory neighborhood representation, AutoK fit,
 selected domains, and downstream statistics. The evaluated sections that
 follow load the corresponding precomputed artifacts and display their
 outputs.</p>
+<div id="cpu-threading-required-by-the-parallel-c-backend" class="section level2" number="2.1">
+<h2><span class="header-section-number">2.1</span> CPU threading
+required by the parallel C++ backend</h2>
+<p>CellCharterR schedules <code>workers</code> simultaneous fits and
+gives each fit <code>threads_per_fit</code> threads. The linked BLAS
+must use one thread so it does not create another thread pool inside
+every fit. Without this restriction, nested oversubscription can exhaust
+CPU and memory bandwidth and make fitting much slower.</p>
+<p>Before starting R, add the following entries to the analysis
+project’s <code>.Renviron</code> file (use
+<code>file.edit(&quot;.Renviron&quot;)</code> in RStudio), save it, and restart
+R:</p>
+<pre class="text"><code>OPENBLAS_NUM_THREADS=1
+OMP_NUM_THREADS=1
+MKL_NUM_THREADS=1
+BLIS_NUM_THREADS=1
+VECLIB_MAXIMUM_THREADS=1
+GOTO_NUM_THREADS=1</code></pre>
+<p>This restricts BLAS/OpenMP nesting, not CellCharterR itself. The call
+below can still use up to <code>workers * threads_per_fit</code>
+threads. Verify that all six values are <code>&quot;1&quot;</code> before loading
+CellCharterR:</p>
+<pre class="r"><code>Sys.getenv(c(
+  &quot;OPENBLAS_NUM_THREADS&quot;, &quot;OMP_NUM_THREADS&quot;, &quot;MKL_NUM_THREADS&quot;,
+  &quot;BLIS_NUM_THREADS&quot;, &quot;VECLIB_MAXIMUM_THREADS&quot;, &quot;GOTO_NUM_THREADS&quot;
+))</code></pre>
 <pre class="r"><code>full_spe &lt;- readRDS(&quot;results/CellCharterR_mouse_spleen_v2/representation/codex_sce.rds&quot;)
 
 full_spe &lt;- cellcharter_graph(
@@ -749,7 +777,7 @@ saveRDS(
 full_spe &lt;- cellcharter_cluster(
   full_spe,
   representation = &quot;X_cellcharter&quot;,
-  candidate_k = 2:20,
+  candidate_k = c(2L, 20L),
   checkpoint_dir = &quot;results/CellCharterR_mouse_spleen_cpp_v1/unused-no-checkpoints&quot;,
   domain_col = &quot;cellcharter_domain&quot;,
   max_runs = 10L,
@@ -793,8 +821,9 @@ saveRDS(
   full_spe,
   &quot;results/CellCharterR_mouse_spleen_v2/downstream/codex_spe_complete.rds&quot;
 )</code></pre>
-<div id="optional-resumable-compiled-c-run" class="section level2" number="2.1">
-<h2><span class="header-section-number">2.1</span> Optional resumable
+</div>
+<div id="optional-resumable-compiled-c-run" class="section level2" number="2.2">
+<h2><span class="header-section-number">2.2</span> Optional resumable
 compiled C++ run</h2>
 <p>The measured 38-minute run above used
 <code>checkpoint_mode = &quot;none&quot;</code> to avoid all fit-checkpoint I/O.
@@ -808,7 +837,7 @@ If interruption recovery is more important, use a new directory and
 full_spe &lt;- cellcharter_cluster(
   full_spe,
   representation = &quot;X_cellcharter&quot;,
-  candidate_k = 2:20,
+  candidate_k = c(2L, 20L),
   checkpoint_dir = &quot;results/CellCharterR_mouse_spleen_cpp_resumable/autok&quot;,
   domain_col = &quot;cellcharter_domain&quot;,
   max_runs = 10L,
@@ -829,8 +858,8 @@ Changing the backend, seed, candidate range, or numerical settings
 creates a different fit contract and must use a new checkpoint
 directory.</p>
 </div>
-<div id="optional-compact-wrapper" class="section level2" number="2.2">
-<h2><span class="header-section-number">2.2</span> Optional compact
+<div id="optional-compact-wrapper" class="section level2" number="2.3">
+<h2><span class="header-section-number">2.3</span> Optional compact
 wrapper</h2>
 <p>For a compact dataset, <code>cellcharter_workflow()</code> composes
 the same stages. It is shown for completeness, but the staged version
@@ -841,7 +870,7 @@ SPE.</p>
 <pre class="r"><code>full_spe &lt;- cellcharter_workflow(
   full_spe,
   group_col = &quot;cell_type&quot;,
-  candidate_k = 2:20,
+  candidate_k = c(2L, 20L),
   checkpoint_dir = &quot;results/CellCharterR_mouse_spleen_cpp_v1/unused-no-checkpoints&quot;,
   representation = &quot;X_trVAE&quot;,
   sample_col = &quot;sample&quot;,

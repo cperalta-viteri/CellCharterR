@@ -63,11 +63,30 @@ test_that("compiled multi-fit progress is optional and numerically inert", {
     quiet <- do.call(cpp_gmm_fit_many, c(arguments, list(progress = FALSE))),
     NA
   )
-  expect_output(
-    visible <- do.call(cpp_gmm_fit_many, c(arguments, list(progress = TRUE))),
-    "3/3 jobs finished",
-    fixed = TRUE
+  visible_output <- capture.output(
+    visible <- do.call(cpp_gmm_fit_many, c(arguments, list(progress = TRUE)))
   )
+  completion_output <- grep("CellCharterR C\\+\\+ GMM: job", visible_output,
+                            value = TRUE)
+  expect_length(completion_output, 3L)
+  expect_true(all(mapply(
+    grepl, paste0("job ", 1:3, "/3 complete"), completion_output,
+    MoreArgs = list(fixed = TRUE)
+  )))
+  expect_setequal(
+    sub(".*; K=([2-4]);.*", "\\1", completion_output), as.character(2:4)
+  )
+  expect_match(
+    completion_output,
+    "fit=.*; round elapsed=.*; rough round ETA=.*\\."
+  )
+  expect_match(completion_output[[3L]], "rough round ETA=0.0s", fixed = TRUE)
+  round_elapsed <- as.numeric(sub(
+    ".*round elapsed=([0-9.]+)s;.*", "\\1", completion_output
+  ))
+  expect_true(all(is.finite(round_elapsed)))
+  expect_true(all(diff(round_elapsed) >= 0))
+  expect_false(any(grepl("still fitting", visible_output, fixed = TRUE)))
   for (i in seq_along(quiet)) {
     expect_identical(visible[[i]]$labels, quiet[[i]]$labels)
     expect_equal(visible[[i]]$nll, quiet[[i]]$nll, tolerance = 0)
@@ -82,7 +101,7 @@ test_that("compiled multi-fit progress is optional and numerically inert", {
 
 test_that("compiled progress path joins all workers after native fit failures", {
   x <- matrix(rep(c(-1e308, 1e308), 100L), nrow = 100L, ncol = 2L)
-  expect_output(
+  failure_output <- capture.output(
     expect_error(
       cpp_gmm_fit_many(
         x, 2:4, seeds = 1:3, workers = 1L, threads_per_fit = 1L,
@@ -92,10 +111,9 @@ test_that("compiled progress path joins all workers after native fit failures", 
         "Native GMM job 3 \\(K=4\\) failed; remaining jobs were cancelled: ",
         "GMM failed after 8 regularization attempts: Cholesky factorization failed"
       )
-    ),
-    "1/3 jobs finished",
-    fixed = TRUE
+    )
   )
+  expect_false(any(grepl(" complete;", failure_output, fixed = TRUE)))
 })
 
 test_that("compiled GMM stored labels, likelihood, and parameters are coherent", {

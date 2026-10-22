@@ -93,9 +93,11 @@ test_that("SPE identity safely supports sample-local duplicated barcodes", {
   colnames(repeated_within_sample) <- c("x", "y", "x", "y")
   rownames(SpatialExperiment::spatialCoords(repeated_within_sample)) <-
     colnames(repeated_within_sample)
-  expect_error(
-    .cc_validate_spe_identity(repeated_within_sample),
-    "sample-scoped spot identifiers"
+  repeated_identity <- .cc_validate_spe_identity(repeated_within_sample)
+  expect_match(repeated_identity$cell_order_sha256, "^[0-9a-f]{64}$")
+  expect_identical(
+    repeated_identity$cell_order_sha256,
+    .cc_validate_spe_identity(repeated_within_sample)$cell_order_sha256
   )
 })
 

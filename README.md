@@ -273,11 +273,46 @@ Linux-only, however, so macOS and Windows multicore behavior should be treated
 as unverified until platform-specific CI is added. Runtime will depend on CPU,
 memory bandwidth, candidate K range, convergence behavior, and thread count.
 
+### Required CPU setup for parallel C++ clustering
+
+> **Do this before starting R.**
+
+CellCharterR parallelizes across GMM fits (`workers`) and within each fit
+(`threads_per_fit`). If the linked BLAS also creates threads inside every fit,
+the resulting nested oversubscription can launch far more runnable threads than
+the machine has CPU cores, increase memory pressure, and make clustering much
+slower.
+
+For an RStudio project, run `file.edit(".Renviron")` and add:
+
+```text
+OPENBLAS_NUM_THREADS=1
+OMP_NUM_THREADS=1
+MKL_NUM_THREADS=1
+BLIS_NUM_THREADS=1
+VECLIB_MAXIMUM_THREADS=1
+GOTO_NUM_THREADS=1
+```
+
+Save the file and restart R before loading CellCharterR. These settings make
+only BLAS/OpenMP single-threaded: CellCharterR still uses up to
+`workers * threads_per_fit` threads. Setting every variable makes the setup
+portable across common BLAS implementations. Verify the configuration with:
+
+```r
+Sys.getenv(c(
+  "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+  "BLIS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "GOTO_NUM_THREADS"
+))
+```
+
+Every value must be `"1"` before a parallel compiled run.
+
 ```r
 spe <- cellcharter_cluster(
   spe,
   representation = "X_cellcharter",
-  candidate_k = 2:20,
+  candidate_k = c(2L, 20L),
   checkpoint_dir = "checkpoints/autok_cpp",
   domain_col = "cellcharter_domain",
   max_runs = 10L,
@@ -293,12 +328,7 @@ spe <- cellcharter_cluster(
 
 Set `workers * threads_per_fit` no higher than the CPU threads and memory
 bandwidth available to R. Use `workers = 1L` for sequential execution or when
-a platform's multicore behavior has not been validated. Because CellCharterR
-already parallelizes across fits and within a fit, run the linked BLAS with one
-thread to avoid nested oversubscription. Before starting R, set
-`OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`,
-`BLIS_NUM_THREADS=1`, `VECLIB_MAXIMUM_THREADS=1`, and
-`GOTO_NUM_THREADS=1`.
+a platform's multicore behavior has not been validated.
 
 For interruptible long runs, use `checkpoint_mode = "round"` and
 `resume = TRUE`. One checkpoint is written after every complete AutoK round;

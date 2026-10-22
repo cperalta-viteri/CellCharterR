@@ -85,8 +85,11 @@ cpp_gmm_fit <- function(x, n_clusters, max_iter = 100L, tolerance = 1e-3,
 #' @param threads_per_fit Positive native row-shard thread count within each
 #'   independent fit. The product `workers * threads_per_fit` is capped at 32,
 #'   with `threads_per_fit` reduced when necessary.
-#' @param progress Whether to report native input preparation, completed fits,
-#'   and a heartbeat during long periods without a completed fit.
+#' @param progress Whether to report native input preparation and one update
+#'   after each completed fit. Each completion update includes that fit's wall
+#'   time, elapsed round time, and a rough round ETA estimated from completed
+#'   fits. Failed or cancelled fits are never reported as complete or included
+#'   in the ETA. No timed heartbeat is printed while fits are still running.
 #' @inheritParams cpp_gmm_fit
 #' @return A list in input order containing one serializable `cpp_gmm` model per
 #'   `(n_clusters, seed)` pair. Models inherit from `torch_gmm` for checkpoint
