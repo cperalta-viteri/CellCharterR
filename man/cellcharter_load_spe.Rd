@@ -10,14 +10,17 @@ cellcharter_load_spe(
   legacy_import_spec = NULL,
   materialize_block_mib = 64,
   max_materialized_gib = getOption("CellCharterR.import.max_materialized_gib", Inf),
-  progress = interactive()
+  progress = interactive(),
+  restore_state = TRUE,
+  state_generation = NULL
 )
 }
 \arguments{
 \item{path}{One existing directory created by
-\code{\link[=cellcharter_import_h5ad]{cellcharter_import_h5ad()}}. Move \code{arrays.h5}, \code{manifest.rds}, and
-\code{spe.rds} together; reconstruction uses the manifest and local
-\code{arrays.h5}, not the original H5AD or the serialized convenience object.}
+\code{\link[=cellcharter_import_h5ad]{cellcharter_import_h5ad()}}. Reconstruction uses \code{manifest.rds} and the
+local \code{arrays.h5}, not the original H5AD or the serialized \code{spe.rds}
+convenience object. If analysis state has been saved, move the \code{state}
+directory with them.}
 
 \item{verify}{Integrity verification mode. \code{"auto"} (the default) trusts the
 size and modification-time fingerprint recorded when the SHA-256 was
@@ -40,10 +43,21 @@ while reading coordinates and embeddings into native matrices.}
 estimate for native metadata, coordinates, embeddings, graphs, R-object
 overhead, and bounded import workspaces. The count assay is excluded
 because it remains HDF5-backed. Defaults to the
-\code{CellCharterR.import.max_materialized_gib} option or \code{Inf}.}
+\code{CellCharterR.import.max_materialized_gib} option or \code{Inf}. When restoring
+saved state, this limit does not include the additional transient memory
+used to read the native \code{state.rds} overlay.}
 
 \item{progress}{A single logical value controlling column-, matrix-block-,
 graph-, validation-, and reconstruction-progress messages.}
+
+\item{restore_state}{A single logical value. If \code{TRUE} (the default), restore
+the latest generation written by \code{\link[=cellcharter_save_spe]{cellcharter_save_spe()}} after rebuilding
+the immutable imported base. Use \code{FALSE} to ignore saved analysis state.}
+
+\item{state_generation}{\code{NULL} to restore the current saved generation, or a
+retained generation identifier from \code{state/current.rds}. This provides an
+explicit rollback path when the latest payload is damaged. It requires
+\code{restore_state = TRUE}.}
 }
 \value{
 A valid disk-backed \code{SpatialExperiment}. The assay points to

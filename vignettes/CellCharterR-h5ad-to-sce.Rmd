@@ -38,7 +38,8 @@ Choose the storage pattern before converting:
 |---|---|---|
 | General large H5AD, independent and relocatable | `cellcharter_import_h5ad()` | The complete output directory |
 | Reload an imported directory | `cellcharter_load_spe()` | The same complete directory |
-| Save an SPE plus later CellCharterR results | `cellcharter_save_analysis()` | The complete analysis directory |
+| Save later results into an imported directory | `cellcharter_save_spe()` | The same complete directory |
+| Export an arbitrary external SPE | `cellcharter_save_analysis()` | The new complete export directory |
 | Inspect the two pinned CODEX H5ADs in place | `read_codex_spe()` | Both original H5AD files |
 | One ordinary RDS containing selected arrays | Explicitly materialize those arrays | Enough RAM and disk for every selected field |
 
@@ -72,6 +73,49 @@ SingleCellExperiment::colPairNames(spe)
 names(S4Vectors::metadata(spe)$anndata_uns)
 ```
 
+Continue the analysis on `spe`, then save its mutable state into the same
+import directory:
+
+```{r save-imported-spe, eval=FALSE}
+spe_dir <- "large_spatial_dataset_spe"
+
+# Add graphs, representations, clusters, and downstream results to `spe`.
+cellcharter_save_spe(spe, spe_dir)
+
+# A later session restores both the imported base and the latest saved state.
+spe <- cellcharter_load_spe(spe_dir)
+```
+
+Saving state does not rewrite or duplicate `arrays.h5`. It publishes a
+checksummed state generation so a process interrupted before pointer
+publication leaves the preceding valid state available.
+Only the latest validated generation is retained by default
+(`retain_generations = 1L`), so repeated saves do not accumulate an unbounded
+history. To diagnose or recover from a bad state while retaining the imported
+base data, bypass the state overlay explicitly:
+
+Loading a saved generation reconstructs the imported base before reading the
+native state overlay. Peak RAM can therefore temporarily include both copies
+of annotations, coordinates, embeddings, and graphs, although the HDF5-backed
+assay is never duplicated. On very large data, budget for the loaded SPE plus
+the uncompressed native state payload.
+
+```{r load-imported-base-only, eval=FALSE}
+spe_base <- cellcharter_load_spe(spe_dir, restore_state = FALSE)
+```
+
+AutoK/fixed-K models, stability objects, stage metadata, and checkpoint
+locators are omitted from the SPE state regardless of checkpoint mode; no
+checkpoint directory is copied into the SPE import directory. In-place saving
+preserves standard SPE outputs such as labels in `colData` and graphs in
+`colPairs`, but future AutoK resume, stability inspection, or model retrieval
+still needs the separate checkpoint directory. A legacy format-1 import is
+upgraded on first save by hashing the existing `arrays.h5` once, without
+rewriting or copying it. The immutable-assay contract also
+means that a subset, reordered, transformed, renamed, or additional assay is
+rejected rather than silently discarded. Delayed/HDF5-backed reduced
+dimensions should instead be exported with `cellcharter_save_analysis()`.
+
 Large arrays stay on disk, while the returned SPE is independent of the source
 H5AD because the directory owns its copied HDF5 payload. The complete AnnData
 hierarchy remains in `arrays.h5`; requested `obs`, `var`, and `obsm` fields are
@@ -80,6 +124,11 @@ mapped to SPE structures, supported sparse `obsp` matrices become weighted
 connectivity and distance values are preserved rather than recomputed. The remaining sections
 document the stricter two-file CODEX conversion used by the mouse-spleen
 reproduction.
+
+`cellcharter_save_analysis()` serves a different case: exporting an arbitrary
+SPE that did not originate from `cellcharter_import_h5ad()` into a new portable
+directory. Do not use it for routine saves of an imported SPE, because the
+import directory is already the independent, movable object.
 
 This vignette documents the exact conversion used for the CellCharterR CODEX
 reproduction. Its download and full conversion chunks deliberately have

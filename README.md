@@ -159,12 +159,11 @@ spe <- cellcharter_load_spe(spe_dir)
 The source H5AD is never deleted. A full independent copy requires equivalent
 free disk space; interrupted copies resume from `arrays.h5.partial`.
 
-### Saving a completed large analysis
+### Saving work back into an imported SPE
 
-After graph construction, aggregation, clustering, and enrichment, export a
-self-contained completed-analysis directory. Large assays and embeddings are
-written blockwise to analysis-owned HDF5 files; graphs, models, results,
-parameters, and other lightweight state are stored separately:
+The directory created by `cellcharter_import_h5ad()` is already independent of
+the source H5AD. After graph construction, aggregation, clustering, or
+downstream analysis, save the mutable SPE state back into that same directory:
 
 ```r
 # With filepath = NULL, the aggregated representation is stored in the SPE.
@@ -176,41 +175,55 @@ spe <- cellcharter_aggregate(
   output = "X_cellcharter"
 )
 
-# Run clustering and downstream analyses, then export the complete state.
-cellcharter_save_analysis(
-  spe,
-  output_dir = "oscc_complete_analysis",
-  progress = TRUE
-)
+# Run clustering and downstream analyses, then save them in place.
+cellcharter_save_spe(spe, spe_dir)
 ```
 
-The export validates file sizes, SHA-256 checksums, dimensions, ordering, and
-object validity before atomically publishing the directory. It also copies and
-rebases CellCharterR-owned AutoK checkpoints, so the exported analysis no
-longer depends on the original H5AD, conversion directory, or checkpoint path.
-
-```text
-oscc_complete_analysis/
-├── manifest.rds
-├── manifest.sha256
-└── object/
-    ├── structure.rds
-    └── *.h5
-```
-
-The directory can be moved, renamed, or archived with an external tool. Load it
-from its new location with:
+This does **not** rewrite or copy `arrays.h5`. It publishes a checksummed new
+state generation containing annotations, native reduced dimensions, graphs,
+metadata, and results, then removes superseded generations. The default
+`retain_generations = 1L` therefore keeps one validated state even after many
+saves. Reload the latest saved work normally:
 
 ```r
-spe <- cellcharter_load_analysis("oscc_complete_analysis")
-methods::validObject(spe)
+spe <- cellcharter_load_spe(spe_dir)
 ```
 
-Copy or archive the entire directory, not individual files. The loader rejects
-missing or modified payloads before returning an incomplete object. Unsupported
-opaque third-party metadata references and externally backed spatial images
-are rejected during saving with an actionable location rather than silently
-producing a non-portable analysis.
+AutoK/fixed-K models, stability objects, stage metadata, and checkpoint
+locators are intentionally **not** mixed into `spe_dir`, even when an AutoK run
+used `checkpoint_mode = "none"`. External files stay in the separate
+`checkpoint_dir` supplied to clustering. Standard SPE outputs such as labels
+in `colData` and graphs in `colPairs` are saved. Keep or move the checkpoint
+directory separately if you need to resume AutoK, inspect stability, or
+retrieve models.
+Because `arrays.h5` is immutable, in-place saving rejects a subset, reordered,
+transformed, or additional assay. It also rejects delayed/HDF5-backed
+`reducedDims`; use `cellcharter_save_analysis()` when exporting an object with
+those structural changes.
+
+Loading a saved generation first reconstructs the immutable imported base and
+then reads its native state overlay. Peak RAM may therefore temporarily include
+both copies of annotations, coordinates, embeddings, and graphs; the
+HDF5-backed assay is never duplicated. For very large objects, budget memory
+for the loaded SPE plus the uncompressed native state payload.
+
+If saved state is damaged or must be bypassed during recovery, reconstruct only
+the immutable imported base:
+
+```r
+spe <- cellcharter_load_spe(spe_dir, restore_state = FALSE)
+```
+
+When more than one generation was retained, a known-good generation can be
+restored explicitly with `state_generation = "<generation-id>"`; retained IDs
+are listed in `state/current.rds`. A format-1 import is upgraded on its first
+save by hashing the existing `arrays.h5` once. This is a sequential read only:
+the 160-GB assay file is neither copied nor rewritten.
+
+Copy or archive the entire `spe_dir`, not individual files. Use
+`cellcharter_save_analysis()` only to export an arbitrary SPE that was not
+created by `cellcharter_import_h5ad()` into a new portable directory; it is not
+the normal save operation for an imported SPE.
 
 ## Clustering backends
 

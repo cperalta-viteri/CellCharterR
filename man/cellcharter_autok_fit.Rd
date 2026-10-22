@@ -107,18 +107,26 @@ and reuses it. It never materialises assays. The C++ backend always
 materialises this representation once as a double matrix and therefore
 ignores this Torch-only setting. Custom fitting hooks require \code{"none"}.}
 
-\item{backend}{Exactly \code{"cpp"} for the supported compiled double-precision
-CPU backend or \code{"torch"} for the experimental float32 R Torch backend.
+\item{backend}{\code{NULL} (the default), \code{"cpp"}, or \code{"torch"}. \code{NULL} selects
+the supported compiled double-precision CPU backend for an ordinary AutoK
+call. For backward compatibility it selects the generic/Torch path when
+custom fit/predict/NLL hooks or Torch-only fit arguments (\code{device},
+\code{batch_size}, \code{num_threads}, or \code{initialization_method}) are supplied.
+\code{"torch"} explicitly opts into the experimental float32 R Torch backend.
 C++ fits requested K values through \code{\link[=cpp_gmm_fit_many]{cpp_gmm_fit_many()}}.}
 
 \item{workers}{Positive number of independent K fits that the C++ backend may
 run concurrently. This controls between-fit parallelism and has no effect
-for \code{backend = "torch"}.}
+for \code{backend = "torch"}. Parallel C++ fitting requires the linked BLAS and
+OpenMP thread-control environment variables documented by
+\code{\link[=cpp_gmm_fit_many]{cpp_gmm_fit_many()}} to be set to one before R starts.}
 
 \item{threads_per_fit}{Positive number of native threads used within each C++
 fit. The implementation caps the product of \code{workers} and
-\code{threads_per_fit} at 32 to avoid nested oversubscription. It has no effect
-for \code{backend = "torch"}.}
+\code{threads_per_fit} at 32. BLAS threads are a separate parallel layer, so the
+function fails before inspecting a large representation when a parallel
+C++ topology is requested without explicit single-thread BLAS controls. It
+has no effect for \code{backend = "torch"}.}
 
 \item{progress}{A single logical controlling status messages. For compiled
 rounds this includes completed-fit counts and estimated time remaining.}

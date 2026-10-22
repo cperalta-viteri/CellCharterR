@@ -600,6 +600,20 @@ before looking at stability. Biological conclusions require the complete
 dataset and appropriate replication; they must not be inferred from this
 teaching subset.
 
+If the real SPE was created with `cellcharter_import_h5ad()`, its import
+directory is already independent of the source H5AD. Persist completed stages
+in that same directory with `cellcharter_save_spe(spe, spe_dir)`, then restore
+them with `cellcharter_load_spe(spe_dir)`. This updates only the mutable state:
+it never rewrites the large `arrays.h5`. The default
+`retain_generations = 1L` prevents repeated saves from accumulating old state;
+`cellcharter_load_spe(spe_dir, restore_state = FALSE)` remains available to
+recover the immutable imported base without applying saved analysis state.
+AutoK/fixed-K models, stability objects, stage metadata, and checkpoint
+locators are omitted from the SPE state regardless of checkpoint mode. No
+checkpoint directory is copied into the SPE directory. Labels in `colData` and
+graphs in `colPairs` remain portable; retain checkpoints separately when
+resume, stability inspection, or model retrieval is needed.
+
 The companion H5AD vignette provides checksum-safe, unevaluated download code.
 The two official H5AD files total 600.4 MiB; reserve additional working space
 for HDF5 aggregation and checkpoints. The portable full spatial object is 286.0 MiB on

@@ -30,7 +30,12 @@ every value must be positive and no greater than the number of observations.}
 vector must have one seed per requested fit.}
 
 \item{workers}{Positive maximum number of independent fits run concurrently.
-Values above 32 are capped. This controls between-fit parallelism.}
+Values above 32 are capped. This controls between-fit parallelism. When
+the effective native topology uses more than one thread, start R with
+\code{OPENBLAS_NUM_THREADS}, \code{OMP_NUM_THREADS}, \code{MKL_NUM_THREADS},
+\code{BLIS_NUM_THREADS}, \code{VECLIB_MAXIMUM_THREADS}, and \code{GOTO_NUM_THREADS} all
+set to \code{1}; the function fails early otherwise to prevent nested BLAS
+oversubscription.}
 
 \item{threads_per_fit}{Positive native row-shard thread count within each
 independent fit. The product \code{workers * threads_per_fit} is capped at 32,

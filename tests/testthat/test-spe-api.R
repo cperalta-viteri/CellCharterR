@@ -45,7 +45,10 @@ test_that("enrichment accepts repeated observation labels within a sample", {
   spe$python_domain <- factor(rep(c("domain_b", "domain_a"), 8L))
   colnames(spe) <- rep(c("slide_A", "slide_B"), each = 8L)
   coordinates <- SpatialExperiment::spatialCoords(spe)
-  rownames(coordinates) <- colnames(spe)
+  # H5AD imports can retain barcode-like coordinate labels even when the SPE
+  # uses repeated slide-level column labels. SpatialExperiment alignment is
+  # positional, so these two valid naming systems need not be identical.
+  rownames(coordinates) <- paste0("barcode_", seq_len(nrow(coordinates)))
   SpatialExperiment::spatialCoords(spe) <- coordinates
 
   enriched <- cellcharter_enrichment(

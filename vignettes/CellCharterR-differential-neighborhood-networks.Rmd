@@ -87,8 +87,8 @@ spe <- cellcharter_import_h5ad(
   output_dir = spe_dir
 )
 
-# `cellcharter_import_h5ad()` has now saved the independent SPE to
-# `spe_dir` and returned its live SPE. The whole directory is the object.
+# `cellcharter_import_h5ad()` has now created an independent SPE directory and
+# returned its live SPE. The whole directory is the object.
 stopifnot(dir.exists(spe_dir))
 
 # In a later R session, or after moving the complete directory:
@@ -486,27 +486,28 @@ CellCharterR::cellcharter_plot_graph_diff(spe, result_name = "BALBc_vs_MRL")
 
 # Save the completed downstream analysis
 
-The import directory is the independent starting SPE, including its imported
+The import directory is already the independent SPE, including its imported
 graph. After adding the validated C++ K=10 labels, the pinned-global graph, and
-downstream results, save a separate completed
-analysis directory. This preserves the updated SPE and every CellCharterR result:
+downstream results, save the mutable state back into the same directory. The
+large `arrays.h5` payload is neither copied nor rewritten:
 
 ```{r save-completed-analysis, eval=FALSE}
-CellCharterR::cellcharter_save_analysis(
-  spe,
-  output_dir = "results/codex_mouse_spleen_completed",
-  progress = TRUE
-)
+CellCharterR::cellcharter_save_spe(spe, spe_dir)
 
-# Reload it in a later session or from its new location.
-spe <- cellcharter_load_analysis(
-  "results/codex_mouse_spleen_completed"
-)
+# Reload it in a later session or after moving the complete directory.
+spe <- cellcharter_load_spe(spe_dir)
 methods::validObject(spe)
 ```
 
-Copy or archive the complete analysis directory, not only its `structure.rds` or
-individual HDF5 files.
+The default `retain_generations = 1L` keeps only the latest validated state. If
+state restoration must be bypassed during recovery, use
+`cellcharter_load_spe(spe_dir, restore_state = FALSE)`. Copy or archive the
+complete `spe_dir`, not individual RDS or HDF5 files. AutoK/fixed-K models,
+stability objects, stage metadata, and checkpoint locators are omitted from the
+SPE state regardless of checkpoint mode. No checkpoint directory is copied
+into `spe_dir`; archive it separately when resume, stability inspection, or
+model retrieval is required. Labels in `colData` and graphs in `colPairs`
+remain portable with the SPE.
 
 # Session information
 

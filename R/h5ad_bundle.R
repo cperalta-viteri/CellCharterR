@@ -1103,6 +1103,366 @@
     })
 }
 
+.transition_state_generation_id <- function() {
+    entropy <- list(time = unclass(Sys.time()), pid = Sys.getpid(),
+                    elapsed = proc.time()[["elapsed"]], temp = tempfile())
+    paste0(
+        format(Sys.time(), "%Y%m%dT%H%M%S", tz = "UTC"), "-",
+        Sys.getpid(), "-", substr(digest::digest(entropy, algo = "sha256"), 1L, 10L)
+    )
+}
+
+.transition_state_spot_ids <- function(spe) {
+    spatial_names <- rownames(SpatialExperiment::spatialCoords(spe))
+    if (!is.null(spatial_names) && length(spatial_names) == ncol(spe)) {
+        return(as.character(spatial_names))
+    }
+    data_names <- rownames(SummarizedExperiment::colData(spe))
+    if (!is.null(data_names) && length(data_names) == ncol(spe)) {
+        return(as.character(data_names))
+    }
+    as.character(colnames(spe))
+}
+
+.transition_reject_symlink <- function(path, label) {
+    link <- Sys.readlink(path)
+    if (length(link) == 1L && !is.na(link) && nzchar(link)) {
+        stop("The managed ", label, " must not be a symbolic link: ", path,
+             call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
+.transition_legacy_import_spec <- function() {
+    list(
+        assay_path = "X", assay_name = "expression",
+        obs_columns = NULL, var_columns = NULL,
+        spatial_path = "obsm/spatial",
+        reduced_dims = c(
+            PCA = "obsm/X_pca", cellcharter = "obsm/X_cellcharter"
+        ),
+        aucell_path = "obsm/score_aucell",
+        sample_column = "slide_id_concat"
+    )
+}
+
+.transition_state_validate_assay <- function(spe, spec, arrays_file) {
+    assay_names <- SummarizedExperiment::assayNames(spe)
+    if (!identical(assay_names, spec$assay_name)) {
+        stop(
+            "In-place state saving requires exactly the imported assay `",
+            spec$assay_name, "`. Additional, removed, or renamed assays cannot be ",
+            "stored without rewriting arrays.h5; use `cellcharter_save_analysis()` ",
+            "for that object instead.", call. = FALSE
+        )
+    }
+    assay <- SummarizedExperiment::assay(
+        spe, spec$assay_name, withDimnames = FALSE
+    )
+    if (!inherits(assay, "DelayedArray") ||
+        !DelayedArray::isPristine(assay, ignore.dimnames = TRUE)) {
+        stop(
+            "The imported assay has been subset, reordered, or transformed. ",
+            "In-place state saving never rewrites arrays.h5 and therefore refuses ",
+            "to discard those assay changes. Use `cellcharter_save_analysis()` ",
+            "for a modified assay.", call. = FALSE
+        )
+    }
+    seed <- DelayedArray::seed(assay)
+    if (!inherits(seed, "HDF5ArraySeed")) {
+        stop("The imported assay is no longer a direct HDF5ArraySeed; refusing to save state.",
+             call. = FALSE)
+    }
+    same_file <- identical(
+        normalizePath(methods::slot(seed, "filepath"), mustWork = FALSE),
+        normalizePath(arrays_file, mustWork = FALSE)
+    )
+    expected_dataset <- sub("^/", "", spec$assay_path)
+    observed_dataset <- sub("^/", "", methods::slot(seed, "name"))
+    if (!same_file || !identical(observed_dataset, expected_dataset) ||
+        !identical(as.integer(dim(assay)), as.integer(dim(spe)))) {
+        stop(
+            "The imported assay does not point directly to the recorded dataset `",
+            expected_dataset, "` in path/arrays.h5 with the original dimensions; ",
+            "refusing to save state for the wrong or modified assay.", call. = FALSE
+        )
+    }
+    invisible(TRUE)
+}
+
+.transition_state_without_cluster_fits <- function(metadata) {
+    cc <- metadata$CellCharterR
+    if (is.null(cc) || !is.list(cc)) return(metadata)
+    # Fitted models, stability objects, and checkpoint locators keep a separate
+    # lifecycle. Only their standard SPE products (labels and graphs) belong in
+    # the portable state overlay. Remove every clustering stage, including
+    # orphaned records written by older releases whose fit registry is absent.
+    cc$autok <- NULL
+    cc$fixed_k <- NULL
+    if (is.list(cc$stages) && length(cc$stages)) {
+        clustering_stages <- grepl("^clustering:", names(cc$stages) %||% character())
+        cc$stages[clustering_stages] <- NULL
+    }
+    metadata$CellCharterR <- cc
+    metadata
+}
+
+.transition_find_delayed_state <- function(x, breadcrumb = "metadata") {
+    if (inherits(x, "DelayedArray") || inherits(x, "HDF5ArraySeed")) {
+        return(breadcrumb)
+    }
+    if (is.environment(x) || typeof(x) == "externalptr" ||
+        inherits(x, "connection")) {
+        return(breadcrumb)
+    }
+    # Attributes can hold arbitrary R objects. Inspect them explicitly so a
+    # native vector/list cannot smuggle an external HDF5 seed into state.rds.
+    attrs <- attributes(x)
+    if (length(attrs)) {
+        for (attribute_name in names(attrs)) {
+            found <- .transition_find_delayed_state(
+                attrs[[attribute_name]],
+                paste0(breadcrumb, "@attr:", attribute_name)
+            )
+            if (length(found)) return(found)
+        }
+    }
+    if ((is.list(x) || methods::is(x, "List")) && length(x)) {
+        labels <- names(x)
+        if (is.null(labels)) labels <- as.character(seq_along(x))
+        for (i in seq_along(x)) {
+            label <- labels[[i]]
+            if (is.na(label) || !nzchar(label)) label <- as.character(i)
+            found <- .transition_find_delayed_state(
+                x[[i]], paste0(breadcrumb, "$", label)
+            )
+            if (length(found)) return(found)
+        }
+        return(character())
+    }
+    if (base::isS4(x)) {
+        for (slot_name in methods::slotNames(x)) {
+            found <- .transition_find_delayed_state(
+                methods::slot(x, slot_name),
+                paste0(breadcrumb, "@", slot_name)
+            )
+            if (length(found)) return(found)
+        }
+    }
+    character()
+}
+
+.transition_state_binding <- function(spe, manifest, arrays_file) {
+    expected_sha <- manifest$arrays_sha256
+    if (!is.character(expected_sha) || length(expected_sha) != 1L ||
+        !grepl("^[0-9a-f]{64}$", expected_sha)) {
+        stop(
+            "The import manifest has no valid arrays.h5 SHA-256. Re-import or upgrade ",
+            "the import directory before saving analysis state.", call. = FALSE
+        )
+    }
+    spec <- .transition_validate_import_spec(manifest$import_spec)
+    obs_index <- .transition_frame_index(arrays_file, "/obs", "obs/_index")$path
+    var_index <- .transition_frame_index(arrays_file, "/var", "var/_index")$path
+    imported_spot_ids <- as.character(rhdf5::h5read(arrays_file, obs_index))
+    imported_feature_ids <- as.character(rhdf5::h5read(arrays_file, var_index))
+    list(
+        arrays_size = as.numeric(file.info(arrays_file)$size),
+        arrays_sha256 = expected_sha,
+        import_spec_sha256 = digest::digest(
+            spec, algo = "sha256"
+        ),
+        dim = as.integer(dim(spe)),
+        feature_order_sha256 = digest::digest(imported_feature_ids, algo = "sha256"),
+        spot_order_sha256 = digest::digest(imported_spot_ids, algo = "sha256"),
+        arrays_file_at_save = normalizePath(arrays_file, mustWork = TRUE)
+    )
+}
+
+.transition_state_hdf5_paths <- function(x) {
+    if (!inherits(x, "DelayedArray")) return(character())
+    paths <- character()
+    DelayedArray::modify_seeds(x, function(seed) {
+        if (inherits(seed, "HDF5ArraySeed")) {
+            paths <<- c(paths, methods::slot(seed, "filepath"))
+        }
+        seed
+    })
+    unique(paths)
+}
+
+.transition_state_rebase_reduced <- function(x, old_arrays_file, arrays_file) {
+    if (!inherits(x, "DelayedArray")) return(x)
+    DelayedArray::modify_seeds(x, function(seed) {
+        if (inherits(seed, "HDF5ArraySeed")) {
+            path <- methods::slot(seed, "filepath")
+            same <- identical(
+                normalizePath(path, mustWork = FALSE),
+                normalizePath(old_arrays_file, mustWork = FALSE)
+            )
+            if (same) methods::slot(seed, "filepath") <- arrays_file
+        }
+        seed
+    })
+}
+
+.transition_pack_pairs <- function(pairs) {
+    answer <- lapply(seq_along(pairs), function(i) .cc_analysis_pack_pair(pairs[[i]]))
+    names(answer) <- names(pairs)
+    answer
+}
+
+.transition_unpack_pairs <- function(pairs, nnode) {
+    answer <- lapply(seq_along(pairs), function(i) {
+        .cc_analysis_unpack_pair(pairs[[i]], nnode, names(pairs)[[i]])
+    })
+    names(answer) <- names(pairs)
+    S4Vectors::SimpleList(answer)
+}
+
+.transition_read_state_pointer <- function(state_dir) {
+    pointer_path <- file.path(state_dir, "current.rds")
+    .transition_reject_symlink(pointer_path, "state pointer")
+    if (!file.exists(pointer_path)) return(NULL)
+    pointer <- readRDS(pointer_path)
+    id <- pointer$generation
+    if (!is.character(id) || length(id) != 1L || is.na(id) || !nzchar(id) ||
+        grepl("[/\\\\]", id) || id %in% c(".", "..") || startsWith(id, ".")) {
+        stop("The saved SPE state pointer contains an unsafe generation identifier.",
+             call. = FALSE)
+    }
+    pointer
+}
+
+.transition_state_record <- function(pointer, generation = NULL) {
+    requested <- generation %||% pointer$generation
+    if (!is.character(requested) || length(requested) != 1L ||
+        is.na(requested) || !nzchar(requested) || grepl("[/\\\\]", requested) ||
+        requested %in% c(".", "..") || startsWith(requested, ".")) {
+        stop("`state_generation` contains an unsafe generation identifier.",
+             call. = FALSE)
+    }
+    records <- pointer$generations
+    if (is.list(records) && requested %in% names(records)) {
+        record <- records[[requested]]
+        if (!is.list(record) || !identical(record$generation, requested) ||
+            !is.character(record$state_sha256) ||
+            length(record$state_sha256) != 1L ||
+            !grepl("^[0-9a-f]{64}$", record$state_sha256)) {
+            stop(
+                "Saved SPE state generation record `", requested,
+                "` is invalid or does not match its pointer key.",
+                call. = FALSE
+            )
+        }
+        return(record)
+    }
+    if (identical(requested, pointer$generation)) {
+        return(list(
+            generation = pointer$generation,
+            state_sha256 = pointer$state_sha256,
+            files = pointer$files,
+            published = pointer$published
+        ))
+    }
+    stop(
+        "Saved SPE state generation `", requested,
+        "` is not retained. Available generations: ",
+        paste(pointer$history %||% pointer$generation, collapse = ", "), ".",
+        call. = FALSE
+    )
+}
+
+.transition_restore_state <- function(spe, storage_dir, manifest, arrays_file,
+                                      progress = interactive(),
+                                      state_generation = NULL) {
+    state_dir <- file.path(storage_dir, "state")
+    .transition_reject_symlink(state_dir, "state directory")
+    .transition_reject_symlink(file.path(state_dir, "generations"),
+                               "state generations directory")
+    pointer <- .transition_read_state_pointer(state_dir)
+    if (is.null(pointer)) return(spe)
+    record <- .transition_state_record(pointer, state_generation)
+    generations_dir <- file.path(state_dir, "generations")
+    generation_dir <- file.path(generations_dir, record$generation)
+    state_file <- file.path(generation_dir, "state.rds")
+    .transition_reject_symlink(generation_dir, "state generation")
+    .transition_reject_symlink(state_file, "state payload")
+    if (!file.exists(state_file)) {
+        stop("The current SPE state generation is incomplete: ", generation_dir,
+             call. = FALSE)
+    }
+    if (!identical(
+        dirname(normalizePath(generation_dir, mustWork = TRUE)),
+        normalizePath(generations_dir, mustWork = TRUE)
+    )) {
+        stop("The saved SPE state generation is not a direct managed child directory.",
+             call. = FALSE)
+    }
+    if (!is.null(record$files)) {
+        .cc_analysis_validate_files(
+            list(files = record$files), generation_dir,
+            verify_checksums = TRUE
+        )
+    }
+    actual_sha <- .transition_file_sha256(state_file)
+    if (!identical(actual_sha, record$state_sha256)) {
+        stop("The current SPE state checksum is invalid; the base import was not modified.",
+             call. = FALSE)
+    }
+    state <- readRDS(state_file)
+    if (!state$format_version %in% 1:2) {
+        stop("Unsupported SPE state format version.", call. = FALSE)
+    }
+    expected <- .transition_state_binding(spe, manifest, arrays_file)
+    fields <- c("arrays_size", "arrays_sha256", "import_spec_sha256", "dim",
+                "feature_order_sha256", "spot_order_sha256")
+    bad <- fields[!vapply(fields, function(name) {
+        identical(state$binding[[name]], expected[[name]])
+    }, logical(1L))]
+    if (length(bad)) {
+        stop("Saved SPE state does not belong to this import directory (mismatch: ",
+             paste(bad, collapse = ", "), ").", call. = FALSE)
+    }
+    if (isTRUE(progress)) message("Restoring saved SPE analysis state `", record$generation, "`.")
+    base_metadata <- S4Vectors::metadata(spe)
+    dimnames(spe) <- state$dimnames
+    if (!is.null(state$rowRanges)) {
+        SummarizedExperiment::rowRanges(spe) <-
+            .cc_analysis_unpack_ranges(state$rowRanges)
+    } else {
+        SummarizedExperiment::rowData(spe) <- state$rowData
+    }
+    SummarizedExperiment::colData(spe) <- state$colData
+    SpatialExperiment::spatialCoords(spe) <- state$spatialCoords
+    reduced <- lapply(state$reducedDims, .transition_state_rebase_reduced,
+                      old_arrays_file = state$binding$arrays_file_at_save,
+                      arrays_file = arrays_file)
+    SingleCellExperiment::reducedDims(spe, withDimnames = FALSE) <-
+        S4Vectors::SimpleList(reduced)
+    SingleCellExperiment::rowPairs(spe) <-
+        .transition_unpack_pairs(state$rowPairs, nrow(spe))
+    SingleCellExperiment::colPairs(spe) <-
+        .transition_unpack_pairs(state$colPairs, ncol(spe))
+    SingleCellExperiment::mainExpName(spe) <- state$mainExpName
+    restored_metadata <- state$metadata
+    restored_metadata$transitionR <- utils::modifyList(
+        restored_metadata$transitionR %||% list(),
+        base_metadata$transitionR %||% list()
+    )
+    restored_metadata$anndata_uns <- base_metadata$anndata_uns
+    S4Vectors::metadata(spe) <- restored_metadata
+    S4Vectors::metadata(spe)$transitionR$arrays_file <- arrays_file
+    S4Vectors::metadata(spe)$transitionR$bundle_dir <- storage_dir
+    S4Vectors::metadata(spe)$transitionR$state_generation <- record$generation
+    valid <- methods::validObject(spe, test = TRUE)
+    if (!identical(valid, TRUE)) {
+        stop("Restored SPE state is invalid: ", paste(valid, collapse = "; "),
+             call. = FALSE)
+    }
+    spe
+}
+
 # Convert a large H5AD to an independent disk-backed SpatialExperiment bundle.
 read_transition_h5ad_spe <- function(
         h5ad_file, output_dir, assay_path = "X", assay_name = "expression",
@@ -1200,10 +1560,12 @@ read_transition_h5ad_spe <- function(
                  "` must be NULL or unique non-empty column names.", call. = FALSE)
         }
     }
-    if (!is.character(spec$reduced_dims) || is.null(names(spec$reduced_dims)) ||
+    if (!is.character(spec$reduced_dims) ||
+        (length(spec$reduced_dims) && is.null(names(spec$reduced_dims))) ||
         anyNA(spec$reduced_dims) || any(!nzchar(spec$reduced_dims)) ||
-        anyNA(names(spec$reduced_dims)) || any(!nzchar(names(spec$reduced_dims))) ||
-        anyDuplicated(names(spec$reduced_dims))) {
+        (length(spec$reduced_dims) &&
+         (anyNA(names(spec$reduced_dims)) || any(!nzchar(names(spec$reduced_dims))) ||
+          anyDuplicated(names(spec$reduced_dims))))) {
         stop("`", context,
              "$reduced_dims` must be a uniquely named character vector of HDF5 paths.",
              call. = FALSE)
@@ -1223,10 +1585,36 @@ load_transition_spe <- function(
         legacy_import_spec = NULL,
         materialize_block_mib = 64,
         max_materialized_gib = getOption("CellCharterR.import.max_materialized_gib", Inf),
-        progress = interactive()) {
+        progress = interactive(), restore_state = TRUE,
+        state_generation = NULL) {
     verify <- match.arg(verify)
+    if (!is.logical(restore_state) || length(restore_state) != 1L ||
+        is.na(restore_state)) {
+        stop("`restore_state` must be TRUE or FALSE.", call. = FALSE)
+    }
     storage_dir <- normalizePath(storage_dir, mustWork = TRUE)
+    state_dir <- file.path(storage_dir, "state")
+    .transition_reject_symlink(state_dir, "state directory")
+    if (!is.null(state_generation) &&
+        (!is.character(state_generation) || length(state_generation) != 1L ||
+         is.na(state_generation) || !nzchar(state_generation))) {
+        stop("`state_generation` must be NULL or one non-empty generation identifier.",
+             call. = FALSE)
+    }
+    if (!isTRUE(restore_state) && !is.null(state_generation)) {
+        stop("`state_generation` requires `restore_state = TRUE`.", call. = FALSE)
+    }
+    load_lock <- NULL
+    if (file.access(storage_dir, 2L) == 0L) {
+        # Use the same exclusive bundle lock as every writer, even for a base
+        # load. This prevents manifest/arrays replacement races before the first
+        # saved state and when restore_state = FALSE. A genuinely read-only
+        # directory cannot have a concurrent writer, so it needs no lock file.
+        load_lock <- .transition_acquire_lock(storage_dir)
+        on.exit(.transition_release_lock(load_lock), add = TRUE)
+    }
     manifest_path <- file.path(storage_dir, "manifest.rds")
+    .transition_reject_symlink(manifest_path, "manifest.rds file")
     if (!file.exists(manifest_path)) {
         stop("Bundle lacks manifest.rds and cannot be reconstructed portably.", call. = FALSE)
     }
@@ -1243,9 +1631,9 @@ load_transition_spe <- function(
         stop("The SPE import manifest contains an unsafe arrays-file name.",
              call. = FALSE)
     }
-    arrays_file <- normalizePath(
-        file.path(storage_dir, arrays_name), mustWork = TRUE
-    )
+    arrays_candidate <- file.path(storage_dir, arrays_name)
+    .transition_reject_symlink(arrays_candidate, "arrays.h5 file")
+    arrays_file <- normalizePath(arrays_candidate, mustWork = TRUE)
     .transition_verify_arrays(arrays_file, manifest, verify = verify,
                               manifest_path = manifest_path)
     spec <- manifest$import_spec
@@ -1258,13 +1646,7 @@ load_transition_spe <- function(
         # Format-1 bundles were created before reconstruction parameters were
         # recorded. They used these public defaults; rebuilding avoids loading
         # their release-specific serialized S4 skeleton.
-        default_spec <- list(
-            assay_path = "X", assay_name = "expression",
-            obs_columns = NULL, var_columns = NULL,
-            spatial_path = "obsm/spatial",
-            reduced_dims = c(PCA = "obsm/X_pca", cellcharter = "obsm/X_cellcharter"),
-            aucell_path = "obsm/score_aucell", sample_column = "slide_id_concat"
-        )
+        default_spec <- .transition_legacy_import_spec()
         if (is.null(legacy_import_spec)) {
             message(
                 "Legacy format-1 import did not record converter options; ",
@@ -1297,6 +1679,13 @@ load_transition_spe <- function(
     S4Vectors::metadata(spe)$transitionR$reconstructed_locally <- TRUE
     valid <- methods::validObject(spe, test = TRUE)
     if (!identical(valid, TRUE)) stop("Reconstructed SPE is invalid: ", paste(valid, collapse = "; "), call. = FALSE)
+    if (isTRUE(restore_state)) {
+        spe <- .transition_restore_state(
+            spe, storage_dir = storage_dir, manifest = manifest,
+            arrays_file = arrays_file, progress = progress,
+            state_generation = state_generation
+        )
+    }
     spe
 }
 
@@ -1409,6 +1798,310 @@ cellcharter_import_h5ad <- function(
     )
 }
 
+#' Save mutable SpatialExperiment state in its existing import directory
+#'
+#' Saves annotations, coordinates, reduced dimensions, pair graphs, and
+#' metadata alongside an existing [cellcharter_import_h5ad()] directory. The
+#' immutable `arrays.h5` assay is neither copied nor rewritten. Publication is
+#' process-interruption safe: a complete generation is written and checksummed
+#' before the small `state/current.rds` pointer is switched.
+#'
+#' @param spe A `SpatialExperiment` reconstructed from the directory in
+#'   `path`, with any subsequent CellCharterR results attached.
+#' @param path The existing directory created by
+#'   [cellcharter_import_h5ad()]. Its `arrays.h5` and `manifest.rds` must be
+#'   intact.
+#' @param retain_generations Positive integer number of successfully published
+#'   state generations to retain. The default, `1L`, keeps only the latest
+#'   state after a successful save. The preceding generation remains available
+#'   until the new pointer has been published.
+#' @param legacy_import_spec Optional import specification for a format-1
+#'   directory whose manifest predates recorded converter arguments. It has the
+#'   same fields as [cellcharter_load_spe()]'s `legacy_import_spec`. When omitted,
+#'   the historical converter defaults are used. This one-time upgrade hashes
+#'   the existing `arrays.h5` but never rewrites or copies it.
+#' @param progress A single logical value controlling save messages.
+#' @return `spe`, invisibly. The object is not modified.
+#'
+#' @details
+#' The primary assay is deliberately excluded because it already resides in
+#' `path/arrays.h5`. The saved state contains `rowData` or `rowRanges`,
+#' `colData`, `spatialCoords`, native in-memory `reducedDims`, `rowPairs`,
+#' `colPairs`, `mainExpName`, and `metadata`. A reordered, subset, transformed,
+#' renamed, or augmented assay is rejected because restoring it from the
+#' unchanged HDF5 file would silently change its meaning. Delayed/HDF5-backed
+#' reduced dimensions, alternative experiments, and non-empty `imgData` are
+#' also rejected; use [cellcharter_save_analysis()] when those components must
+#' be exported. Non-empty genomic ranges are supported as a `GRanges`;
+#' non-empty `GRangesList` row ranges are rejected by the portable range
+#' serializer. Importer-owned `transitionR` provenance and the AnnData `/uns`
+#' locator are rebuilt for the directory's current location rather than copied
+#' verbatim from mutable metadata.
+#'
+#' AutoK and fixed-K fit objects, stability results, checkpoint locators, and
+#' clustering-stage fit metadata are omitted regardless of checkpoint mode.
+#' Their external checkpoint files remain in the separate `checkpoint_dir` and
+#' are never copied into `path`. Only ordinary SPE products, such as cluster
+#' labels already in `colData` and graphs in `colPairs`, are saved. Archive the
+#' checkpoint directory separately when future resume, stability inspection,
+#' or model retrieval is required.
+#'
+#' On load, CellCharterR first reconstructs the immutable imported base and then
+#' reads the saved native state overlay. Peak RAM can therefore temporarily
+#' include both copies of native annotations, coordinates, embeddings, and
+#' graphs. The HDF5-backed assay is not duplicated. For very large objects,
+#' budget memory for the loaded SPE plus the uncompressed native state payload;
+#' `max_materialized_gib` covers base reconstruction, not `state.rds`.
+#'
+#' @export
+#' @examples
+#' \dontrun{
+#' spe <- cellcharter_load_spe("large-spe")
+#' ## ... attach graphs, embeddings, clusters, and enrichment results ...
+#' cellcharter_save_spe(spe, "large-spe")
+#' spe <- cellcharter_load_spe("large-spe")
+#' }
+cellcharter_save_spe <- function(
+        spe, path, retain_generations = 1L, legacy_import_spec = NULL,
+        progress = interactive()) {
+    if (!methods::is(spe, "SpatialExperiment")) {
+        stop("`spe` must be a SpatialExperiment.", call. = FALSE)
+    }
+    if (!is.character(path) || length(path) != 1L || is.na(path) || !nzchar(path)) {
+        stop("`path` must be one existing CellCharterR import directory.",
+             call. = FALSE)
+    }
+    path <- normalizePath(path, mustWork = TRUE)
+    retain_generations <- suppressWarnings(as.integer(retain_generations))
+    if (length(retain_generations) != 1L || is.na(retain_generations) ||
+        retain_generations < 1L) {
+        stop("`retain_generations` must be one positive integer.", call. = FALSE)
+    }
+    if (!is.logical(progress) || length(progress) != 1L || is.na(progress)) {
+        stop("`progress` must be TRUE or FALSE.", call. = FALSE)
+    }
+    # Lock before reading either manifest or state metadata so every decision
+    # and publication is made against one coherent directory snapshot.
+    lock <- .transition_acquire_lock(path)
+    on.exit(.transition_release_lock(lock), add = TRUE)
+    manifest_path <- file.path(path, "manifest.rds")
+    .transition_reject_symlink(manifest_path, "manifest.rds file")
+    if (!file.exists(manifest_path)) {
+        stop("`path` lacks manifest.rds; it is not a CellCharterR import directory.",
+             call. = FALSE)
+    }
+    manifest <- readRDS(manifest_path)
+    arrays_name <- manifest$arrays_file %||% "arrays.h5"
+    if (!is.character(arrays_name) || length(arrays_name) != 1L ||
+        grepl("[/\\\\]", arrays_name) || arrays_name %in% c(".", "..")) {
+        stop("The import manifest contains an unsafe arrays-file name.", call. = FALSE)
+    }
+    arrays_candidate <- file.path(path, arrays_name)
+    .transition_reject_symlink(arrays_candidate, "arrays.h5 file")
+    arrays_file <- normalizePath(arrays_candidate, mustWork = TRUE)
+    .transition_verify_arrays(
+        arrays_file, manifest,
+        verify = if (is.null(manifest$arrays_sha256)) "none" else "auto",
+        manifest_path = manifest_path
+    )
+    if (is.null(manifest$import_spec)) {
+        version <- suppressWarnings(as.integer(manifest$format_version %||% 1L))
+        if (!identical(version, 1L)) {
+            stop("The import manifest lacks `import_spec`; refusing to guess a non-legacy reconstruction recipe.",
+                 call. = FALSE)
+        }
+        if (is.null(legacy_import_spec)) {
+            message(
+                "Upgrading the legacy import manifest with the historical ",
+                "converter defaults. Pass `legacy_import_spec` if this directory ",
+                "was created with custom converter arguments."
+            )
+            spec <- .transition_legacy_import_spec()
+        } else {
+            spec <- legacy_import_spec
+        }
+    } else {
+        if (!is.null(legacy_import_spec)) {
+            stop("`legacy_import_spec` is only valid for a format-1 import that lacks `import_spec`.",
+                 call. = FALSE)
+        }
+        spec <- manifest$import_spec
+    }
+    spec <- .transition_validate_import_spec(spec)
+    .transition_state_validate_assay(spe, spec, arrays_file)
+    if (length(SingleCellExperiment::altExpNames(spe))) {
+        stop(
+            "In-place state saving does not persist alternative experiments. ",
+            "Use `cellcharter_save_analysis()` for an SPE with altExps.",
+            call. = FALSE
+        )
+    }
+    if (nrow(SpatialExperiment::imgData(spe))) {
+        stop(
+            "In-place state saving does not persist non-empty imgData. ",
+            "Use `cellcharter_save_analysis()` after materialising supported images.",
+            call. = FALSE
+        )
+    }
+    valid <- methods::validObject(spe, test = TRUE)
+    if (!identical(valid, TRUE)) {
+        stop("Cannot save an invalid SpatialExperiment: ", paste(valid, collapse = "; "),
+             call. = FALSE)
+    }
+
+    if (is.null(manifest$import_spec) || is.null(manifest$arrays_sha256)) {
+        if (isTRUE(progress)) {
+            message(
+                "Upgrading legacy manifest metadata (one sequential arrays.h5 ",
+                "read; the assay file is not rewritten)."
+            )
+        }
+        .transition_lock_touch(lock)
+        manifest$format_version <- 3L
+        manifest$import_spec <- spec
+        manifest$arrays_size <- as.numeric(file.info(arrays_file)$size)
+        manifest$arrays_sha256 <- .transition_file_sha256(arrays_file)
+        manifest$arrays_fingerprint <- .transition_file_fingerprint(arrays_file)
+        .transition_atomic_save_rds(manifest, manifest_path)
+        .transition_lock_touch(lock)
+    }
+
+    state_dir <- file.path(path, "state")
+    generations_dir <- file.path(state_dir, "generations")
+    .transition_reject_symlink(state_dir, "state directory")
+    .transition_reject_symlink(generations_dir, "state generations directory")
+    dir.create(generations_dir, recursive = TRUE, showWarnings = FALSE)
+    .transition_reject_symlink(state_dir, "state directory")
+    .transition_reject_symlink(generations_dir, "state generations directory")
+    previous_pointer <- .transition_read_state_pointer(state_dir)
+    stale <- list.dirs(generations_dir, recursive = FALSE, full.names = TRUE)
+    stale <- stale[startsWith(basename(stale), ".staging-")]
+    if (length(stale)) unlink(stale, recursive = TRUE)
+
+    id <- .transition_state_generation_id()
+    staging <- file.path(generations_dir, paste0(".staging-", id))
+    final <- file.path(generations_dir, id)
+    if (!dir.create(staging, recursive = FALSE, showWarnings = FALSE)) {
+        stop("Could not create the staged SPE state generation.", call. = FALSE)
+    }
+    published <- FALSE
+    on.exit(if (!published && dir.exists(staging)) unlink(staging, recursive = TRUE),
+            add = TRUE)
+
+    reduced <- SingleCellExperiment::reducedDims(spe, withDimnames = FALSE)
+    delayed_reduced <- names(reduced)[vapply(
+        reduced, inherits, logical(1L), what = "DelayedArray"
+    )]
+    if (length(delayed_reduced)) {
+        stop(
+            "In-place state saving requires native in-memory reducedDims. ",
+            "The following reducedDims are delayed or HDF5-backed: ",
+            paste(delayed_reduced, collapse = ", "), ". Use ",
+            "`cellcharter_save_analysis()` to make independent copies of those ",
+            "matrices, or materialise them explicitly before saving state.",
+            call. = FALSE
+        )
+    }
+    # Cluster fit objects have their own lifecycle and directory. Persist only
+    # standard SPE products (for example labels in colData and graphs in
+    # colPairs), never models, stability objects, or checkpoint locators.
+    state_metadata <- .transition_state_without_cluster_fits(
+        S4Vectors::metadata(spe)
+    )
+    state_row_data <- SummarizedExperiment::rowData(spe)
+    state_col_data <- SummarizedExperiment::colData(spe)
+    delayed_state <- c(
+        .transition_find_delayed_state(state_row_data, "rowData"),
+        .transition_find_delayed_state(state_col_data, "colData"),
+        .transition_find_delayed_state(state_metadata, "metadata")
+    )
+    if (length(delayed_state)) {
+        stop(
+            "In-place state saving found delayed, HDF5-backed, or opaque ",
+            "external objects at: ",
+            paste(utils::head(delayed_state, 5L), collapse = ", "),
+            if (length(delayed_state) > 5L) ", ..." else "", ". ",
+            "Materialise or remove them, or use `cellcharter_save_analysis()`.",
+            call. = FALSE
+        )
+    }
+    row_ranges <- if (methods::is(spe, "RangedSummarizedExperiment")) {
+        .cc_analysis_pack_ranges(SummarizedExperiment::rowRanges(spe))
+    } else NULL
+    state <- list(
+        format_version = 2L,
+        created = Sys.time(),
+        binding = .transition_state_binding(spe, manifest, arrays_file),
+        dimnames = dimnames(spe),
+        rowData = state_row_data,
+        rowRanges = row_ranges,
+        colData = state_col_data,
+        spatialCoords = SpatialExperiment::spatialCoords(spe),
+        reducedDims = as.list(reduced),
+        rowPairs = .transition_pack_pairs(SingleCellExperiment::rowPairs(spe)),
+        colPairs = .transition_pack_pairs(SingleCellExperiment::colPairs(spe)),
+        mainExpName = SingleCellExperiment::mainExpName(spe),
+        metadata = state_metadata
+    )
+    delayed_state <- .transition_find_delayed_state(state, "state")
+    if (length(delayed_state)) {
+        stop(
+            "In-place state saving found a delayed, HDF5-backed, or opaque ",
+            "external object at `", delayed_state[[1L]], "`. Materialise or ",
+            "remove it, or use `cellcharter_save_analysis()`.",
+            call. = FALSE
+        )
+    }
+    state_file <- file.path(staging, "state.rds")
+    if (isTRUE(progress)) message("Writing mutable SPE state; arrays.h5 will not be modified.")
+    saveRDS(state, state_file, version = 3, compress = FALSE)
+    state_sha <- .transition_file_sha256(state_file)
+    files <- .cc_analysis_inventory(staging)
+    if (!file.rename(staging, final)) {
+        stop("Could not publish the completed SPE state generation.", call. = FALSE)
+    }
+    published <- TRUE
+    old_history <- previous_pointer$history %||%
+        previous_pointer$generation %||% character()
+    history <- utils::head(
+        unique(c(id, as.character(old_history))), retain_generations
+    )
+    published_at <- Sys.time()
+    current_record <- list(
+        generation = id, state_sha256 = state_sha, files = files,
+        published = published_at
+    )
+    previous_records <- previous_pointer$generations %||% list()
+    if (!length(previous_records) && !is.null(previous_pointer$generation)) {
+        old_id <- previous_pointer$generation
+        previous_records[[old_id]] <- list(
+            generation = old_id,
+            state_sha256 = previous_pointer$state_sha256,
+            files = previous_pointer$files,
+            published = previous_pointer$published
+        )
+    }
+    records <- c(stats::setNames(list(current_record), id), previous_records)
+    records <- records[history]
+    pointer <- c(
+        list(
+            format_version = 3L, generation = id, history = history,
+            generations = records
+        ),
+        current_record[c("state_sha256", "files", "published")]
+    )
+    .transition_atomic_save_rds(pointer, file.path(state_dir, "current.rds"))
+
+    generations <- list.dirs(generations_dir, recursive = FALSE, full.names = TRUE)
+    generations <- generations[!startsWith(basename(generations), ".staging-")]
+    discard <- generations[!basename(generations) %in% history]
+    if (length(discard)) unlink(discard, recursive = TRUE)
+    if (isTRUE(progress)) {
+        message("Published SPE state `", id, "`; arrays.h5 is unchanged.")
+    }
+    invisible(spe)
+}
+
 #' Load a movable disk-backed SpatialExperiment
 #'
 #' Reconstructs the S4 experiment shell with the locally installed
@@ -1417,9 +2110,10 @@ cellcharter_import_h5ad <- function(
 #' function after moving the complete directory.
 #'
 #' @param path One existing directory created by
-#'   [cellcharter_import_h5ad()]. Move `arrays.h5`, `manifest.rds`, and
-#'   `spe.rds` together; reconstruction uses the manifest and local
-#'   `arrays.h5`, not the original H5AD or the serialized convenience object.
+#'   [cellcharter_import_h5ad()]. Reconstruction uses `manifest.rds` and the
+#'   local `arrays.h5`, not the original H5AD or the serialized `spe.rds`
+#'   convenience object. If analysis state has been saved, move the `state`
+#'   directory with them.
 #' @param verify Integrity verification mode. `"auto"` (the default) trusts the
 #'   size and modification-time fingerprint recorded when the SHA-256 was
 #'   computed, and re-hashes after that fingerprint changes (for example after
@@ -1438,9 +2132,18 @@ cellcharter_import_h5ad <- function(
 #'   estimate for native metadata, coordinates, embeddings, graphs, R-object
 #'   overhead, and bounded import workspaces. The count assay is excluded
 #'   because it remains HDF5-backed. Defaults to the
-#'   `CellCharterR.import.max_materialized_gib` option or `Inf`.
+#'   `CellCharterR.import.max_materialized_gib` option or `Inf`. When restoring
+#'   saved state, this limit does not include the additional transient memory
+#'   used to read the native `state.rds` overlay.
 #' @param progress A single logical value controlling column-, matrix-block-,
 #'   graph-, validation-, and reconstruction-progress messages.
+#' @param restore_state A single logical value. If `TRUE` (the default), restore
+#'   the latest generation written by [cellcharter_save_spe()] after rebuilding
+#'   the immutable imported base. Use `FALSE` to ignore saved analysis state.
+#' @param state_generation `NULL` to restore the current saved generation, or a
+#'   retained generation identifier from `state/current.rds`. This provides an
+#'   explicit rollback path when the latest payload is damaged. It requires
+#'   `restore_state = TRUE`.
 #' @return A valid disk-backed `SpatialExperiment`. The assay points to
 #'   `path/arrays.h5`; native `colData`, `rowData`, `spatialCoords`,
 #'   `reducedDims`, and weighted `colPairs` are rebuilt from the recorded import
@@ -1456,10 +2159,12 @@ cellcharter_load_spe <- function(
         legacy_import_spec = NULL,
         materialize_block_mib = 64,
         max_materialized_gib = getOption("CellCharterR.import.max_materialized_gib", Inf),
-        progress = interactive()) {
+        progress = interactive(), restore_state = TRUE,
+        state_generation = NULL) {
     load_transition_spe(
         path, verify = verify, legacy_import_spec = legacy_import_spec,
         materialize_block_mib = materialize_block_mib,
-        max_materialized_gib = max_materialized_gib, progress = progress
+        max_materialized_gib = max_materialized_gib, progress = progress,
+        restore_state = restore_state, state_generation = state_generation
     )
 }

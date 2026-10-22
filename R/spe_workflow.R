@@ -214,11 +214,12 @@
         nrow(spatial) != ncol(spe) || ncol(spatial) < 2L) {
       stop(context, " has invalid SpatialExperiment coordinates.", call. = FALSE)
     }
-    .cc_align_observation_ids(
-      rownames(spatial), local_ids,
-      paste0(context, " spatialCoords row names"),
-      paste0(context, " spot identifiers"), allow_duplicates = TRUE
-    )
+    # SpatialExperiment keeps coordinates positionally aligned with columns
+    # when the object is constructed and subset. Coordinate row names are
+    # optional annotations, not the container's canonical column identifiers;
+    # imported objects may therefore retain unique H5AD barcodes here while
+    # using repeated slide-level labels in colnames(spe). Requiring the two
+    # naming systems to match rejects a valid, internally aligned SPE.
   }
   order_sha256 <- .cc_observation_order_sha256(
     ids, paste0(context, " spot identifiers"), allow_duplicates = TRUE
