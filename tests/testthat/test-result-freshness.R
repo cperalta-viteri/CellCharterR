@@ -114,7 +114,7 @@ test_that("complete legacy result records remain readable after upgrade", {
   )
 })
 
-test_that("neighborhood results detect topology, weight, and domain changes", {
+test_that("neighborhood results follow binary topology and domain changes", {
   spe <- cellcharter_nhood_enrichment(
     .result_freshness_spe(), graph_name = "graph", domain_col = "domain"
   )
@@ -123,14 +123,18 @@ test_that("neighborhood results detect topology, weight, and domain changes", {
       input_fingerprints,
     c("graph", "domain")
   )
+  expect_identical(
+    S4Vectors::metadata(spe)$CellCharterR$results$nhood_enrichment$
+      input_fingerprints$graph$semantics,
+    "binary_topology_v1"
+  )
 
   changed_weight <- spe
   pairs <- SingleCellExperiment::colPair(changed_weight, "graph")
   S4Vectors::mcols(pairs)[[1L]][[1L]] <- 2
   SingleCellExperiment::colPair(changed_weight, "graph") <- pairs
-  expect_error(
-    .cc_spe_require_result(changed_weight, "nhood_enrichment"),
-    "stale.*graph"
+  expect_silent(
+    .cc_spe_require_result(changed_weight, "nhood_enrichment")
   )
 
   changed_topology <- spe
@@ -146,6 +150,28 @@ test_that("neighborhood results detect topology, weight, and domain changes", {
   expect_error(
     .cc_spe_require_result(changed_domain, "nhood_enrichment"),
     "stale.*domain"
+  )
+})
+
+test_that("legacy weighted graph fingerprints remain verifiable", {
+  spe <- cellcharter_nhood_enrichment(
+    .result_freshness_spe(), graph_name = "graph", domain_col = "domain"
+  )
+  metadata <- S4Vectors::metadata(spe)$CellCharterR
+  fingerprint <- metadata$results$nhood_enrichment$input_fingerprints$graph
+  fingerprint$sha256 <- .cc_result_graph_sha256_legacy(spe, "graph")
+  fingerprint$semantics <- NULL
+  metadata$results$nhood_enrichment$input_fingerprints$graph <- fingerprint
+  S4Vectors::metadata(spe)$CellCharterR <- metadata
+
+  expect_silent(.cc_spe_require_result(spe, "nhood_enrichment"))
+
+  changed <- spe
+  pairs <- SingleCellExperiment::colPair(changed, "graph")
+  SingleCellExperiment::colPair(changed, "graph") <- pairs[-1L]
+  expect_error(
+    .cc_spe_require_result(changed, "nhood_enrichment"),
+    "stale.*graph"
   )
 })
 
@@ -176,7 +202,12 @@ test_that("differential plots reject changed graph and design variables", {
   pairs <- SingleCellExperiment::colPair(changed_graph, "graph")
   S4Vectors::mcols(pairs)[[1L]][[1L]] <- 3
   SingleCellExperiment::colPair(changed_graph, "graph") <- pairs
-  expect_error(cellcharter_plot_graph_diff(changed_graph), "stale.*graph")
+  expect_silent(cellcharter_plot_graph_diff(changed_graph))
+
+  changed_topology <- spe
+  pairs <- SingleCellExperiment::colPair(changed_topology, "graph")
+  SingleCellExperiment::colPair(changed_topology, "graph") <- pairs[-1L]
+  expect_error(cellcharter_plot_graph_diff(changed_topology), "stale.*graph")
 })
 
 test_that("zonation plots reject changed scores, blocks, and parameters", {

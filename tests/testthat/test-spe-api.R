@@ -230,7 +230,7 @@ test_that("SPE clustering records and enforces representation content identity",
     "clustering:cellcharter_domain"
   ]]
   expect_match(stage$parameters$representation_sha256, "^[0-9a-f]{64}$")
-  expect_match(stage$parameters$autok_input_stage_sha256, "^[0-9a-f]{64}$")
+  expect_match(stage$parameters$autok_input_data_sha256, "^[0-9a-f]{64}$")
 
   changed <- spe
   value <- SingleCellExperiment::reducedDim(changed, "X_cellcharter")
@@ -245,6 +245,26 @@ test_that("SPE clustering records and enforces representation content identity",
     ),
     "representation contents"
   )
+})
+
+test_that("AutoK accepts an imported representation without producer stages", {
+  checkpoint <- tempfile("spe-imported-autok-")
+  on.exit(unlink(checkpoint, recursive = TRUE), add = TRUE)
+  spe <- .tiny_spe_fixture()
+  imported <- SingleCellExperiment::reducedDim(spe, "X_trVAE")
+  SingleCellExperiment::reducedDim(spe, "imported_cellcharter") <- imported
+  S4Vectors::metadata(spe)$CellCharterR <- NULL
+
+  expect_no_error(
+    clustered <- cellcharter_cluster(
+      spe, representation = "imported_cellcharter",
+      candidate_k = c(2L, 3L), checkpoint_dir = checkpoint,
+      max_runs = 2L, convergence_tol = 0,
+      fit_fun = .tiny_fit, predict_fun = .tiny_predict,
+      nll_fun = .tiny_nll, progress = FALSE
+    )
+  )
+  expect_length(clustered$cellcharter_domain, ncol(spe))
 })
 
 test_that("native SpatialExperiment coordinates survive the complete workflow", {
@@ -381,7 +401,7 @@ test_that("enrichment plotting clusters program profiles with hclust", {
   )
 })
 
-test_that("object API rejects positional identity and stale subset metadata", {
+test_that("object API accepts colPair graphs remapped by SPE subsetting", {
   skip_if_not_installed("geometry")
   spe <- .tiny_spe_fixture()
   expect_error(
@@ -394,13 +414,18 @@ test_that("object API rejects positional identity and stale subset metadata", {
   pairs <- SingleCellExperiment::colPair(subset, "cellcharter_graph")
   expect_true(all(S4Vectors::from(pairs) <= ncol(subset)))
   expect_true(all(S4Vectors::to(pairs) <= ncol(subset)))
-  expect_error(
-    cellcharter_aggregate(subset),
-    "stale after spot reordering or subsetting", fixed = TRUE
+  expect_silent(
+    aggregated <- cellcharter_aggregate(
+      subset, n_layers = 1L, progress = FALSE
+    )
+  )
+  expect_equal(
+    nrow(SingleCellExperiment::reducedDim(aggregated, "X_cellcharter")),
+    ncol(subset)
   )
 })
 
-test_that("graph stages reject changed coordinates, samples, and topology", {
+test_that("graph stage audits remain opt-in while colPairs are usable inputs", {
   skip_if_not_installed("geometry")
   original <- cellcharter_graph(.tiny_spe_fixture(), progress = FALSE)
 
@@ -408,25 +433,25 @@ test_that("graph stages reject changed coordinates, samples, and topology", {
   coordinates <- SpatialExperiment::spatialCoords(changed_coordinates)
   coordinates[1L, 1L] <- coordinates[1L, 1L] + 0.25
   SpatialExperiment::spatialCoords(changed_coordinates) <- coordinates
-  expect_error(
-    cellcharter_aggregate(changed_coordinates, n_layers = 1L, progress = FALSE),
-    "`coordinates`.*changed"
-  )
+  expect_error(.cc_spe_graph_matrix(
+    changed_coordinates, "cellcharter_graph", require_current = TRUE
+  ), "`coordinates`.*changed")
+  expect_silent(.cc_spe_graph_matrix(changed_coordinates, "cellcharter_graph"))
 
   changed_samples <- original
   changed_samples$sample[[1L]] <- "A2"
-  expect_error(
-    cellcharter_aggregate(changed_samples, n_layers = 1L, progress = FALSE),
-    "`sample`.*changed"
-  )
+  expect_error(.cc_spe_graph_matrix(
+    changed_samples, "cellcharter_graph", require_current = TRUE
+  ), "`sample`.*changed")
+  expect_silent(.cc_spe_graph_matrix(changed_samples, "cellcharter_graph"))
 
   changed_graph <- original
   pairs <- SingleCellExperiment::colPair(changed_graph, "cellcharter_graph")
   SingleCellExperiment::colPair(changed_graph, "cellcharter_graph") <- pairs[-1L]
-  expect_error(
-    cellcharter_aggregate(changed_graph, n_layers = 1L, progress = FALSE),
-    "`graph`.*changed"
-  )
+  expect_error(.cc_spe_graph_matrix(
+    changed_graph, "cellcharter_graph", require_current = TRUE
+  ), "`graph`.*changed")
+  expect_silent(.cc_spe_graph_matrix(changed_graph, "cellcharter_graph"))
 })
 
 test_that("stage records detect changed scientific inputs without blocking labels", {

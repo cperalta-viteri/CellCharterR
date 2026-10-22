@@ -308,11 +308,17 @@
   record
 }
 
-.cc_spe_graph_matrix <- function(spe, graph_name, require_current = TRUE) {
+.cc_spe_graph_matrix <- function(spe, graph_name, require_current = FALSE) {
   if (!graph_name %in% SingleCellExperiment::colPairNames(spe)) {
     stop("SPE colPairs lacks graph `", graph_name, "`.", call. = FALSE)
   }
   stage <- paste0("graph:", graph_name)
+  # A graph stored in colPairs() is a first-class scientific input. The
+  # SingleCellExperiment subsetting machinery remaps SelfHits endpoints to the
+  # current columns, so an older construction-stage fingerprint must not make
+  # an otherwise valid imported, reordered, or subset graph unusable. Callers
+  # that specifically audit construction provenance can still opt in with
+  # require_current = TRUE.
   if (require_current && !is.null(.cc_spe_metadata(spe)$stages[[stage]])) {
     .cc_spe_require_stage(spe, stage)
   }
@@ -377,11 +383,10 @@
 #' global long-edge cutoff is calculated across those graph blocks. The final
 #' symmetric graph is stored in `colPairs(spe, graph_name)`, so endpoints remain
 #' synchronized when the SPE is subset. The recorded stage fingerprints the
-#' coordinates, sample assignments, and binary graph topology; changing any of
-#' them makes the stage stale and requires graph reconstruction.
+#' coordinates, sample assignments, and binary graph topology for optional
+#' provenance auditing; it does not prevent use of the current graph artifact.
 #'
-#' @param spe A `SpatialExperiment` with one column per spatial spot and unique
-#'   column names.
+#' @param spe A `SpatialExperiment` with one column per spatial spot.
 #' @param spatial Coordinate source. The default `"spatial"` reads the first
 #'   two columns of `spatialCoords(spe)`. Any other value names a spot-by-
 #'   coordinate matrix in `reducedDims(spe)`.
@@ -585,7 +590,9 @@ cellcharter_aggregate <- function(
 #'
 #' @param spe An aggregated `SpatialExperiment`.
 #' @param representation Name of the numeric spot-by-feature matrix in
-#'   `reducedDims(spe)`. It must have a current matching aggregation stage.
+#'   `reducedDims(spe)`. The matrix is a first-class input and may have been
+#'   created by CellCharterR, imported from AnnData, or attached independently;
+#'   historical stage metadata is not required.
 #' @param candidate_k Two selectable K bounds or an expanded consecutive list,
 #'   as accepted by [cellcharter_autok_fit()]. AutoK additionally fits the two
 #'   neighboring sentinel K values needed for stability calculation.
@@ -601,7 +608,7 @@ cellcharter_aggregate <- function(
 #'   `backend`, `max_runs`, `convergence_tol`, `seed`, `fit_args`, `workers`,
 #'   `threads_per_fit`, `checkpoint_mode`, `resume`, and `progress`. Do not pass
 #'   `x`, `n_clusters`, `checkpoint_dir`, or `data_id`; these are supplied from
-#'   the SPE and stage provenance.
+#'   the current SPE representation.
 #' @return The updated `SpatialExperiment` with selected labels in
 #'   `colData(spe)[[domain_col]]` and the AutoK fit in metadata.
 #' @examples
@@ -627,25 +634,14 @@ cellcharter_cluster <- function(
     spe, representation = "X_cellcharter", candidate_k,
     checkpoint_dir, domain_col = "cellcharter_domain", ...) {
   x <- .cc_spe_reduced_dim(spe, representation)
-  aggregation_stage <- .cc_spe_require_stage(
-    spe, paste0("aggregation:", representation)
-  )
   identity <- .cc_validate_spe_identity(spe, reduced_dims = representation)
-  stage_identity <- digest::digest(
-    .cc_contract_canonical(list(
-      # Frozen for compatibility with checkpoints written before the public
-      # SPE terminology migration. Changing this literal would invalidate a
-      # scientifically identical, safely resumable AutoK campaign.
-      schema = "CellCharterR_sce_autok_input_v1",
-      cell_order_sha256 = identity$cell_order_sha256,
-      representation = representation,
-      aggregation_stage = aggregation_stage
-    )),
-    algo = "sha256", serialize = TRUE
-  )
+  # AutoK fingerprints the complete current representation and binds resume
+  # compatibility to that content and the numerical execution contract. Never
+  # mix mutable producer-stage metadata or storage paths into data identity.
   fit <- cellcharter_autok_fit(
     x = x, n_clusters = candidate_k, checkpoint_dir = checkpoint_dir,
-    data_id = stage_identity, ...
+    data_id = NULL,
+    ...
   )
   selected_k <- cellcharter_autok_best_k(fit)
   selected <- fit$best_index[fit$best_index$k == selected_k, , drop = FALSE]
@@ -675,7 +671,8 @@ cellcharter_cluster <- function(
          },
          domain_col = domain_col, selected_k = selected_k,
          representation_sha256 = fit$representation_sha256,
-         autok_input_stage_sha256 = stage_identity,
+         autok_input_data_sha256 = fit$representation_sha256,
+         observation_order_sha256 = identity$cell_order_sha256,
          selected_artifact = if (identical(fit$checkpoint_mode, "none")) {
            NULL
          } else {

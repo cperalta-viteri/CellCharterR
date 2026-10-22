@@ -234,6 +234,44 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
   as.character(state$data_id)
 }
 
+.autok_input_identity_compatible_id <- function(state, current_contract) {
+  if (is.null(state$resume_contract) || is.null(state$data_id)) {
+    return(character())
+  }
+  previous <- state$resume_contract
+  if (is.null(previous$representation_sha256) ||
+      !identical(previous$representation_sha256,
+                 current_contract$representation_sha256)) {
+    return(character())
+  }
+  if (!identical(current_contract$input_data_id,
+                 current_contract$representation_sha256)) {
+    return(character())
+  }
+  expected_id <- tryCatch(
+    digest::digest(
+      .cc_contract_canonical(previous), algo = "sha256", serialize = TRUE
+    ),
+    error = function(e) NA_character_
+  )
+  if (is.na(expected_id) ||
+      !identical(as.character(state$data_id), expected_id)) {
+    return(character())
+  }
+  # Older SPE wrappers supplied a hash of the complete producer-stage record
+  # as input_data_id. Current wrappers correctly use the representation hash.
+  # Permit this one-field identity migration only after the complete current
+  # representation checksum and every numerical/implementation field agree.
+  previous$input_data_id <- NULL
+  current <- current_contract
+  current$input_data_id <- NULL
+  if (!identical(.cc_contract_canonical(previous),
+                 .cc_contract_canonical(current))) {
+    return(character())
+  }
+  as.character(state$data_id)
+}
+
 .autok_validate_state_tables <- function(state, fit_k, runs_completed) {
   if (runs_completed < 0L || runs_completed != as.integer(runs_completed)) {
     stop("Saved AutoK state has invalid `runs_completed`.")
@@ -777,13 +815,15 @@ cellcharter_fowlkes_mallows <- function(labels_a, labels_b) {
 #'   `"torch"` explicitly opts into the experimental float32 R Torch backend.
 #'   C++ fits requested K values through [cpp_gmm_fit_many()].
 #' @param workers Positive number of independent K fits that the C++ backend may
-#'   run concurrently. This controls between-fit parallelism and has no effect
-#'   for `backend = "torch"`. Parallel C++ fitting requires the linked BLAS and
+#'   run concurrently. Values above 32 are capped before checkpoint identity
+#'   and provenance are constructed. This controls between-fit parallelism and
+#'   has no effect for `backend = "torch"`. Parallel C++ fitting requires the linked BLAS and
 #'   OpenMP thread-control environment variables documented by
 #'   [cpp_gmm_fit_many()] to be set to one before R starts.
 #' @param threads_per_fit Positive number of native threads used within each C++
-#'   fit. The implementation caps the product of `workers` and
-#'   `threads_per_fit` at 32. BLAS threads are a separate parallel layer, so the
+#'   fit. The implementation resolves and records the effective topology before
+#'   fitting, capping the product of `workers` and `threads_per_fit` at 32.
+#'   BLAS threads are a separate parallel layer, so the
 #'   function fails before inspecting a large representation when a parallel
 #'   C++ topology is requested without explicit single-thread BLAS controls. It
 #'   has no effect for `backend = "torch"`.
@@ -878,7 +918,12 @@ cellcharter_autok_fit <- function(
   }
   workers <- .autok_validate_integer(workers, "workers")
   threads_per_fit <- .autok_validate_integer(threads_per_fit, "threads_per_fit")
+  requested_workers <- workers
+  requested_threads_per_fit <- threads_per_fit
   if (identical(backend, "cpp")) {
+    topology <- .cpp_gmm_resolve_topology(workers, threads_per_fit)
+    workers <- topology$workers
+    threads_per_fit <- topology$threads_per_fit
     # Fail before hashing or materialising a potentially multi-million-row
     # representation.  A nested BLAS pool can otherwise multiply the nominal
     # native topology and turn a minutes-to-hours run into a multiday one.
@@ -1113,6 +1158,22 @@ cellcharter_autok_fit <- function(
   saved_execution_contract <- if (!is.null(saved_state)) {
     .autok_saved_execution_contract(saved_state)
   } else NULL
+  if (resume && !is.null(saved_state)) {
+    input_identity_compatible_id <- .autok_input_identity_compatible_id(
+      saved_state, resume_contract
+    )
+    if (length(input_identity_compatible_id)) {
+      legacy_data_ids <- unique(c(
+        legacy_data_ids, input_identity_compatible_id,
+        saved_state$compatible_data_ids %||% character()
+      ))
+      if (!identical(input_identity_compatible_id, data_id)) {
+        message(
+          "Validated AutoK state across the producer-stage identity migration; completed fits will be resumed from the unchanged representation."
+        )
+      }
+    }
+  }
   if (resume && identical(backend, "cpp") && !is.null(saved_state)) {
     cpp_compatible_id <- .autok_cpp_observability_compatible_id(saved_state, resume_contract)
     if (length(cpp_compatible_id)) {
@@ -1375,6 +1436,8 @@ cellcharter_autok_fit <- function(
       compatible_data_ids = legacy_data_ids,
       cache_representation = cache_representation,
       backend = backend, workers = workers, threads_per_fit = threads_per_fit,
+      requested_workers = requested_workers,
+      requested_threads_per_fit = requested_threads_per_fit,
       checkpoint_mode = checkpoint_mode,
       cache_format_version = 2L,
       input_data_id = input_data_id,
@@ -1546,6 +1609,8 @@ cellcharter_autok_fit <- function(
           nll = as.numeric(selection_nll), final_nll = as.numeric(model$nll),
           model = model, labels = labels,
           backend = "cpp", workers = workers, threads_per_fit = threads_per_fit,
+          requested_workers = requested_workers,
+          requested_threads_per_fit = requested_threads_per_fit,
           execution_contract = execution_contract,
           representation_cache = list(mode = "ram", format_version = 2L)
         )
@@ -1825,6 +1890,8 @@ cellcharter_autok_fit <- function(
       compatible_data_ids = legacy_data_ids,
       cache_representation = cache_representation,
       backend = backend, workers = workers, threads_per_fit = threads_per_fit,
+      requested_workers = requested_workers,
+      requested_threads_per_fit = requested_threads_per_fit,
       checkpoint_mode = checkpoint_mode,
       cache_format_version = 2L,
       input_data_id = input_data_id,
@@ -1875,6 +1942,8 @@ cellcharter_autok_fit <- function(
       compatible_data_ids = legacy_data_ids,
       cache_representation = cache_representation,
       backend = backend, workers = workers, threads_per_fit = threads_per_fit,
+      requested_workers = requested_workers,
+      requested_threads_per_fit = requested_threads_per_fit,
       checkpoint_mode = checkpoint_mode,
       cache_format_version = 2L,
       input_data_id = input_data_id,

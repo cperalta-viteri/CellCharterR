@@ -19,8 +19,7 @@ cellcharter_cluster_fixed(
 )
 }
 \arguments{
-\item{spe}{An aggregated \code{SpatialExperiment} with a current aggregation
-stage for \code{representation}.}
+\item{spe}{A \code{SpatialExperiment} containing the representation to cluster.}
 
 \item{representation}{Name of the numeric spot-by-feature matrix in
 \code{reducedDims(spe)} used for fitting and prediction.}
@@ -48,8 +47,9 @@ It must not contain \code{x}, \code{n_clusters}, or \code{seed}.}
 \code{predict_fun}. It must not contain \code{model} or \code{newdata}.}
 
 \item{resume}{A single logical value. When \code{TRUE}, reuse a complete checkpoint
-only if spot order, representation, aggregation stage, K, seed, arguments,
-and fitting implementations all match exactly.}
+only if the current representation contents and dimensions, K, seed,
+arguments, and fitting implementations all match exactly. Historical
+producer-stage metadata and storage paths do not affect compatibility.}
 
 \item{fit_fun}{Function called as \code{fit_fun(x, n_clusters, seed, ...)}.
 The default is \code{\link[=torch_gmm_fit]{torch_gmm_fit()}}.}

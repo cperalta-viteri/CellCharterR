@@ -101,13 +101,9 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
                              covariance_regularization = 1e-6,
                              progress = interactive()) {
   if (!length(n_clusters)) stop("`n_clusters` must not be empty.", call. = FALSE)
-  workers <- .rc_positive_integer(workers, "workers")
-  if (workers > 32L) { warning("Capping `workers` at 32.", call. = FALSE); workers <- 32L }
-  threads_per_fit <- .rc_positive_integer(threads_per_fit, "threads_per_fit")
-  if (as.double(workers) * as.double(threads_per_fit) > 32) {
-    threads_per_fit <- max(1L, 32L %/% workers)
-    warning(sprintf("Capping `threads_per_fit` at %d so the native topology does not exceed 32 threads.", threads_per_fit), call. = FALSE)
-  }
+  topology <- .cpp_gmm_resolve_topology(workers, threads_per_fit)
+  workers <- topology$workers
+  threads_per_fit <- topology$threads_per_fit
   # The native engine owns fit- and row-level parallelism.  Its covariance
   # kernels call the linked BLAS, so a second BLAS thread pool would multiply
   # the requested topology (for example 8 x 4 x 32 OpenBLAS threads).  These
@@ -138,11 +134,53 @@ cpp_gmm_fit_many <- function(x, n_clusters, seeds = seq_along(n_clusters), worke
     models[[i]]$runtime <- list(device = "cpu", backend = "compiled-cpp-double",
                                 seed = seeds[[i]], cpu_threads = threads_per_fit,
                                 outer_workers = workers,
-                                threads_per_fit = threads_per_fit)
+                                threads_per_fit = threads_per_fit,
+                                requested_outer_workers = topology$requested_workers,
+                                requested_threads_per_fit =
+                                  topology$requested_threads_per_fit)
     class(models[[i]]) <- c("cpp_gmm", "torch_gmm")
   }
   names(models) <- paste0("k", ks)
   models
+}
+
+.cpp_gmm_resolve_topology <- function(workers, threads_per_fit, warn = TRUE) {
+  requested_workers <- .rc_positive_integer(workers, "workers")
+  requested_threads_per_fit <- .rc_positive_integer(
+    threads_per_fit, "threads_per_fit"
+  )
+  if (!is.logical(warn) || length(warn) != 1L || is.na(warn)) {
+    stop("`warn` must be TRUE or FALSE.", call. = FALSE)
+  }
+
+  workers <- min(requested_workers, 32L)
+  if (warn && workers != requested_workers) {
+    warning("Capping `workers` at 32.", call. = FALSE)
+  }
+  threads_per_fit <- requested_threads_per_fit
+  if (as.double(workers) * as.double(threads_per_fit) > 32) {
+    threads_per_fit <- max(1L, 32L %/% workers)
+    if (warn) {
+      warning(
+        sprintf(
+          paste0(
+            "Capping `threads_per_fit` at %d so the native topology does ",
+            "not exceed 32 threads."
+          ),
+          threads_per_fit
+        ),
+        call. = FALSE
+      )
+    }
+  }
+
+  list(
+    requested_workers = requested_workers,
+    requested_threads_per_fit = requested_threads_per_fit,
+    workers = as.integer(workers),
+    threads_per_fit = as.integer(threads_per_fit),
+    max_native_threads = 32L
+  )
 }
 
 .cpp_gmm_blas_environment <- function() {

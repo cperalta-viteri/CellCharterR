@@ -324,6 +324,31 @@ test_that("checkpoint-free C++ AutoK creates no directory and embeds usable mode
   }
 })
 
+test_that("compiled topology resolution reports requested and effective values", {
+  expect_identical(
+    CellCharterR:::.cpp_gmm_resolve_topology(6L, 2L, warn = FALSE),
+    list(
+      requested_workers = 6L,
+      requested_threads_per_fit = 2L,
+      workers = 6L,
+      threads_per_fit = 2L,
+      max_native_threads = 32L
+    )
+  )
+  expect_warning(
+    topology <- CellCharterR:::.cpp_gmm_resolve_topology(20L, 2L),
+    "Capping `threads_per_fit` at 1"
+  )
+  expect_identical(topology$workers, 20L)
+  expect_identical(topology$threads_per_fit, 1L)
+  expect_warning(
+    topology <- CellCharterR:::.cpp_gmm_resolve_topology(64L, 1L),
+    "Capping `workers` at 32"
+  )
+  expect_identical(topology$workers, 32L)
+  expect_identical(topology$threads_per_fit, 1L)
+})
+
 test_that("round-checkpoint C++ AutoK resume is computationally equivalent", {
   x <- cpp_gmm_fixture()
   checkpoint_dir <- tempfile("cpp-autok-round-")

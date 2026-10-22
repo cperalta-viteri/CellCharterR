@@ -444,9 +444,11 @@ colnames(SummarizedExperiment::colData(spe))
 names(S4Vectors::metadata(spe)$CellCharterR)
 ```
 
-Subsetting an SPE automatically remaps its `colPairs`; CellCharterR detects
-identity-sensitive stage records as stale so derived representations are not
-silently reused after spot removal or reordering.
+Subsetting an SPE automatically remaps its `colPairs`. Current `colData`,
+`reducedDims`, `spatialCoords`, and `colPairs` are first-class inputs:
+CellCharterR uses their present values even when historical stage provenance is
+absent or stale. Stored summary results and resumable checkpoints retain their
+own scientific-input checks because those artifacts do not update themselves.
 
 ## Reproducing the official tutorial analyses
 

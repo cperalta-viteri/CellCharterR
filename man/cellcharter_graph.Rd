@@ -17,8 +17,7 @@ cellcharter_graph(
 )
 }
 \arguments{
-\item{spe}{A \code{SpatialExperiment} with one column per spatial spot and unique
-column names.}
+\item{spe}{A \code{SpatialExperiment} with one column per spatial spot.}
 
 \item{...}{Additional arguments accepted by \code{\link[=cellcharter_graph]{cellcharter_graph()}}.}
 
@@ -51,8 +50,8 @@ Delaunay graphs are built independently for every physical sample, then one
 global long-edge cutoff is calculated across those graph blocks. The final
 symmetric graph is stored in \code{colPairs(spe, graph_name)}, so endpoints remain
 synchronized when the SPE is subset. The recorded stage fingerprints the
-coordinates, sample assignments, and binary graph topology; changing any of
-them makes the stage stale and requires graph reconstruction.
+coordinates, sample assignments, and binary graph topology for optional
+provenance auditing; it does not prevent use of the current graph artifact.
 }
 \examples{
 example_spe <- SpatialExperiment::SpatialExperiment(

@@ -159,54 +159,64 @@
   if (!inherits(spe, "SpatialExperiment")) {
     stop(context, " is not a SpatialExperiment.", call. = FALSE)
   }
-  local_ids <- .cc_validate_observation_ids(
-    colnames(spe), paste0(context, " spot identifiers"),
-    allow_duplicates = TRUE
-  )
-  ids <- local_ids
-  if (anyDuplicated(local_ids)) {
-    col_data <- SummarizedExperiment::colData(spe)
-    if (!"sample_id" %in% colnames(col_data)) {
-      duplicate <- local_ids[duplicated(local_ids)][[1L]]
-      stop(
-        context, " contains duplicated local identifier `", duplicate,
-        "`; add a non-missing `sample_id` colData column or make the ",
-        "observation names globally unique.", call. = FALSE
-      )
-    }
-    sample_ids <- .cc_validate_observation_ids(
-      as.character(col_data$sample_id), paste0(context, " sample_id values"),
-      allow_duplicates = TRUE
-    )
-    # Bioconductor permits duplicated column names, and some spatial imports
-    # use a slide-level label rather than a barcode as the observation name.
-    # In that valid layout, many spots from the same sample intentionally have
-    # the same sample/name pair. The SpatialExperiment container itself keeps
-    # every assay, colData row, reducedDim row, spatial coordinate, and colPair
-    # aligned by position, so duplicated labels must not invalidate otherwise
-    # aligned observations. Scientific inputs receive separate content hashes
-    # when stages and results are stored.
-    ids <- .cc_validate_observation_ids(
-      paste(sample_ids, local_ids, sep = "\037"),
-      paste0(context, " sample-scoped spot identifiers"),
+  n_spots <- ncol(spe)
+  column_ids <- colnames(spe)
+  if (!is.null(column_ids)) {
+    column_ids <- .cc_validate_observation_ids(
+      column_ids, paste0(context, " spot identifiers"),
       allow_duplicates = TRUE
     )
   }
-  .cc_align_observation_ids(
-    rownames(SummarizedExperiment::colData(spe)), local_ids,
-    paste0(context, " colData row names"), paste0(context, " spot identifiers"),
-    allow_duplicates = TRUE
+
+  # SPE/SCE components are positionally aligned by the container contract.
+  # Their optional dimnames are annotations, not independent foreign keys, so
+  # a missing or legacy component rowname must never make valid current data
+  # unusable. Prefer a genuinely unique identifier for provenance hashes when
+  # one is available; otherwise use an explicitly positional fallback and let
+  # content fingerprints protect checkpoint and result reuse.
+  col_data <- SummarizedExperiment::colData(spe)
+  candidates <- list(
+    colnames = column_ids,
+    colData_rownames = rownames(col_data)
   )
-  if (is.null(reduced_dims)) reduced_dims <- SingleCellExperiment::reducedDimNames(spe)
+  if (!is.null(column_ids) && "sample_id" %in% colnames(col_data)) {
+    sample_ids <- as.character(col_data$sample_id)
+    if (length(sample_ids) == n_spots && !anyNA(sample_ids) &&
+        all(nzchar(sample_ids))) {
+      candidates$sample_scoped_colnames <- paste(
+        sample_ids, column_ids, sep = "\037"
+      )
+    }
+  }
+  unique_candidate <- vapply(candidates, function(candidate) {
+    !is.null(candidate) && length(candidate) == n_spots &&
+      !anyNA(candidate) && all(nzchar(as.character(candidate))) &&
+      !anyDuplicated(candidate)
+  }, logical(1L))
+  if (any(unique_candidate)) {
+    identity_source <- names(candidates)[which(unique_candidate)[[1L]]]
+    ids <- as.character(candidates[[identity_source]])
+  } else {
+    identity_source <- "position"
+    labels <- if (is.null(column_ids)) rep.int("", n_spots) else column_ids
+    ids <- paste0("position:", seq_len(n_spots), "\037", labels)
+  }
+
+  # NULL means that no reduced dimension is consumed by this operation. This
+  # prevents an unrelated legacy reducedDim name from blocking a colData-only
+  # analysis. Callers that consume a representation pass its name explicitly.
+  if (is.null(reduced_dims)) reduced_dims <- character()
   for (reduced_dim_name in reduced_dims) {
     if (!reduced_dim_name %in% SingleCellExperiment::reducedDimNames(spe)) {
       stop(context, " lacks reduced dimension `", reduced_dim_name, "`.", call. = FALSE)
     }
-    .cc_align_observation_ids(
-      rownames(SingleCellExperiment::reducedDim(spe, reduced_dim_name)), local_ids,
-      paste0(context, " `", reduced_dim_name, "` row names"),
-      paste0(context, " spot identifiers"), allow_duplicates = TRUE
+    reduced <- SingleCellExperiment::reducedDim(
+      spe, reduced_dim_name, withDimnames = FALSE
     )
+    if (length(dim(reduced)) != 2L || nrow(reduced) != n_spots) {
+      stop(context, " reduced dimension `", reduced_dim_name,
+           "` is not positionally aligned with its spots.", call. = FALSE)
+    }
   }
   if (inherits(spe, "SpatialExperiment")) {
     spatial <- SpatialExperiment::spatialCoords(spe)
@@ -229,7 +239,11 @@
        is.na(recorded_order_sha256) || !identical(recorded_order_sha256, order_sha256))) {
     stop(context, " spot order does not match its recorded SHA-256 identity.", call. = FALSE)
   }
-  invisible(list(ids = ids, cell_order_sha256 = order_sha256))
+  invisible(list(
+    ids = ids, cell_order_sha256 = order_sha256,
+    identity_source = identity_source,
+    identity_is_unique = !identical(identity_source, "position")
+  ))
 }
 
 .cc_codex_h5ad_identity <- function(

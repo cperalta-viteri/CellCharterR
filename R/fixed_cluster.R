@@ -35,8 +35,7 @@
 #' multi-million-observation datasets, consider fitting with Python CellCharter
 #' and storing its labels directly in `colData(spe)`.
 #'
-#' @param spe An aggregated `SpatialExperiment` with a current aggregation
-#'   stage for `representation`.
+#' @param spe A `SpatialExperiment` containing the representation to cluster.
 #' @param representation Name of the numeric spot-by-feature matrix in
 #'   `reducedDims(spe)` used for fitting and prediction.
 #' @param n_clusters Positive integer number of mixture components, not greater
@@ -56,8 +55,9 @@
 #' @param predict_args Named list of additional arguments passed to
 #'   `predict_fun`. It must not contain `model` or `newdata`.
 #' @param resume A single logical value. When `TRUE`, reuse a complete checkpoint
-#'   only if spot order, representation, aggregation stage, K, seed, arguments,
-#'   and fitting implementations all match exactly.
+#'   only if the current representation contents and dimensions, K, seed,
+#'   arguments, and fitting implementations all match exactly. Historical
+#'   producer-stage metadata and storage paths do not affect compatibility.
 #' @param fit_fun Function called as `fit_fun(x, n_clusters, seed, ...)`.
 #'   The default is [torch_gmm_fit()].
 #' @param predict_fun Function called as `predict_fun(model, newdata, ...)`.
@@ -83,7 +83,6 @@ cellcharter_cluster_fixed <- function(
     fit_args = list(), predict_args = list(), resume = TRUE,
     fit_fun = torch_gmm_fit, predict_fun = torch_gmm_predict) {
   x <- .cc_spe_reduced_dim(spe, representation)
-  aggregation <- .cc_spe_require_stage(spe, paste0("aggregation:", representation))
   raw_n_clusters <- n_clusters
   raw_seed <- seed
   n_clusters <- as.integer(n_clusters)
@@ -115,10 +114,11 @@ cellcharter_cluster_fixed <- function(
   )
 
   identity <- .cc_validate_spe_identity(spe, reduced_dims = representation)
+  representation_sha256 <- .autok_representation_sha256(x)
   signature <- digest::digest(list(
-    schema = 1L, cell_order_sha256 = identity$cell_order_sha256,
+    schema = 2L, representation_sha256 = representation_sha256,
     representation = representation, dimensions = dim(x),
-    aggregation = aggregation, n_clusters = n_clusters, seed = seed,
+    n_clusters = n_clusters, seed = seed,
     fit_args = fit_args, predict_args = predict_args,
     implementation = cellcharter_implementation_digest(
       functions = list(fit = fit_fun, predict = predict_fun)
@@ -154,6 +154,7 @@ cellcharter_cluster_fixed <- function(
     artifact <- list(
       status = "complete", signature = signature, model = model, labels = labels,
       n_clusters = n_clusters, seed = seed, representation = representation,
+      representation_sha256 = representation_sha256,
       cell_order_sha256 = identity$cell_order_sha256,
       created_at = format(Sys.time(), tz = "UTC", usetz = TRUE)
     )
@@ -170,6 +171,7 @@ cellcharter_cluster_fixed <- function(
   metadata <- .cc_spe_metadata(spe)
   metadata$fixed_k[[domain_col]] <- list(
     n_clusters = n_clusters, seed = seed, representation = representation,
+    representation_sha256 = representation_sha256,
     signature = signature, resumed = reused,
     checkpoint = if (is.null(checkpoint_path)) NULL else normalizePath(checkpoint_path),
     model = if (is.null(checkpoint_path)) artifact$model else NULL,

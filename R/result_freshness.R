@@ -58,13 +58,64 @@
     }
     keep <- values != 0
     active_edges <<- active_edges + sum(keep)
-    weights <- as.numeric(values[keep])
+    digest::digest(
+      list(
+        start = start,
+        from = as.integer(S4Vectors::from(block)[keep]),
+        to = as.integer(S4Vectors::to(block)[keep])
+      ),
+      algo = "sha256", serialize = TRUE
+    )
+  }, character(1L))
+  digest::digest(
+    list(
+      schema = "CellCharterR_binary_graph_v1",
+      nnode = S4Vectors::nnode(pairs),
+      stored_edges = length(pairs),
+      active_edges = active_edges,
+      block_sha256 = unname(block_sha256)
+    ),
+    algo = "sha256", serialize = TRUE
+  )
+}
+
+# Reproduce the fingerprint written before graph consumers were made explicit
+# about their binary-topology semantics. This is verification-only: new result
+# records always use .cc_result_graph_sha256().
+.cc_result_graph_sha256_legacy <- function(
+    spe, graph_name, target_block_edges = 1000000L) {
+  if (!graph_name %in% SingleCellExperiment::colPairNames(spe)) {
+    stop("SPE colPairs lacks graph `", graph_name, "`.", call. = FALSE)
+  }
+  pairs <- SingleCellExperiment::colPair(spe, graph_name)
+  if (!identical(S4Vectors::nnode(pairs), ncol(spe))) {
+    stop("SPE graph `", graph_name,
+         "` has dimensions inconsistent with its observations.", call. = FALSE)
+  }
+  starts <- if (length(pairs)) {
+    seq.int(1L, length(pairs), by = target_block_edges)
+  } else {
+    integer()
+  }
+  active_edges <- 0
+  block_sha256 <- vapply(starts, function(start) {
+    index <- seq.int(start, min(length(pairs), start + target_block_edges - 1L))
+    block <- pairs[index]
+    metadata <- S4Vectors::mcols(block)
+    values <- if (ncol(metadata)) metadata[[1L]] else rep.int(1, length(block))
+    if ((!is.numeric(values) && !is.logical(values)) || anyNA(values) ||
+        any(!is.finite(values))) {
+      stop("SPE graph `", graph_name,
+           "` must store finite numeric edge values.", call. = FALSE)
+    }
+    keep <- values != 0
+    active_edges <<- active_edges + sum(keep)
     digest::digest(
       list(
         start = start,
         from = as.integer(S4Vectors::from(block)[keep]),
         to = as.integer(S4Vectors::to(block)[keep]),
-        weight = weights
+        weight = as.numeric(values[keep])
       ),
       algo = "sha256", serialize = TRUE
     )
@@ -106,7 +157,11 @@
     stop("Result input specifications must be a uniquely named list.", call. = FALSE)
   }
   lapply(specs, function(spec) {
-    c(spec, list(sha256 = .cc_result_input_sha256(spe, spec)))
+    fingerprint <- c(spec, list(sha256 = .cc_result_input_sha256(spe, spec)))
+    if (identical(spec$kind, "weighted_graph")) {
+      fingerprint$semantics <- "binary_topology_v1"
+    }
+    fingerprint
   })
 }
 
@@ -149,8 +204,17 @@
   for (label in names(fingerprints %||% list())) {
     fingerprint <- fingerprints[[label]]
     current <- try(.cc_result_input_sha256(spe, fingerprint), silent = TRUE)
-    if (inherits(current, "try-error") ||
-        !identical(current, fingerprint$sha256)) {
+    matches <- !inherits(current, "try-error") &&
+      identical(current, fingerprint$sha256)
+    if (!matches && identical(fingerprint$kind, "weighted_graph") &&
+        is.null(fingerprint$semantics)) {
+      legacy <- try(
+        .cc_result_graph_sha256_legacy(spe, fingerprint$name), silent = TRUE
+      )
+      matches <- !inherits(legacy, "try-error") &&
+        identical(legacy, fingerprint$sha256)
+    }
+    if (!matches) {
       stop(context, " `", result_name, "` is stale because its `", label,
            "` scientific input changed; recompute it.", call. = FALSE)
     }

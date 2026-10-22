@@ -101,6 +101,20 @@ test_that("SPE identity safely supports sample-local duplicated barcodes", {
   )
 })
 
+test_that("SPE identity trusts positional alignment when optional names are absent", {
+  spe <- SpatialExperiment::SpatialExperiment(
+    assays = list(counts = matrix(1:6, nrow = 2L)),
+    spatialCoords = cbind(x = 1:3, y = 4:6)
+  )
+  colnames(spe) <- c("a", "b", "c")
+  rownames(SummarizedExperiment::colData(spe)) <- NULL
+
+  expect_true(methods::validObject(spe))
+  expect_null(rownames(SummarizedExperiment::colData(spe)))
+  expect_silent(identity <- .cc_validate_spe_identity(spe))
+  expect_match(identity$cell_order_sha256, "^[0-9a-f]{64}$")
+})
+
 test_that("sample-scoped CODEX identities allow only unambiguous local IDs", {
   skip_if_not_installed("rhdf5")
   raw <- tempfile(fileext = ".h5ad")

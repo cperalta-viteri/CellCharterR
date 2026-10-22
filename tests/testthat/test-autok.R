@@ -820,3 +820,29 @@ test_that("AutoK stability plot carries its exact diagnostic data", {
     1:4
   )
 })
+test_that("AutoK safely accepts producer-stage identity migration", {
+  representation_sha256 <- paste(rep("a", 64L), collapse = "")
+  current <- .autok_resume_contract(
+    input_data_id = representation_sha256,
+    fit_args = list(max_iter = 10L), predict_args = list(),
+    default_torch = FALSE, implementation_digest = "implementation",
+    algorithm = "cpp-full-covariance-em-v1.5.0",
+    representation_sha256 = representation_sha256
+  )
+  previous <- current
+  previous$input_data_id <- "historical-producer-stage-id"
+  state <- list(
+    resume_contract = previous,
+    data_id = digest::digest(
+      .cc_contract_canonical(previous), algo = "sha256", serialize = TRUE
+    )
+  )
+
+  expect_identical(
+    .autok_input_identity_compatible_id(state, current),
+    state$data_id
+  )
+  changed <- current
+  changed$representation_sha256 <- paste(rep("b", 64L), collapse = "")
+  expect_length(.autok_input_identity_compatible_id(state, changed), 0L)
+})

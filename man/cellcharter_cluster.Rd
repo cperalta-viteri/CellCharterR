@@ -23,10 +23,12 @@ cellcharter_cluster(
 \code{backend}, \code{max_runs}, \code{convergence_tol}, \code{seed}, \code{fit_args}, \code{workers},
 \code{threads_per_fit}, \code{checkpoint_mode}, \code{resume}, and \code{progress}. Do not pass
 \code{x}, \code{n_clusters}, \code{checkpoint_dir}, or \code{data_id}; these are supplied from
-the SPE and stage provenance.}
+the current SPE representation.}
 
 \item{representation}{Name of the numeric spot-by-feature matrix in
-\code{reducedDims(spe)}. It must have a current matching aggregation stage.}
+\code{reducedDims(spe)}. The matrix is a first-class input and may have been
+created by CellCharterR, imported from AnnData, or attached independently;
+historical stage metadata is not required.}
 
 \item{candidate_k}{Two selectable K bounds or an expanded consecutive list,
 as accepted by \code{\link[=cellcharter_autok_fit]{cellcharter_autok_fit()}}. AutoK additionally fits the two

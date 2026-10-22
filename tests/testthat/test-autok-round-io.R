@@ -74,3 +74,70 @@ test_that("round label reader rejects incomplete bundles", {
     "has no K = 3"
   )
 })
+
+test_that("AutoK records the effective compiled topology used by every fit", {
+  checkpoint_dir <- tempfile("autok-effective-topology-")
+  on.exit(unlink(checkpoint_dir, recursive = TRUE), add = TRUE)
+  x <- matrix(seq_len(48), ncol = 3)
+  observed <- list()
+
+  fake_fit_many <- function(x, n_clusters, seeds, workers,
+                            threads_per_fit, progress, ...) {
+    observed[[length(observed) + 1L]] <<- list(
+      workers = workers,
+      threads_per_fit = threads_per_fit
+    )
+    stats::setNames(lapply(seq_along(n_clusters), function(i) {
+      k <- n_clusters[[i]]
+      list(
+        labels = as.integer((seq_len(nrow(x)) - 1L + seeds[[i]]) %% k),
+        nll = as.numeric(k),
+        selection_nll = as.numeric(k)
+      )
+    }), as.character(n_clusters))
+  }
+
+  testthat::local_mocked_bindings(
+    cpp_gmm_fit_many = fake_fit_many,
+    .cpp_gmm_require_single_thread_blas = function(...) invisible(list()),
+    .package = "CellCharterR"
+  )
+
+  expect_warning(
+    fit <- cellcharter_autok_fit(
+      x, n_clusters = c(2L, 3L), checkpoint_dir = checkpoint_dir,
+      max_runs = 2L, convergence_tol = 0, seed = 11L,
+      backend = "cpp", workers = 20L, threads_per_fit = 2L,
+      checkpoint_mode = "round", progress = FALSE
+    ),
+    "Capping `threads_per_fit` at 1"
+  )
+
+  expect_length(observed, 2L)
+  expect_true(all(vapply(observed, `[[`, integer(1), "workers") == 20L))
+  expect_true(all(vapply(observed, `[[`, integer(1), "threads_per_fit") == 1L))
+  expect_identical(fit$workers, 20L)
+  expect_identical(fit$threads_per_fit, 1L)
+  expect_identical(fit$requested_workers, 20L)
+  expect_identical(fit$requested_threads_per_fit, 2L)
+  expect_identical(fit$execution_contract$threads_per_fit, 1L)
+
+  state <- readRDS(file.path(checkpoint_dir, "autok_state.rds"))
+  expect_identical(state$workers, 20L)
+  expect_identical(state$threads_per_fit, 1L)
+  expect_identical(state$requested_workers, 20L)
+  expect_identical(state$requested_threads_per_fit, 2L)
+  expect_identical(state$execution_contract$threads_per_fit, 1L)
+
+  bundle <- readRDS(CellCharterR:::.autok_round_path(checkpoint_dir, 1L))
+  expect_true(all(vapply(
+    bundle$artifacts,
+    function(artifact) identical(artifact$threads_per_fit, 1L),
+    logical(1)
+  )))
+  expect_true(all(vapply(
+    bundle$artifacts,
+    function(artifact) identical(artifact$requested_threads_per_fit, 2L),
+    logical(1)
+  )))
+})

@@ -11,9 +11,7 @@
     ),
     sample_id = rep("sample1", 8)
   )
-  CellCharterR:::.cc_spe_record_stage(
-    spe, "aggregation:X_fixed", list(output = "X_fixed")
-  )
+  spe
 }
 
 test_that("fixed-K clustering fits exactly one requested K and attaches labels", {
@@ -61,12 +59,18 @@ test_that("fixed-K compatible checkpoint resumes without refitting", {
   expect_true(file.exists(file.path(checkpoint, "fixed_k2.rds")))
 })
 
-test_that("fixed-K rejects stale stages and invalid labels", {
+test_that("fixed-K accepts first-class subset representations and rejects invalid labels", {
   stale <- .fixed_spe()[, 1:6]
-  expect_error(
-    cellcharter_cluster_fixed(stale, representation = "X_fixed", n_clusters = 2L),
-    "stale"
+  expect_silent(
+    subset_result <- cellcharter_cluster_fixed(
+      stale, representation = "X_fixed", n_clusters = 2L,
+      fit_fun = function(x, n_clusters, seed, ...) list(k = n_clusters),
+      predict_fun = function(model, newdata, ...) {
+        (seq_len(nrow(newdata)) - 1L) %% model$k
+      }
+    )
   )
+  expect_length(subset_result$cellcharter_domain, ncol(stale))
   expect_error(
     cellcharter_cluster_fixed(
       .fixed_spe(), representation = "X_fixed", n_clusters = 2L,
@@ -75,6 +79,47 @@ test_that("fixed-K rejects stale stages and invalid labels", {
     ),
     "zero-based label"
   )
+})
+
+test_that("fixed-K checkpoint identity follows representation content only", {
+  checkpoint <- tempfile("fixed-content-")
+  calls <- new.env(parent = emptyenv())
+  calls$n <- 0L
+  fit <- function(x, n_clusters, seed, ...) {
+    calls$n <- calls$n + 1L
+    list(k = n_clusters)
+  }
+  predict <- function(model, newdata, ...) {
+    (seq_len(nrow(newdata)) - 1L) %% model$k
+  }
+  spe <- .fixed_spe()
+  cellcharter_cluster_fixed(
+    spe, "X_fixed", 2L, checkpoint_dir = checkpoint,
+    fit_fun = fit, predict_fun = predict
+  )
+
+  # Unrelated historical provenance cannot veto an unchanged representation.
+  metadata <- S4Vectors::metadata(spe)
+  metadata$CellCharterR <- list(stages = list(
+    "aggregation:X_fixed" = list(filepath = "/moved/elsewhere")
+  ))
+  S4Vectors::metadata(spe) <- metadata
+  resumed <- cellcharter_cluster_fixed(
+    spe, "X_fixed", 2L, checkpoint_dir = checkpoint,
+    fit_fun = fit, predict_fun = predict
+  )
+  expect_true(S4Vectors::metadata(resumed)$CellCharterR$fixed_k$cellcharter_domain$resumed)
+  expect_identical(calls$n, 1L)
+
+  changed <- spe
+  value <- SingleCellExperiment::reducedDim(changed, "X_fixed")
+  value[1L, 1L] <- value[1L, 1L] + 1
+  SingleCellExperiment::reducedDim(changed, "X_fixed") <- value
+  cellcharter_cluster_fixed(
+    changed, "X_fixed", 2L, checkpoint_dir = checkpoint,
+    fit_fun = fit, predict_fun = predict
+  )
+  expect_identical(calls$n, 2L)
 })
 
 test_that("fixed-K validates integers and does not reuse another implementation", {

@@ -58,6 +58,31 @@ test_that("p adjustment precedes display filtering and top_n is per panel", {
   )
 })
 
+test_that("alpha is applied to p-values rather than displayed effect sizes", {
+  result <- .diff_network_fixture()
+  # The effect is large enough to display, but p = 0.08 must not be called
+  # significant at alpha = 0.05.
+  result$effect[1L, 2L] <- 8
+  result$pvalue[1L, 2L] <- 0.08
+
+  edges <- .cc_diff_nhood_network_data(
+    result, alpha = 0.05, p_adjust_method = "none"
+  )
+  key <- paste(edges$source_domain, edges$neighbor_domain, sep = "->")
+  index <- match("A->B", key)
+  expect_equal(edges$pvalue[[index]], 0.08)
+  expect_false(edges$significant[[index]])
+
+  supported <- .cc_diff_nhood_network_data(
+    result, alpha = 0.05, p_adjust_method = "none",
+    significant_only = TRUE
+  )
+  supported_key <- paste(
+    supported$source_domain, supported$neighbor_domain, sep = "->"
+  )
+  expect_false("A->B" %in% supported_key)
+})
+
 test_that("differential network arguments and matrices are validated", {
   result <- .diff_network_fixture()
   bad <- result

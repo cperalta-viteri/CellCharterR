@@ -303,7 +303,10 @@ cellcharter_plot_graph_diff <- function(
   if (isTRUE(show_edge_values) && nrow(edges)) {
     plot <- plot + ggplot2::geom_text(
       data = edges,
-      ggplot2::aes(x = label_x, y = label_y, label = sprintf("%.3g", display_effect)),
+      ggplot2::aes(
+        x = label_x, y = label_y,
+        label = paste0("|effect| = ", sprintf("%.3g", display_effect))
+      ),
       size = 3.8, colour = "grey10"
     )
   }
@@ -337,7 +340,12 @@ cellcharter_plot_graph_diff <- function(
       ),
       caption = paste0(
         "Solid arrows satisfy ", significance_title,
-        "; dashed arrows are not statistically supported."
+        "; dashed arrows are not statistically supported. ",
+        if (isTRUE(show_edge_values)) {
+          "Arrow labels report absolute effect size, not p-values."
+        } else {
+          ""
+        }
       )
     ) +
     ggplot2::theme_void(base_size = 16) +

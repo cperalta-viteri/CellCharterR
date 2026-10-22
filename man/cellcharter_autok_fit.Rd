@@ -116,14 +116,16 @@ custom fit/predict/NLL hooks or Torch-only fit arguments (\code{device},
 C++ fits requested K values through \code{\link[=cpp_gmm_fit_many]{cpp_gmm_fit_many()}}.}
 
 \item{workers}{Positive number of independent K fits that the C++ backend may
-run concurrently. This controls between-fit parallelism and has no effect
-for \code{backend = "torch"}. Parallel C++ fitting requires the linked BLAS and
+run concurrently. Values above 32 are capped before checkpoint identity
+and provenance are constructed. This controls between-fit parallelism and
+has no effect for \code{backend = "torch"}. Parallel C++ fitting requires the linked BLAS and
 OpenMP thread-control environment variables documented by
 \code{\link[=cpp_gmm_fit_many]{cpp_gmm_fit_many()}} to be set to one before R starts.}
 
 \item{threads_per_fit}{Positive number of native threads used within each C++
-fit. The implementation caps the product of \code{workers} and
-\code{threads_per_fit} at 32. BLAS threads are a separate parallel layer, so the
+fit. The implementation resolves and records the effective topology before
+fitting, capping the product of \code{workers} and \code{threads_per_fit} at 32.
+BLAS threads are a separate parallel layer, so the
 function fails before inspecting a large representation when a parallel
 C++ topology is requested without explicit single-thread BLAS controls. It
 has no effect for \code{backend = "torch"}.}
