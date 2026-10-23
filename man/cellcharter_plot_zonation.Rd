@@ -20,7 +20,9 @@ cellcharter_plot_zonation(
   colours = NULL,
   facet = TRUE,
   facet_ncol = 3L,
-  title = NULL
+  title = NULL,
+  facet_by = NULL,
+  linetypes = NULL
 )
 }
 \arguments{
@@ -40,7 +42,8 @@ quantified non-zone program when \code{composition_programs} was not specified.}
 program-zone combination; \code{"strata"} performs Kruskal-Wallis tests across
 at least two retained strata; \code{"programs"} performs a block-paired
 Friedman test across displayed programs separately in each zone and
-requires \code{facet = FALSE}; \code{"none"} performs no test.}
+requires \code{facet_by = "none"} (or the legacy \code{facet = FALSE});
+\code{"none"} performs no test.}
 
 \item{group}{\code{NULL}, or one \code{colData(x)} column containing a group label that
 is constant within every stored block. It supplies the curves and test
@@ -74,16 +77,30 @@ and strata comparisons, correction is over all displayed program-by-zone
 tests together; for program comparisons, it is over displayed zones.}
 
 \item{colours}{Optional named colour vector for comparison levels. With
-\code{facet = FALSE} and \code{compare = "none"} or \code{"programs"}, name colours by
-program instead. Every displayed colour level must be represented.}
+\code{facet_by = "none"} (or the legacy \code{facet = FALSE}) and
+\code{compare = "none"} or \code{"programs"}, name colours by program instead.
+Every displayed colour level must be represented.}
 
-\item{facet}{Whether to draw one facet per program. Set to \code{FALSE} to overlay
-all requested programs in one panel. Program comparisons require \code{FALSE}.}
+\item{facet}{Backward-compatible logical faceting switch. \code{TRUE} draws one
+facet per program and \code{FALSE} draws no facets. When \code{facet_by} is supplied,
+\code{facet_by} takes precedence.}
 
 \item{facet_ncol}{A positive whole number of facet columns; ignored when
-\code{facet = FALSE}.}
+faceting is disabled.}
 
 \item{title}{\code{NULL} for no title, or a character value used as the plot title.}
+
+\item{facet_by}{\code{NULL} to retain the behavior selected by \code{facet}, or one of
+\code{"program"}, \code{"group"}, or \code{"none"}. \code{"group"} draws one facet per
+retained value of \code{group} while distinguishing programs by linetype; it
+requires \code{group} and \code{compare = "groups"} or \code{"none"}. Cross-group
+significance labels are drawn once in the first group facet. \code{"program"}
+draws one facet per program, and \code{"none"} overlays the requested curves.}
+
+\item{linetypes}{\code{NULL} to use ggplot2's default program linetypes, or a
+named vector assigning a linetype to every displayed program (for example,
+\code{c("Pre-EMT" = "solid", "Early-EMT" = "dashed")}). It is used when
+multiple programs share a panel, including \code{facet_by = "group"}.}
 }
 \value{
 A read-only \code{ggplot} object. The plotted block-level observations,

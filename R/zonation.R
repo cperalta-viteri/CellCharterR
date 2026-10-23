@@ -504,7 +504,8 @@ cellcharter_zonation <- function(
 #'   program-zone combination; `"strata"` performs Kruskal-Wallis tests across
 #'   at least two retained strata; `"programs"` performs a block-paired
 #'   Friedman test across displayed programs separately in each zone and
-#'   requires `facet = FALSE`; `"none"` performs no test.
+#'   requires `facet_by = "none"` (or the legacy `facet = FALSE`);
+#'   `"none"` performs no test.
 #' @param group `NULL`, or one `colData(x)` column containing a group label that
 #'   is constant within every stored block. It supplies the curves and test
 #'   groups for `compare = "groups"`, filters for `within_group`, and can supply
@@ -529,12 +530,24 @@ cellcharter_zonation <- function(
 #'   and strata comparisons, correction is over all displayed program-by-zone
 #'   tests together; for program comparisons, it is over displayed zones.
 #' @param colours Optional named colour vector for comparison levels. With
-#'   `facet = FALSE` and `compare = "none"` or `"programs"`, name colours by
-#'   program instead. Every displayed colour level must be represented.
-#' @param facet Whether to draw one facet per program. Set to `FALSE` to overlay
-#'   all requested programs in one panel. Program comparisons require `FALSE`.
+#'   `facet_by = "none"` (or the legacy `facet = FALSE`) and
+#'   `compare = "none"` or `"programs"`, name colours by program instead.
+#'   Every displayed colour level must be represented.
+#' @param linetypes `NULL` to use ggplot2's default program linetypes, or a
+#'   named vector assigning a linetype to every displayed program (for example,
+#'   `c("Pre-EMT" = "solid", "Early-EMT" = "dashed")`). It is used when
+#'   multiple programs share a panel, including `facet_by = "group"`.
+#' @param facet Backward-compatible logical faceting switch. `TRUE` draws one
+#'   facet per program and `FALSE` draws no facets. When `facet_by` is supplied,
+#'   `facet_by` takes precedence.
+#' @param facet_by `NULL` to retain the behavior selected by `facet`, or one of
+#'   `"program"`, `"group"`, or `"none"`. `"group"` draws one facet per
+#'   retained value of `group` while distinguishing programs by linetype; it
+#'   requires `group` and `compare = "groups"` or `"none"`. Cross-group
+#'   significance labels are drawn once in the first group facet. `"program"`
+#'   draws one facet per program, and `"none"` overlays the requested curves.
 #' @param facet_ncol A positive whole number of facet columns; ignored when
-#'   `facet = FALSE`.
+#'   faceting is disabled.
 #' @param title `NULL` for no title, or a character value used as the plot title.
 #' @return A read-only `ggplot` object. The plotted block-level observations,
 #'   mean/standard-error summaries, and inferential table (including raw
@@ -548,13 +561,19 @@ cellcharter_plot_zonation <- function(
     group_levels = NULL, within_group = NULL,
     stratify_by = NULL, strata = NULL, show_individual = TRUE,
     show_significance = TRUE, p_adjust_method = "BH", colours = NULL,
-    facet = TRUE, facet_ncol = 3L, title = NULL) {
+    facet = TRUE, facet_ncol = 3L, title = NULL,
+    facet_by = NULL, linetypes = NULL) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     stop("Install `ggplot2` to plot zonation.", call. = FALSE)
   }
   compare <- match.arg(compare)
   if (!is.logical(facet) || length(facet) != 1L || is.na(facet)) {
     stop("`facet` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (is.null(facet_by)) {
+    facet_by <- if (facet) "program" else "none"
+  } else {
+    facet_by <- match.arg(facet_by, c("program", "group", "none"))
   }
   record <- .cc_zonation_result(x, result_name)
   result <- record$value
@@ -565,8 +584,8 @@ cellcharter_plot_zonation <- function(
       !all(programs %in% result$composition_programs)) {
     stop("`programs` must name programs stored in the zonation result.", call. = FALSE)
   }
-  if (compare == "programs" && facet) {
-    stop("`compare = 'programs'` requires `facet = FALSE` so the programs share one panel.",
+  if (compare == "programs" && facet_by != "none") {
+    stop("`compare = 'programs'` requires `facet_by = 'none'` so the programs share one panel.",
          call. = FALSE)
   }
   if (compare == "programs" && length(programs) < 2L) {
@@ -593,6 +612,15 @@ cellcharter_plot_zonation <- function(
     data <- data[data[[group]] == within_group, , drop = FALSE]
   }
   if (!nrow(data)) stop("No finite zonation values remain after filtering.", call. = FALSE)
+  if (facet_by == "group" && is.null(group)) {
+    stop("`facet_by = 'group'` requires `group`.", call. = FALSE)
+  }
+  if (facet_by == "group" && !compare %in% c("groups", "none")) {
+    stop(
+      "`facet_by = 'group'` requires `compare = 'groups'` or `compare = 'none'`.",
+      call. = FALSE
+    )
+  }
 
   if (compare == "groups") {
     if (is.null(group)) stop("`compare = 'groups'` requires `group`.", call. = FALSE)
@@ -644,7 +672,11 @@ cellcharter_plot_zonation <- function(
   summary$zone <- factor(summary$zone, levels = result$zone_programs, ordered = TRUE)
   summary$program <- factor(summary$program, levels = programs)
 
-  overlay_by_program <- !facet && compare %in% c("none", "programs")
+  facet_by_program <- facet_by == "program"
+  facet_by_group <- facet_by == "group"
+  overlay_by_program <- facet_by == "none" && compare %in% c("none", "programs")
+  uses_program_linetype <- !facet_by_program && !overlay_by_program &&
+    length(programs) > 1L
   colour_levels <- if (overlay_by_program) programs else levels_used
   data$plot_colour <- factor(
     if (overlay_by_program) as.character(data$program) else as.character(data$curve_group),
@@ -746,11 +778,17 @@ cellcharter_plot_zonation <- function(
     if (compare != "programs") {
       tests$program <- factor(tests$program, levels = programs)
     }
-    if (!facet && compare != "programs" && length(programs) > 1L) {
+    if (facet_by == "none" && compare != "programs" && length(programs) > 1L) {
       step <- max(0.12, 0.1 * diff(range(data$enrichment_z)))
       tests$annotation_y <- tests$annotation_y +
         (match(as.character(tests$program), programs) - 1L) * step
       tests$label <- paste0(as.character(tests$program), ": ", tests$label)
+    }
+    if (facet_by_group) {
+      # The inferential result compares groups and therefore belongs to neither
+      # group alone. Draw it once in the first facet instead of repeating the
+      # same label in every panel.
+      tests$curve_group <- factor(levels_used[[1L]], levels = levels_used)
     }
   }
 
@@ -768,6 +806,17 @@ cellcharter_plot_zonation <- function(
       call. = FALSE
     )
   }
+  if (!is.null(linetypes)) {
+    if (!uses_program_linetype) {
+      stop(
+        "`linetypes` requires multiple programs sharing a panel or group facet.",
+        call. = FALSE
+      )
+    }
+    if (is.null(names(linetypes)) || !all(programs %in% names(linetypes))) {
+      stop("`linetypes` must be named for every displayed program.", call. = FALSE)
+    }
+  }
   plot <- ggplot2::ggplot(
     data,
     ggplot2::aes(x = zone, y = enrichment_z, colour = plot_colour)
@@ -778,8 +827,7 @@ cellcharter_plot_zonation <- function(
       alpha = 0.15, linewidth = 0.35, na.rm = TRUE
     )
   }
-  summary_line_mapping <- if (!facet && !overlay_by_program &&
-                              compare != "none" && length(programs) > 1L) {
+  summary_line_mapping <- if (uses_program_linetype) {
     ggplot2::aes(
       x = zone, y = mean, colour = plot_colour,
       group = plot_group, linetype = program
@@ -813,8 +861,15 @@ cellcharter_plot_zonation <- function(
       inherit.aes = FALSE, colour = "black", size = 2.8, fontface = "bold"
     )
   }
-  if (facet) {
+  if (facet_by_program) {
     plot <- plot + ggplot2::facet_wrap(~program, ncol = as.integer(facet_ncol))
+  } else if (facet_by_group) {
+    plot <- plot + ggplot2::facet_wrap(~curve_group, ncol = as.integer(facet_ncol))
+  }
+  if (!is.null(linetypes)) {
+    plot <- plot + ggplot2::scale_linetype_manual(
+      values = linetypes[programs], drop = FALSE
+    )
   }
   plot <- plot +
     ggplot2::scale_colour_manual(values = colours[colour_levels], drop = FALSE) +
@@ -834,8 +889,7 @@ cellcharter_plot_zonation <- function(
       } else {
         NULL
       },
-      linetype = if (!facet && !overlay_by_program &&
-                    compare != "none" && length(programs) > 1L) {
+      linetype = if (uses_program_linetype) {
         "Program"
       } else {
         NULL

@@ -253,6 +253,63 @@ test_that("zonation plot supports group and within-group strata comparisons", {
   expect_equal(nrow(attr(strata_plot, "cellcharter_zonation_tests")), 6L)
 })
 
+test_that("zonation plot can facet by group while styling programs by linetype", {
+  skip_if_not_installed("ggplot2")
+  public_formals <- names(formals(cellcharter_plot_zonation))
+  legacy_tail <- match("colours", public_formals):match("title", public_formals)
+  expect_identical(
+    public_formals[legacy_tail],
+    c("colours", "facet", "facet_ncol", "title")
+  )
+  spe <- cellcharter_zonation(
+    make_zonation_spe(), block = "patient", min_spots_per_zone = 2L,
+    sample_size = 2L, n_iterations = 3L
+  )
+  plot <- cellcharter_plot_zonation(
+    spe,
+    programs = c("A", "B"),
+    compare = "groups",
+    group = "risk",
+    group_levels = c("Low", "High"),
+    facet_by = "group",
+    facet_ncol = 1L,
+    linetypes = c(A = "solid", B = "dashed"),
+    show_individual = FALSE,
+    show_significance = TRUE
+  )
+
+  expect_s3_class(plot, "ggplot")
+  built <- ggplot2::ggplot_build(plot)
+  expect_identical(
+    as.character(built$layout$layout$curve_group),
+    c("Low", "High")
+  )
+  line_layer <- built$data[[2L]]
+  expect_setequal(unique(line_layer$linetype), c("solid", "dashed"))
+  text_layer <- built$data[[5L]]
+  expect_true(all(text_layer$PANEL == 1L))
+
+  expect_error(
+    cellcharter_plot_zonation(spe, compare = "groups", facet_by = "group"),
+    "requires `group`"
+  )
+  expect_error(
+    cellcharter_plot_zonation(
+      spe, compare = "strata", group = "risk", stratify_by = "site",
+      facet_by = "group"
+    ),
+    "requires `compare = 'groups'` or `compare = 'none'`",
+    fixed = TRUE
+  )
+  expect_error(
+    cellcharter_plot_zonation(
+      spe, programs = c("A", "B"), compare = "groups", group = "risk",
+      facet_by = "group", linetypes = c(A = "solid")
+    ),
+    "named for every displayed program"
+  )
+})
+
 test_that("zonation plot overlays and compares programs within each zone", {
   skip_if_not_installed("ggplot2")
   spe <- cellcharter_zonation(
@@ -275,7 +332,7 @@ test_that("zonation plot overlays and compares programs within each zone", {
     cellcharter_plot_zonation(
       spe, programs = programs, compare = "programs", facet = TRUE
     ),
-    "requires `facet = FALSE`"
+    "requires `facet_by = 'none'`"
   )
 })
 
